@@ -37,6 +37,9 @@ services:
     ports:
       # TODO: Remove this host binding after initial setup/debugging.
       # Only needed so you can connect with: mysql -h 127.0.0.1 -P 4000 -u root
+      # NOTE: Requires mysql-client@8.4 (MySQL 9.x removed mysql_native_password)
+      #   brew install mysql-client@8.4
+      #   echo 'export PATH="/opt/homebrew/opt/mysql-client@8.4/bin:$PATH"' >> ~/.zshrc
       - "4000:4000"
     volumes:
       - tidb-data:/tmp/tidb
@@ -44,7 +47,7 @@ services:
       - repokeeper-net
     healthcheck:
       # Try mysqladmin first; fall back to netcat if the image lacks it.
-      test: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -P 4000 --silent || nc -z 127.0.0.1 4000"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -P 4000 --silent || nc -z 127.0.0.1 4000"]
       interval: 10s
       timeout: 5s
       retries: 10
