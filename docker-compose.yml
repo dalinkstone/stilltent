@@ -102,7 +102,10 @@ services:
   # Docs: https://docs.openclaw.ai/install/docker
   # ==========================================================================
   openclaw-gateway:
-    image: ghcr.io/openclaw/openclaw:latest
+    build:
+      context: .
+      dockerfile: dockerfiles/openclaw.Dockerfile
+    image: repokeeper/openclaw:latest
     container_name: repokeeper-openclaw
     depends_on:
       mnemo-server:
