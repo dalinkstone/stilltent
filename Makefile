@@ -1,4 +1,4 @@
-.PHONY: up down logs restart status health bootstrap clean pause resume stats init-db
+.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 init-db
 
 # Start all services
 up:
@@ -46,6 +46,10 @@ resume:
 # Show iteration count and success rate from orchestrator logs
 stats:
 	@python3 orchestrator/stats.py
+
+# Smoke test the mem9 API
+test-mem9:
+	@python3 scripts/test-mem9.py
 
 # Initialize TiDB databases and schema (run once after first tidb startup)
 # Requires: brew install mysql-client@8.4
