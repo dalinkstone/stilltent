@@ -1,6 +1,15 @@
 # Secrets
 .env
 
+# OpenClaw runtime config — contains auto-generated gateway auth tokens,
+# installed plugins, logs, and other runtime state. Only .gitkeep is tracked.
+config/openclaw/*
+!config/openclaw/.gitkeep
+
+# mnemo config — same pattern
+config/mnemo/*
+!config/mnemo/.gitkeep
+
 # Runtime data
 workspace/repo/
 *.log
