@@ -1,12 +1,12 @@
 # =============================================================================
-# repokeeper — Docker Compose (Phase 1: TiDB + mnemo-server)
+# repokeeper — Docker Compose (Phase 1–4: TiDB + mnemo-server + OpenClaw)
 #
 # Usage:
 #   cp .env.example .env   # fill in your values
 #   make up                # starts the stack
 #   make health            # verify everything is running
 #
-# Later phases will add OpenClaw gateway and the orchestrator.
+# Later phases will add the orchestrator.
 # =============================================================================
 
 # --------------------------------------------------------------------------
@@ -86,4 +86,89 @@ services:
       MNEMO_PORT: 8082
     networks:
       - repokeeper-net
+    restart: unless-stopped
+
+  # ==========================================================================
+  # OpenClaw Gateway — agent runtime that manages sessions, routes messages
+  # to the LLM provider (Ollama), and executes tools (shell, file I/O, mem9).
+  #
+  # The gateway binds to 0.0.0.0 ("lan" mode) inside the container so Docker
+  # port-mapping works. Auth is enforced via OPENCLAW_GATEWAY_TOKEN.
+  #
+  # Config:  ./config/openclaw/  → /home/node/.openclaw  (openclaw.json, .env)
+  # Workspace: ./workspace/      → /workspace            (agent working dir)
+  #
+  # Published image: ghcr.io/openclaw/openclaw (bookworm + bookworm-slim)
+  # Docs: https://docs.openclaw.ai/install/docker
+  # ==========================================================================
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    container_name: repokeeper-openclaw
+    depends_on:
+      mnemo-server:
+        condition: service_started
+      tidb:
+        condition: service_healthy
+    ports:
+      # Gateway HTTP/WS port. Default upstream is 18789.
+      - "${OPENCLAW_PORT:-18789}:18789"
+    volumes:
+      # OpenClaw reads config from ~/.openclaw inside the container.
+      # The container runs as user "node" (uid 1000), so HOME=/home/node.
+      - ./config/openclaw:/home/node/.openclaw:rw
+      # Agent workspace — where the agent clones repos, edits files, etc.
+      - ./workspace:/workspace:rw
+    environment:
+      # --- Gateway auth ---
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+
+      # --- GitHub access for agent tools ---
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+
+      # --- Ollama provider (running on the host) ---
+      # OpenClaw's bundled Ollama extension reads OLLAMA_API_KEY to enable
+      # auto-discovery of models via the Ollama /api/tags endpoint.
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-ollama-local}
+      OLLAMA_BASE_URL: http://${OLLAMA_HOST:-host.docker.internal}:${OLLAMA_PORT:-11434}
+
+      # --- mem9 memory API (mnemo-server container) ---
+      MEM9_API_URL: http://mnemo-server:${MEM9_API_PORT:-8082}
+      MEM9_API_KEY: ${MEM9_API_KEY:-repokeeper-local-dev-key}
+
+      # --- Target repo for the agent to work on ---
+      TARGET_REPO: ${TARGET_REPO}
+
+      # --- Misc ---
+      HOME: /home/node
+      TERM: xterm-256color
+    networks:
+      - repokeeper-net
+    extra_hosts:
+      # Allows containers on Linux to reach the host's Ollama instance
+      # via http://host.docker.internal:11434. No-op on Docker Desktop.
+      - "host.docker.internal:host-gateway"
+    working_dir: /workspace
+    init: true
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "lan",
+        "--port",
+        "18789",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
