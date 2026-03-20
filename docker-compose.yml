@@ -35,12 +35,12 @@ services:
     image: pingcap/tidb:v8.4.0
     container_name: stilltent-tidb
     ports:
-      # TODO: Remove this host binding after initial setup/debugging.
-      # Only needed so you can connect with: mysql -h 127.0.0.1 -P 4000 -u root
+      # Bind to localhost only — prevents exposure on LAN/public interfaces.
+      # Connect with: mysql -h 127.0.0.1 -P 4000 -u root
       # NOTE: Requires mysql-client@8.4 (MySQL 9.x removed mysql_native_password)
       #   brew install mysql-client@8.4
       #   echo 'export PATH="/opt/homebrew/opt/mysql-client@8.4/bin:$PATH"' >> ~/.zshrc
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     volumes:
       - tidb-data:/tmp/tidb
     networks:
@@ -69,8 +69,8 @@ services:
       tidb:
         condition: service_healthy
     ports:
-      # Expose the mem9 API on the host. Adjust MEM9_API_PORT in .env if needed.
-      - "${MEM9_API_PORT:-8082}:8082"
+      # Expose the mem9 API on localhost only. Adjust MEM9_API_PORT in .env if needed.
+      - "127.0.0.1:${MEM9_API_PORT:-8082}:8082"
     environment:
       # --- Database connection (Go MySQL DSN pointing at the TiDB container) ---
       MNEMO_DSN: "${TIDB_USER:-root}:${TIDB_PASSWORD:-}@tcp(${TIDB_HOST:-tidb}:${TIDB_PORT:-4000})/${TIDB_DATABASE:-mnemos}?parseTime=true"
@@ -117,8 +117,8 @@ services:
       tidb:
         condition: service_healthy
     ports:
-      # Gateway HTTP/WS port. Default upstream is 18789.
-      - "${OPENCLAW_PORT:-18789}:18789"
+      # Gateway HTTP/WS port. Bound to localhost only for security.
+      - "127.0.0.1:${OPENCLAW_PORT:-18789}:18789"
     volumes:
       # OpenClaw reads config from ~/.openclaw inside the container.
       # The container runs as user "node" (uid 1000), so HOME=/home/node.

@@ -1,4 +1,4 @@
-.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db
+.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace
 
 # Start all services
 up:
@@ -55,6 +55,25 @@ test-mem9:
 test-openclaw:
 	@python3 scripts/test-openclaw.py
 
+# Install git pre-commit hook for secret detection
+install-hooks:
+	@cp scripts/pre-commit-secrets.sh .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "Pre-commit secret scanner installed."
+
+# Scan repo for leaked secrets (requires: brew install gitleaks)
+scan-secrets:
+	@if command -v gitleaks >/dev/null 2>&1; then \
+		echo "Scanning working tree..."; \
+		gitleaks detect --source . --config .gitleaks.toml --no-git; \
+		echo "Scanning git history..."; \
+		gitleaks detect --source . --config .gitleaks.toml; \
+	else \
+		echo "gitleaks not found. Install with: brew install gitleaks"; \
+		echo "Running built-in pattern scan instead..."; \
+		bash scripts/pre-commit-secrets.sh; \
+	fi
+
 # Initialize TiDB databases and schema (run once after first tidb startup)
 # Requires: brew install mysql-client@8.4
 MYSQL_BIN ?= /opt/homebrew/opt/mysql-client@8.4/bin/mysql
@@ -62,3 +81,7 @@ init-db:
 	@echo "Initializing TiDB databases..."
 	$(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql
 	@echo "Done. Databases and tables created."
+
+# Validate workspace files
+validate-workspace:
+	@bash scripts/validate-workspace.sh

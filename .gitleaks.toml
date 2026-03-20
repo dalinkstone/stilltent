@@ -1,0 +1,37 @@
+# =============================================================================
+# Gitleaks configuration — stilltent
+#
+# Run locally:   gitleaks detect --source . --config .gitleaks.toml
+# Run on history: gitleaks detect --source . --config .gitleaks.toml --log-opts="--all"
+#
+# Install: brew install gitleaks
+# CI: add to GitHub Actions with the gitleaks-action
+# =============================================================================
+title = "stilltent gitleaks config"
+
+[extend]
+# Use the default gitleaks ruleset as a base
+useDefault = true
+
+# Paths to ignore (gitignored runtime configs, test fixtures, the hook itself)
+[allowlist]
+paths = [
+    '''config/openclaw/.*''',
+    '''config/mnemo/.*''',
+    '''scripts/pre-commit-secrets\.sh''',
+    '''\.gitleaks\.toml''',
+    '''\.env\.example''',
+]
+
+# Additional custom rules beyond the defaults
+[[rules]]
+id = "openclaw-gateway-token"
+description = "OpenClaw gateway auth token"
+regex = '''"token"\s*:\s*"[a-f0-9]{40,}"'''
+tags = ["key", "openclaw"]
+
+[[rules]]
+id = "mem9-real-api-key"
+description = "Non-default mem9 API key (not the local-dev-key placeholder)"
+regex = '''(?i)(MEM9_API_KEY|apiKey)\s*[:=]\s*["']?(?!stilltent-local-dev-key)[a-zA-Z0-9_-]{20,}["']?'''
+tags = ["key", "mem9"]

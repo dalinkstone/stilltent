@@ -1,5 +1,15 @@
-# Secrets
+# Secrets — never commit env files with real values
 .env
+.env.local
+.env.production.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*credential*
+*secret*
 
 # OpenClaw runtime config — contains auto-generated gateway auth tokens,
 # installed plugins, logs, and other runtime state. Only .gitkeep is tracked.
@@ -12,6 +22,7 @@ config/mnemo/*
 
 # Runtime data
 workspace/repo/
+workspace/.orchestrator-stats.json
 *.log
 
 # OS

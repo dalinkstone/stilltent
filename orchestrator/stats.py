@@ -36,7 +36,7 @@ def main():
     rate = f"{(successes / total * 100):.1f}%" if total > 0 else "N/A"
 
     print("=" * 50)
-    print("  repokeeper orchestrator stats")
+    print("  stilltent orchestrator stats")
     print("=" * 50)
     print(f"  Target repo:            {repo}")
     print(f"  Total iterations:       {total}")
