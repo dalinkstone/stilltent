@@ -32,6 +32,11 @@ Thumbs.db
 # Docker
 tidb-data/
 
+# BFG Repo-Cleaner reports
+*.bfg-report/
+*.bfg-report
+..bfg-report/
+
 # Editor
 .vscode/
 .idea/
