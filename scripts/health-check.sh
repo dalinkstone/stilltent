@@ -3,7 +3,7 @@ set -euo pipefail
 
 source .env 2>/dev/null || true
 
-echo "=== repokeeper health check ==="
+echo "=== stilltent health check ==="
 echo ""
 
 # 1. Ollama

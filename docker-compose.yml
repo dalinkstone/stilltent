@@ -1,5 +1,5 @@
 # =============================================================================
-# repokeeper — Docker Compose (Phase 1–4: TiDB + mnemo-server + OpenClaw)
+# stilltent — Docker Compose (Phase 1–4: TiDB + mnemo-server + OpenClaw)
 #
 # Usage:
 #   cp .env.example .env   # fill in your values
@@ -13,7 +13,7 @@
 # Network: all services communicate over this internal bridge network.
 # --------------------------------------------------------------------------
 networks:
-  repokeeper-net:
+  stilltent-net:
     driver: bridge
 
 # --------------------------------------------------------------------------
@@ -32,8 +32,8 @@ services:
   # for persistent memory storage (vector + relational).
   # ==========================================================================
   tidb:
-    image: pingcap/tidb:latest
-    container_name: repokeeper-tidb
+    image: pingcap/tidb:v8.4.0
+    container_name: stilltent-tidb
     ports:
       # TODO: Remove this host binding after initial setup/debugging.
       # Only needed so you can connect with: mysql -h 127.0.0.1 -P 4000 -u root
@@ -44,7 +44,7 @@ services:
     volumes:
       - tidb-data:/tmp/tidb
     networks:
-      - repokeeper-net
+      - stilltent-net
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/4000'"]
       interval: 10s
@@ -64,7 +64,7 @@ services:
     build:
       context: ./mnemo-server/server
       dockerfile: Dockerfile
-    container_name: repokeeper-mnemo
+    container_name: stilltent-mnemo
     depends_on:
       tidb:
         condition: service_healthy
@@ -82,10 +82,14 @@ services:
       # --- Disable TiDB Cloud/Zero provisioning (local TiDB) ---
       MNEMO_TIDB_ZERO_ENABLED: "false"
 
+      # --- Vector dimensions (must match embedding model output) ---
+      # nomic-embed-text = 768 dims
+      MNEMO_EMBED_DIMS: 768
+
       # --- Server port inside the container ---
       MNEMO_PORT: 8082
     networks:
-      - repokeeper-net
+      - stilltent-net
     restart: unless-stopped
 
   # ==========================================================================
@@ -105,8 +109,8 @@ services:
     build:
       context: .
       dockerfile: dockerfiles/openclaw.Dockerfile
-    image: repokeeper/openclaw:latest
-    container_name: repokeeper-openclaw
+    image: stilltent/openclaw:latest
+    container_name: stilltent-openclaw
     depends_on:
       mnemo-server:
         condition: service_started
@@ -136,7 +140,7 @@ services:
 
       # --- mem9 memory API (mnemo-server container) ---
       MEM9_API_URL: http://mnemo-server:${MEM9_API_PORT:-8082}
-      MEM9_API_KEY: ${MEM9_API_KEY:-repokeeper-local-dev-key}
+      MEM9_API_KEY: ${MEM9_API_KEY:-stilltent-local-dev-key}
 
       # --- Target repo for the agent to work on ---
       TARGET_REPO: ${TARGET_REPO}
@@ -145,26 +149,24 @@ services:
       HOME: /home/node
       TERM: xterm-256color
     networks:
-      - repokeeper-net
+      - stilltent-net
     extra_hosts:
       # Allows containers on Linux to reach the host's Ollama instance
       # via http://host.docker.internal:11434. No-op on Docker Desktop.
       - "host.docker.internal:host-gateway"
     init: true
-    # Use the image's built-in entrypoint (docker-entrypoint.sh) and default CMD
-    # (node openclaw.mjs gateway --allow-unconfigured). Override only the args
-    # we need: --bind lan (0.0.0.0 for Docker port-mapping) and --port 18789.
+    # Wait for Ollama on the host to be reachable before starting the gateway,
+    # so model auto-discovery succeeds on first boot.
     command:
-      [
-        "node",
-        "openclaw.mjs",
-        "gateway",
-        "--allow-unconfigured",
-        "--bind",
-        "lan",
-        "--port",
-        "18789",
-      ]
+      - /bin/sh
+      - -c
+      - |
+        until node -e "fetch('http://host.docker.internal:${OLLAMA_PORT:-11434}/api/tags').then(r=>{if(!r.ok)throw 1}).catch(()=>process.exit(1))" 2>/dev/null; do
+          echo "Waiting for Ollama on host..."
+          sleep 2
+        done
+        echo "Ollama is reachable, starting gateway..."
+        exec node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
     healthcheck:
       test:
         [

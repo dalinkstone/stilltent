@@ -24,7 +24,7 @@ import urllib.error
 
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 API_URL = os.environ.get("MEM9_API_URL", "http://localhost:8082").rstrip("/")
-API_KEY = os.environ.get("MEM9_API_KEY", "repokeeper-local-dev-key")
+API_KEY = os.environ.get("MEM9_API_KEY", "stilltent-local-dev-key")
 
 HEALTH_PATH = "/healthz"
 MEMORIES_PATH = "/v1alpha2/mem9s/memories"
@@ -33,9 +33,9 @@ MEMORIES_PATH = "/v1alpha2/mem9s/memories"
 POLL_INTERVAL = 1  # seconds
 POLL_TIMEOUT = 15  # seconds
 
-TEST_CONTENT = "repokeeper-smoke-test: the quick brown fox jumps over the lazy dog"
+TEST_CONTENT = "stilltent-smoke-test: the quick brown fox jumps over the lazy dog"
 TEST_TAG = "smoke-test"
-SEARCH_KEYWORD = "repokeeper-smoke-test"
+SEARCH_KEYWORD = "stilltent-smoke-test"
 # ─────────────────────────────────────────────────────────────────────────────
 
 results = []

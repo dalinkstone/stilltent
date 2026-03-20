@@ -12,7 +12,7 @@ each request so you can see what's happening and adapt as needed.
 Configuration (environment variables):
     OPENCLAW_URL        Base URL of the gateway  (default: http://localhost:3000)
     OPENCLAW_GATEWAY_TOKEN  Bearer token for auth (default: empty — no auth header)
-    MEM9_API_KEY        mem9 key, passed if the gateway needs it (default: repokeeper-local-dev-key)
+    MEM9_API_KEY        mem9 key, passed if the gateway needs it (default: stilltent-local-dev-key)
 """
 
 import json
@@ -26,7 +26,7 @@ import uuid
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 BASE_URL = os.environ.get("OPENCLAW_URL", "http://localhost:3000").rstrip("/")
 GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
-MEM9_API_KEY = os.environ.get("MEM9_API_KEY", "repokeeper-local-dev-key")
+MEM9_API_KEY = os.environ.get("MEM9_API_KEY", "stilltent-local-dev-key")
 
 # Candidate health endpoints (tried in order; first 200 wins)
 HEALTH_PATHS = ["/healthz", "/health", "/api/health"]
@@ -206,7 +206,7 @@ def test_mem9_recall(method, path):
     print("\n5. mem9 integration (recall test)")
     payload = build_chat_payload(
         path,
-        "Search your memory for anything about 'repokeeper smoke test'. "
+        "Search your memory for anything about 'stilltent smoke test'. "
         "If you have a memory tool or recall ability, please use it now.",
     )
     status, parsed, raw = make_request(method, path, body=payload)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== repokeeper teardown ==="
+echo "=== stilltent teardown ==="
 echo "This will stop all containers, remove volumes, and delete the cloned repo."
 read -p "Are you sure? (y/N) " confirm
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then

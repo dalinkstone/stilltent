@@ -1,4 +1,4 @@
-# repokeeper
+# stilltent
 
 An autonomous AI agent that develops, manages, and improves a GitHub repository using locally-hosted models and persistent memory.
 

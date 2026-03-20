@@ -1,4 +1,4 @@
--- repokeeper: TiDB initialization for mnemo-server (mem9)
+-- stilltent: TiDB initialization for mnemo-server (mem9)
 -- Run once after TiDB is healthy: mysql -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql
 
 CREATE DATABASE IF NOT EXISTS mnemos;
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS upload_tasks (
 
 -- Seed local-dev tenant (API key = tenant ID)
 INSERT INTO tenants (id, name, db_host, db_port, db_user, db_password, db_name, db_tls, provider, status)
-VALUES ('repokeeper-local-dev-key', 'Local Dev', 'tidb', 4000, 'root', '', 'mnemos_tenant', 0, 'starter', 'active')
+VALUES ('stilltent-local-dev-key', 'Local Dev', 'tidb', 4000, 'root', '', 'mnemos_tenant', 0, 'starter', 'active')
 ON DUPLICATE KEY UPDATE status = 'active';
 
 -- Data plane tables (mnemos_tenant)
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS memories (
   source          VARCHAR(100),
   tags            JSON,
   metadata        JSON,
-  embedding       LONGBLOB        NULL COMMENT 'VECTOR(1536) on TiDB 8.4+; LONGBLOB fallback for older versions',
+  embedding       VECTOR(768)     NULL,
   memory_type     VARCHAR(20)     NOT NULL DEFAULT 'pinned'
                   COMMENT 'pinned|insight|digest',
   agent_id        VARCHAR(100)    NULL     COMMENT 'Agent that created this memory',
