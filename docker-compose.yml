@@ -1,5 +1,5 @@
 # =============================================================================
-# stilltent — Docker Compose (Phase 1–4: TiDB + mnemo-server + OpenClaw)
+# stilltent — Docker Compose (Phase 1–6: TiDB + mnemo-server + OpenClaw + Orchestrator)
 #
 # Usage:
 #   cp .env.example .env   # fill in your values
@@ -179,4 +179,32 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Orchestrator — lightweight loop driver that triggers the OpenClaw agent
+  # on a configurable interval. It does NOT make decisions — the agent (via
+  # SKILL.md) makes all decisions. The orchestrator just sends the prompt,
+  # monitors for hangs, collects metrics, and enforces the time budget.
+  # ==========================================================================
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: stilltent-orchestrator
+    depends_on:
+      openclaw-gateway:
+        condition: service_healthy
+    environment:
+      OPENCLAW_URL: http://openclaw-gateway:18789
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      TARGET_REPO: ${TARGET_REPO}
+      LOOP_INTERVAL: ${LOOP_INTERVAL:-60}
+      ITERATION_TIMEOUT: ${ITERATION_TIMEOUT:-600}
+      MAX_CONSECUTIVE_FAILURES: ${MAX_CONSECUTIVE_FAILURES:-10}
+      WORKSPACE_DIR: /workspace
+    volumes:
+      - ./workspace:/workspace:rw
+    networks:
+      - stilltent-net
     restart: unless-stopped

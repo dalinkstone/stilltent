@@ -1,0 +1,10 @@
+{
+  "total_iterations": 11,
+  "successful_iterations": 0,
+  "failed_iterations": 11,
+  "current_consecutive_failures": 1,
+  "success_rate": 0.0,
+  "last_iteration_at": "2026-03-20T19:34:29Z",
+  "uptime_seconds": 600,
+  "status": "stopped"
+}
