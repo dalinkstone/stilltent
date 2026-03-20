@@ -1,4 +1,4 @@
-.PHONY: up down logs restart status health bootstrap clean pause resume stats
+.PHONY: up down logs restart status health bootstrap clean pause resume stats init-db
 
 # Start all services
 up:
@@ -46,3 +46,11 @@ resume:
 # Show iteration count and success rate from orchestrator logs
 stats:
 	@python3 orchestrator/stats.py
+
+# Initialize TiDB databases and schema (run once after first tidb startup)
+# Requires: brew install mysql-client@8.4
+MYSQL_BIN ?= /opt/homebrew/opt/mysql-client@8.4/bin/mysql
+init-db:
+	@echo "Initializing TiDB databases..."
+	$(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql
+	@echo "Done. Databases and tables created."
