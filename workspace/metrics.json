@@ -1,10 +1,10 @@
 {
-  "total_iterations": 20,
-  "successful_iterations": 3,
-  "failed_iterations": 17,
-  "current_consecutive_failures": 0,
-  "success_rate": 0.15,
-  "last_iteration_at": "2026-03-20T20:16:10Z",
-  "uptime_seconds": 588,
+  "total_iterations": 27,
+  "successful_iterations": 8,
+  "failed_iterations": 19,
+  "current_consecutive_failures": 2,
+  "success_rate": 0.296,
+  "last_iteration_at": "2026-03-20T22:10:40Z",
+  "uptime_seconds": 1229,
   "status": "running"
 }

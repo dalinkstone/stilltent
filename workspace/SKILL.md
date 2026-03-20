@@ -21,10 +21,12 @@ Search your memory for context about the current state of the repository and rec
 
 **Memory queries to execute:**
 
-1. Search for "repository state" — get the latest snapshot of the repo's health
-2. Search for "current plan" — check if there's an in-progress multi-iteration plan
-3. Search for "failed approach" — recall what has failed recently so you don't repeat it
-4. Search for "architectural decision" — recall key design choices
+1. Search for "latest test results and CI status" — get the current health snapshot
+2. Search for "current iteration plan in progress" — check for ongoing multi-iteration work
+3. Search for "failed approach do not retry" — recall what has failed recently
+4. Search for "architectural decision rationale" — recall key design choices
+
+**Important:** Use the `memory_search` tool with its default settings. Do not request `memory_type: "session"` unless you need raw conversation history for a specific debugging task. Default search returns extracted insights, which are more compact and useful than raw session dumps.
 
 **If this is your first iteration** (no memories found), skip to Phase 2. You'll build context by examining the repository directly.
 

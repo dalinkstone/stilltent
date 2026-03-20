@@ -1,4 +1,8 @@
-.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace
+# Load .env vars so Make targets (and their subprocesses) see them.
+-include .env
+export
+
+.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight
 
 # Start all services
 up:
@@ -85,3 +89,7 @@ init-db:
 # Validate workspace files
 validate-workspace:
 	@bash scripts/validate-workspace.sh
+
+# Final pre-flight check: start stack, run all checks, stop orchestrator
+preflight:
+	@bash scripts/preflight.sh

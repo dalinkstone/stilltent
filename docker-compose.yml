@@ -123,6 +123,8 @@ services:
       # OpenClaw reads config from ~/.openclaw inside the container.
       # The container runs as user "node" (uid 1000), so HOME=/home/node.
       - ./config/openclaw:/home/node/.openclaw:rw
+      # Persistent git identity for the agent (survives container restarts).
+      - ./config/openclaw/.gitconfig:/root/.gitconfig:ro
       # Agent workspace — where the agent clones repos, edits files, etc.
       - ./workspace:/workspace:rw
     environment:

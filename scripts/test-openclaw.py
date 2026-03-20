@@ -10,7 +10,7 @@ common endpoint patterns and prints raw HTTP status + response body for
 each request so you can see what's happening and adapt as needed.
 
 Configuration (environment variables):
-    OPENCLAW_URL        Base URL of the gateway  (default: http://localhost:3000)
+    OPENCLAW_URL        Base URL of the gateway  (default: http://localhost:18789)
     OPENCLAW_GATEWAY_TOKEN  Bearer token for auth (default: empty — no auth header)
     MEM9_API_KEY        mem9 key, passed if the gateway needs it (default: stilltent-local-dev-key)
 """
@@ -24,7 +24,8 @@ import urllib.error
 import uuid
 
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
-BASE_URL = os.environ.get("OPENCLAW_URL", "http://localhost:3000").rstrip("/")
+_OPENCLAW_PORT = os.environ.get("OPENCLAW_PORT", "18789")
+BASE_URL = os.environ.get("OPENCLAW_URL", f"http://localhost:{_OPENCLAW_PORT}").rstrip("/")
 GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 MEM9_API_KEY = os.environ.get("MEM9_API_KEY", "stilltent-local-dev-key")
 
@@ -32,7 +33,9 @@ MEM9_API_KEY = os.environ.get("MEM9_API_KEY", "stilltent-local-dev-key")
 HEALTH_PATHS = ["/healthz", "/health", "/api/health"]
 
 # Candidate chat endpoints (tried in order; first non-404 wins)
+# OpenClaw exposes an OpenAI-compatible /v1/chat/completions endpoint.
 CHAT_ENDPOINTS = [
+    ("POST", "/v1/chat/completions"),
     ("POST", "/api/chat"),
     ("POST", "/api/v1/chat"),
     ("POST", "/api/v1/messages"),
@@ -41,10 +44,10 @@ CHAT_ENDPOINTS = [
 ]
 
 # Timeout for individual HTTP requests (seconds)
-HTTP_TIMEOUT = 30
-
-# How long to wait for the agent to finish processing (seconds)
-RESPONSE_POLL_TIMEOUT = 60
+# Simple requests (health, greeting) are fast, but tool-calling requests
+# require multiple LLM inference rounds and can take several minutes.
+HTTP_TIMEOUT = 60
+HTTP_TIMEOUT_TOOL = 300
 # ─────────────────────────────────────────────────────────────────────────────
 
 SESSION_ID = f"smoke-test-{uuid.uuid4().hex[:8]}"
@@ -60,11 +63,13 @@ def report(name, passed, detail=""):
     print(msg)
 
 
-def make_request(method, path, body=None, extra_headers=None):
+def make_request(method, path, body=None, extra_headers=None, timeout=None):
     """Make an HTTP request and return (status_code, parsed_body, raw_body).
 
     Returns (None, {}, error_string) on connection failure.
     """
+    if timeout is None:
+        timeout = HTTP_TIMEOUT
     url = BASE_URL + path
     headers = {"Content-Type": "application/json"}
     if GATEWAY_TOKEN:
@@ -76,7 +81,7 @@ def make_request(method, path, body=None, extra_headers=None):
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
     try:
-        resp = urllib.request.urlopen(req, timeout=HTTP_TIMEOUT)
+        resp = urllib.request.urlopen(req, timeout=timeout)
         raw = resp.read().decode()
         try:
             parsed = json.loads(raw) if raw.strip() else {}
@@ -116,38 +121,26 @@ def test_health():
 # ── TEST 2: Discover chat endpoint ───────────────────────────────────────────
 
 def discover_chat_endpoint():
-    """Try candidate chat endpoints to find one that accepts messages.
+    """Discover the chat endpoint using lightweight GET probes.
 
-    Returns (method, path) of the first endpoint that doesn't 404, or None.
+    A GET on a POST-only endpoint returns 405 Method Not Allowed, which
+    confirms the route exists without triggering an actual (slow) inference.
+    Returns (method, path, payload) of the first endpoint found, or Nones.
     """
     print("\n2. Discover chat endpoint")
 
-    # Common payload shapes to try per endpoint
-    payloads = {
-        "/api/chat": {"message": "ping", "sessionId": SESSION_ID},
-        "/api/v1/chat": {"message": "ping", "sessionId": SESSION_ID},
-        "/api/v1/messages": {"content": "ping", "role": "user", "sessionId": SESSION_ID},
-        "/api/sessions": {"prompt": "ping"},
-        "/v1/messages": {
-            "model": "default",
-            "max_tokens": 256,
-            "messages": [{"role": "user", "content": "ping"}],
-        },
-    }
+    for _method, path in CHAT_ENDPOINTS:
+        # Probe with GET — we expect 405 (exists) or 404 (doesn't exist).
+        status, _parsed, raw = make_request("GET", path)
+        print(f"     GET {path} → {status}")
+        # 405 = route exists but only accepts POST → this is our endpoint.
+        # 2xx/3xx = also fine (route exists and accepts GET).
+        if status is not None and status != 404:
+            print(f"     → Found endpoint: POST {path} (probe status {status})")
+            report("discover_endpoint", True, f"POST {path} (probe → {status})")
+            return "POST", path, None
 
-    for method, path in CHAT_ENDPOINTS:
-        payload = payloads.get(path, {"message": "ping"})
-        status, parsed, raw = make_request(method, path, body=payload)
-        print(f"     {method} {path} → {status}")
-        if raw and raw.strip():
-            print(f"     Body: {raw[:400]}")
-        # Treat anything other than 404/405 as "this endpoint exists"
-        if status is not None and status not in (404, 405):
-            print(f"     → Using {method} {path} (status {status})")
-            report("discover_endpoint", True, f"{method} {path} → {status}")
-            return method, path, payload
-
-    report("discover_endpoint", False, "all candidate endpoints returned 404/405")
+    report("discover_endpoint", False, "all candidate endpoints returned 404")
     return None, None, None
 
 
@@ -176,9 +169,10 @@ def test_tool_call(method, path):
     print("\n4. Tool call (echo TOOL_TEST_OK)")
     payload = build_chat_payload(
         path,
-        'Run the command: echo TOOL_TEST_OK\n\nPlease execute this shell command and show me the output.',
+        'Run this exact shell command and return the output: echo TOOL_TEST_OK',
+        max_tokens=512,
     )
-    status, parsed, raw = make_request(method, path, body=payload)
+    status, parsed, raw = make_request(method, path, body=payload, timeout=HTTP_TIMEOUT_TOOL)
     print(f"     {method} {path} → {status}")
     print(f"     Body: {raw[:800]}")
 
@@ -206,10 +200,10 @@ def test_mem9_recall(method, path):
     print("\n5. mem9 integration (recall test)")
     payload = build_chat_payload(
         path,
-        "Search your memory for anything about 'stilltent smoke test'. "
-        "If you have a memory tool or recall ability, please use it now.",
+        "Search your memory for 'stilltent smoke test'. Use your recall tool now.",
+        max_tokens=512,
     )
-    status, parsed, raw = make_request(method, path, body=payload)
+    status, parsed, raw = make_request(method, path, body=payload, timeout=HTTP_TIMEOUT_TOOL)
     print(f"     {method} {path} → {status}")
     print(f"     Body: {raw[:800]}")
 
@@ -227,9 +221,16 @@ def test_mem9_recall(method, path):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def build_chat_payload(path, message):
+def build_chat_payload(path, message, max_tokens=256):
     """Build a chat payload appropriate for the discovered endpoint path."""
-    if "/v1/messages" in path and "api" not in path:
+    if "/v1/chat/completions" in path:
+        # OpenAI-compatible (used by OpenClaw gateway)
+        return {
+            "model": "openclaw:main",
+            "messages": [{"role": "user", "content": message}],
+            "max_tokens": max_tokens,
+        }
+    elif "/v1/messages" in path and "api" not in path:
         # Anthropic-style /v1/messages
         return {
             "model": "default",
