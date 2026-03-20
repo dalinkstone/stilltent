@@ -147,13 +147,16 @@ services:
       # Allows containers on Linux to reach the host's Ollama instance
       # via http://host.docker.internal:11434. No-op on Docker Desktop.
       - "host.docker.internal:host-gateway"
-    working_dir: /workspace
     init: true
+    # Use the image's built-in entrypoint (docker-entrypoint.sh) and default CMD
+    # (node openclaw.mjs gateway --allow-unconfigured). Override only the args
+    # we need: --bind lan (0.0.0.0 for Docker port-mapping) and --port 18789.
     command:
       [
         "node",
-        "dist/index.js",
+        "openclaw.mjs",
         "gateway",
+        "--allow-unconfigured",
         "--bind",
         "lan",
         "--port",
