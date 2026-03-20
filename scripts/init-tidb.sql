@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS upload_tasks (
   INDEX idx_upload_poll (status, created_at)
 );
 
+-- Seed local-dev tenant (API key = tenant ID)
+INSERT INTO tenants (id, name, db_host, db_port, db_user, db_password, db_name, db_tls, provider, status)
+VALUES ('repokeeper-local-dev-key', 'Local Dev', 'tidb', 4000, 'root', '', 'mnemos_tenant', 0, 'starter', 'active')
+ON DUPLICATE KEY UPDATE status = 'active';
+
 -- Data plane tables (mnemos_tenant)
 USE mnemos_tenant;
 
