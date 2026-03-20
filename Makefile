@@ -1,4 +1,4 @@
-.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 init-db
+.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db
 
 # Start all services
 up:
@@ -50,6 +50,10 @@ stats:
 # Smoke test the mem9 API
 test-mem9:
 	@python3 scripts/test-mem9.py
+
+# Smoke test the OpenClaw gateway
+test-openclaw:
+	@python3 scripts/test-openclaw.py
 
 # Initialize TiDB databases and schema (run once after first tidb startup)
 # Requires: brew install mysql-client@8.4
