@@ -51,7 +51,7 @@ sync_repo() {
     else
         log "Cloning ${TARGET_REPO} into ${REPO_DIR}..."
         mkdir -p "${WORKSPACE}"
-        git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPO}.git" "${REPO_DIR}"
+        git clone "https://github.com/${TARGET_REPO}.git" "${REPO_DIR}"
     fi
 }
 

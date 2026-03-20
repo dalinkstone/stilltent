@@ -161,6 +161,8 @@ services:
       - /bin/sh
       - -c
       - |
+        # Configure git to authenticate via GITHUB_TOKEN (same approach as GitHub Actions)
+        git config --global url."https://x-access-token:$${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
         until node -e "fetch('http://host.docker.internal:${OLLAMA_PORT:-11434}/api/tags').then(r=>{if(!r.ok)throw 1}).catch(()=>process.exit(1))" 2>/dev/null; do
           echo "Waiting for Ollama on host..."
           sleep 2
