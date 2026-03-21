@@ -2,7 +2,7 @@
 -include .env
 export
 
-.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all
+.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run
 
 # Start all services (initializes DB on first run if needed)
 up:
@@ -26,8 +26,8 @@ up:
 	else \
 		echo "Database 'mnemos' exists — skipping init."; \
 	fi
-	@echo "Starting remaining services..."
-	@docker compose up -d
+	@echo "Starting remaining services (excluding orchestrator)..."
+	@docker compose up -d tidb embed-service mnemo-server openclaw-gateway
 
 # Stop all services
 down:
@@ -79,6 +79,17 @@ health:
 # First-time setup: clone repo, initialize mem9 tenant, send first prompt
 bootstrap:
 	@bash scripts/bootstrap.sh
+
+# Start the orchestrator (autonomous mode — run AFTER bootstrap + review)
+start:
+	@echo "Starting orchestrator (autonomous mode)..."
+	docker compose up -d orchestrator
+
+# Single-iteration test run — starts orchestrator, runs 1 iteration, then stops
+test-run:
+	@echo "Running single test iteration..."
+	MAX_ITERATIONS=1 docker compose run --rm -e MAX_ITERATIONS=1 orchestrator
+	@echo "Test iteration complete. Check logs: make logs"
 
 # Full teardown: stop containers, remove volumes, delete cloned repo
 clean:

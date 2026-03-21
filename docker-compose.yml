@@ -311,6 +311,7 @@ services:
       TOTAL_RUNTIME_HOURS: ${TOTAL_RUNTIME_HOURS:-120}
       BUDGET_LIMIT: ${BUDGET_LIMIT:-50}
       DAILY_BUDGET_LIMIT: ${DAILY_BUDGET_LIMIT:-15}
+      MAX_ITERATIONS: ${MAX_ITERATIONS:-0}
       WORKSPACE_DIR: /workspace
     volumes:
       - ./workspace:/workspace:rw

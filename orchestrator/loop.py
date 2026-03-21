@@ -81,6 +81,7 @@ OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 TARGET_REPO = os.environ.get("TARGET_REPO", "")
 BUDGET_LIMIT = float(os.environ.get("BUDGET_LIMIT", "40"))
 DAILY_BUDGET_LIMIT = float(os.environ.get("DAILY_BUDGET_LIMIT", "5.0"))  # legacy fallback
+MAX_ITERATIONS = int(os.environ.get("MAX_ITERATIONS", "0"))  # 0 = unlimited
 
 # Idle detection settings — reduces token waste by 30-40% during periods with
 # no work (no open issues, no PRs to review, no failing CI).
@@ -1134,6 +1135,7 @@ def main():
     log("stilltent orchestrator starting")
     log(f"  MODEL                     = qwen/qwen3-coder-next")
     log(f"  MODEL PRICING             = $0.12/M input, $0.75/M output")
+    log(f"  MAX_ITERATIONS            = {MAX_ITERATIONS or 'unlimited'}")
     log(f"  BUDGET_LIMIT              = ${BUDGET_LIMIT:.2f} for {TOTAL_RUNTIME_HOURS}h runtime")
     log(f"  TOTAL_RUNTIME_HOURS       = {TOTAL_RUNTIME_HOURS}h")
     log(f"  OPENCLAW_URL              = {OPENCLAW_URL}")
@@ -1188,6 +1190,11 @@ def main():
 
             # -- 0b. Budget guard ----------------------------------------------
             if _check_budget_guard():
+                break
+
+            # -- 0c. Iteration limit (for test runs) ---------------------------
+            if MAX_ITERATIONS > 0 and iteration >= MAX_ITERATIONS:
+                log(f"Iteration limit reached ({MAX_ITERATIONS}) — stopping")
                 break
 
             # -- 1. Check for PAUSE file ---------------------------------------
