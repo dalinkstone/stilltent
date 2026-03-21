@@ -11,6 +11,7 @@
  *   POST /v1/embeddings - Compute embeddings (OpenAI-compatible)
  *   POST /embeddings    - Alias (some clients omit /v1 prefix)
  *   GET  /health        - Health check
+ *   GET  /metrics       - Detailed metrics (pool size, queue depth, avg latency)
  *   OPTIONS *           - CORS preflight
  */
 
@@ -42,15 +43,15 @@
 #define DEFAULT_PORT        8090
 #define MAX_THREAD_POOL     32
 #define LISTEN_BACKLOG      128
-#define READ_BUF_SIZE       (HTTP_MAX_HEADER_SIZE + HTTP_MAX_BODY_SIZE)
-#define MAX_QUEUE_DEPTH     256
+#define READ_BUF_SIZE       (4 * 1024)
+#define MAX_QUEUE_DEPTH     32
 
-/* Response buffer: needs room for 256 floats at ~12 chars each + JSON overhead */
-#define RESPONSE_BUF_SIZE   (16 * 1024)
+/* Response buffer: 256 floats × ~10 chars + JSON overhead ≈ 3.5KB; 8KB is plenty */
+#define RESPONSE_BUF_SIZE   (8 * 1024)
 
-/* Keep-alive settings */
-#define KEEPALIVE_TIMEOUT_SEC   60
-#define KEEPALIVE_MAX_REQUESTS  1000
+/* Keep-alive settings (reduced for resource-constrained droplet) */
+#define KEEPALIVE_TIMEOUT_SEC   30
+#define KEEPALIVE_MAX_REQUESTS  100
 
 /* Dynamic thread pool size (resolved at startup) */
 static int g_thread_pool_size = 0;
@@ -81,6 +82,10 @@ static work_queue_t g_queue;
 
 static volatile long g_requests_served = 0;
 static time_t g_start_time = 0;
+
+/* Running average of embedding computation time in microseconds */
+static volatile long g_total_embed_us = 0;
+static volatile long g_embed_count = 0;
 
 static void queue_init(work_queue_t *q)
 {
@@ -198,6 +203,31 @@ static void handle_health(int fd)
     }
 }
 
+static void handle_metrics(int fd)
+{
+    char buf[512];
+    long uptime = (long)(time(NULL) - g_start_time);
+    long count = g_embed_count;
+    long avg_us = (count > 0) ? (g_total_embed_us / count) : 0;
+    int depth;
+    pthread_mutex_lock(&g_queue.mutex);
+    depth = g_queue.depth;
+    pthread_mutex_unlock(&g_queue.mutex);
+
+    int len = snprintf(buf, sizeof(buf),
+        "{\"status\":\"ok\","
+        "\"requests_served\":%ld,"
+        "\"uptime_seconds\":%ld,"
+        "\"thread_pool_size\":%d,"
+        "\"queue_depth\":%d,"
+        "\"avg_embed_us\":%ld}",
+        g_requests_served, uptime, g_thread_pool_size, depth, avg_us);
+
+    if (len > 0 && (size_t)len < sizeof(buf)) {
+        http_send_response(fd, 200, "OK", "application/json", buf, (size_t)len);
+    }
+}
+
 static void handle_embeddings(int fd, const char *body, size_t body_len)
 {
     /* Parse request */
@@ -207,13 +237,24 @@ static void handle_embeddings(int fd, const char *body, size_t body_len)
         return;
     }
 
-    /* Compute embedding */
+    /* Compute embedding with timing */
+    struct timeval t_start, t_end;
+    gettimeofday(&t_start, NULL);
+
     float embedding[EMBED_DIM];
     if (embed_text(req.input, req.input_len, embedding) < 0) {
         send_json_error(fd, 500, "Internal Server Error",
                        "Embedding computation failed");
         json_free_embed_request(&req);
         return;
+    }
+
+    gettimeofday(&t_end, NULL);
+    {
+        long elapsed_us = (t_end.tv_sec - t_start.tv_sec) * 1000000L
+                        + (t_end.tv_usec - t_start.tv_usec);
+        __sync_fetch_and_add(&g_total_embed_us, elapsed_us);
+        __sync_fetch_and_add(&g_embed_count, 1);
     }
 
     /* Generate response using thread-local buffer (zero malloc per request) */
@@ -283,6 +324,8 @@ static void handle_connection(int client_fd)
             http_send_cors_preflight(client_fd);
         } else if (req.method == HTTP_GET && strcmp(req.path, "/health") == 0) {
             handle_health(client_fd);
+        } else if (req.method == HTTP_GET && strcmp(req.path, "/metrics") == 0) {
+            handle_metrics(client_fd);
         } else if (req.method == HTTP_POST &&
                    (strcmp(req.path, "/v1/embeddings") == 0 ||
                     strcmp(req.path, "/embeddings") == 0)) {
@@ -403,8 +446,8 @@ int main(int argc, char **argv)
 #elif defined(_SC_NPROCESSORS_ONLN)
             ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 #endif
-            if (ncpus < 1) ncpus = 4;
-            g_thread_pool_size = (int)(ncpus * 2);
+            if (ncpus < 1) ncpus = 2;
+            g_thread_pool_size = (int)(ncpus < 4 ? ncpus : 4);
             if (g_thread_pool_size > MAX_THREAD_POOL)
                 g_thread_pool_size = MAX_THREAD_POOL;
         }
@@ -468,6 +511,7 @@ int main(int argc, char **argv)
         "    POST /v1/embeddings\n"
         "    POST /embeddings\n"
         "    GET  /health\n"
+        "    GET  /metrics\n"
         "============================================\n",
         port, g_thread_pool_size, EMBED_DIM);
     fflush(stdout);

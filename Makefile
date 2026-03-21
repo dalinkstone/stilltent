@@ -178,18 +178,9 @@ deploy:
 	@echo "5. Start the stack:"
 	@echo "   make bootstrap"
 
-# Estimate OpenRouter spend from metrics
+# Real-time cost report from workspace/metrics.json
 cost:
-	@echo "=== OpenRouter Cost Estimate ==="
-	@if [ -f metrics/openrouter.log ]; then \
-		TOTAL=$$(awk -F',' '{sum+=$$NF} END {printf "%.4f", sum}' metrics/openrouter.log); \
-		CALLS=$$(wc -l < metrics/openrouter.log | tr -d ' '); \
-		echo "Total API calls: $$CALLS"; \
-		echo "Estimated spend: \$$$$TOTAL"; \
-	else \
-		echo "No metrics found at metrics/openrouter.log"; \
-		echo "Cost tracking starts after the first orchestrator run."; \
-	fi
+	@python3 -c "import json; m=json.load(open('workspace/metrics.json')); print(f'Iterations: {m.get(\"total_iterations\",0)}'); print(f'Spend: \$${m.get(\"total_spend_usd\",0):.4f}'); print(f'Projected: \$${m.get(\"projected_total_usd\",0):.2f}'); print(f'Budget: \$${m.get(\"budget_remaining_usd\",0):.2f} remaining')"
 
 # Print SSH command to connect to VPS
 ssh-tunnel:

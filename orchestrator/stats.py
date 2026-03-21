@@ -49,14 +49,31 @@ def format_timestamp(ts: str) -> str:
         return ts
 
 
-def main():
+def _load_metrics() -> dict:
+    """Load metrics.json and return the parsed dict, or exit if missing."""
     if not os.path.exists(METRICS_FILE):
         print("No metrics yet — has the orchestrator run?")
         print(f"  Expected: {os.path.abspath(METRICS_FILE)}")
         sys.exit(1)
-
     with open(METRICS_FILE, encoding="utf-8") as f:
-        m = json.load(f)
+        return json.load(f)
+
+
+def cost_summary() -> str:
+    """Return a one-line cost summary suitable for dashboards and scripts."""
+    m = _load_metrics()
+    total = m.get("total_spend_usd", 0.0)
+    avg = m.get("avg_cost_per_iteration_usd", 0.0)
+    projected = m.get("projected_total_usd", 0.0)
+    remaining = m.get("budget_remaining_usd", 0.0)
+    return (
+        f"Spent ${total:.4f} | Avg ${avg:.4f}/iter | "
+        f"Projected ${projected:.2f} | Budget ${remaining:.2f} remaining"
+    )
+
+
+def main():
+    m = _load_metrics()
 
     total = m.get("total_iterations", 0)
     successes = m.get("successful_iterations", 0)
@@ -77,6 +94,20 @@ def main():
     print(f"Consecutive fails:   {consec}")
     print(f"Last iteration:      {format_timestamp(last_at)}")
     print(f"Uptime:              {format_uptime(uptime)}")
+
+    # Cost visibility
+    spend = m.get("total_spend_usd", 0.0)
+    avg_cost = m.get("avg_cost_per_iteration_usd", 0.0)
+    projected = m.get("projected_total_usd", 0.0)
+    budget_limit = m.get("budget_limit_usd", 0.0)
+    budget_remaining = m.get("budget_remaining_usd", 0.0)
+
+    print(f"\n=== cost ===")
+    print(f"Total spend:         ${spend:.4f}")
+    print(f"Avg cost/iteration:  ${avg_cost:.4f}")
+    print(f"Projected total:     ${projected:.2f}")
+    print(f"Budget remaining:    ${budget_remaining:.2f} / ${budget_limit:.2f}")
+    print(f"Pricing:             $0.12/M input, $0.75/M output")
 
 
 if __name__ == "__main__":
