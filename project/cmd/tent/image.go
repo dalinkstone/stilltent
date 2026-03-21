@@ -71,7 +71,10 @@ func imagePullCmd() *cobra.Command {
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			url := args[1]
+			url := ""
+			if len(args) > 1 {
+				url = args[1]
+			}
 
 			// Default URLs for common images
 			if url == "" {

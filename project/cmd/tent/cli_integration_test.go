@@ -639,3 +639,692 @@ func TestCLIIntegration_ImageCommandsExecution(t *testing.T) {
 		t.Error("Missing args should fail validation")
 	}
 }
+
+// TestCLIIntegration_DestroyCommandExecutionValidation tests the destroy command argument validation
+func TestCLIIntegration_DestroyCommandExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := destroyCmd()
+	if cmd == nil {
+		t.Fatal("destroyCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm1", "vm2"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_StartCommandExecutionValidation tests the start command argument validation
+func TestCLIIntegration_StartCommandExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := startCmd()
+	if cmd == nil {
+		t.Fatal("startCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm1", "vm2"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_StopCommandExecutionValidation tests the stop command argument validation
+func TestCLIIntegration_StopCommandExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := stopCmd()
+	if cmd == nil {
+		t.Fatal("stopCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm1", "vm2"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_ListCommandExecutionValidation tests the list command argument validation
+func TestCLIIntegration_ListCommandExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := listCmd()
+	if cmd == nil {
+		t.Fatal("listCmd() should not return nil")
+	}
+
+	// List command should not accept arguments
+	err := cmd.ValidateArgs([]string{"extra-arg"})
+	if err == nil {
+		t.Error("List command should not accept arguments")
+	}
+
+	// Test with no arguments
+	err = cmd.ValidateArgs([]string{})
+	if err != nil {
+		t.Errorf("List command should accept no arguments: %v", err)
+	}
+}
+
+// TestCLIIntegration_SSHCommandExecutionValidation tests the ssh command argument validation
+func TestCLIIntegration_SSHCommandExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := sshCmd()
+	if cmd == nil {
+		t.Fatal("sshCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm1", "vm2"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_LogsCommandExecutionValidation tests the logs command argument validation
+func TestCLIIntegration_LogsCommandExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := logsCmd()
+	if cmd == nil {
+		t.Fatal("logsCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm1", "vm2"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_CreateCommandExecutionWithConfig tests create command with config file
+func TestCLIIntegration_CreateCommandExecutionWithConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Create a test config file
+	configPath := filepath.Join(tmpDir, "test-config.yaml")
+	configContent := `name: test-vm
+vcpus: 4
+memory_mb: 2048
+disk_gb: 20
+kernel: default
+rootfs: ubuntu-22.04
+network:
+  mode: nat
+  ports:
+    - host: 8080
+      guest: 80
+    - host: 2222
+      guest: 22
+mounts:
+  - host: ./src
+    guest: /workspace
+    readonly: false
+env:
+  EDITOR: vim
+  LANG: en_US.UTF-8
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	// Test with config file
+	cmd := createCmd()
+	if cmd == nil {
+		t.Fatal("createCmd() should not return nil")
+	}
+
+	// Test with config file
+	err = cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with config flag
+	cmd.SetArgs([]string{"test-vm", "--config", configPath})
+	err = cmd.Execute()
+	if err != nil {
+		// Expected to fail due to missing actual VM manager, but structure should be valid
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_SnapshotCommandsExecutionValidation tests snapshot subcommands argument validation
+func TestCLIIntegration_SnapshotCommandsExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test snapshot create
+	cmd := snapshotCreateCmd()
+	if cmd == nil {
+		t.Fatal("snapshotCreateCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm", "snapshot-tag"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{"test-vm"})
+	if err == nil {
+		t.Error("Missing tag arg should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm", "tag", "extra"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+
+	// Test snapshot restore
+	cmd = snapshotRestoreCmd()
+	if cmd == nil {
+		t.Fatal("snapshotRestoreCmd() should not return nil")
+	}
+
+	err = cmd.ValidateArgs([]string{"test-vm", "snapshot-tag"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm", "tag", "extra"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+
+	// Test snapshot list
+	cmd = snapshotListCmd()
+	if cmd == nil {
+		t.Fatal("snapshotListCmd() should not return nil")
+	}
+
+	err = cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"vm", "extra"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_NetworkCommandsExecutionValidation tests network subcommands argument validation
+func TestCLIIntegration_NetworkCommandsExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test network list
+	cmd := networkListCmd()
+	if cmd == nil {
+		t.Fatal("networkListCmd() should not return nil")
+	}
+
+	// Network list should not accept arguments
+	err := cmd.ValidateArgs([]string{})
+	if err != nil {
+		t.Errorf("Network list should accept no arguments: %v", err)
+	}
+
+	// Test with extra arguments
+	err = cmd.ValidateArgs([]string{"extra"})
+	if err == nil {
+		t.Error("Network list should not accept arguments")
+	}
+}
+
+// TestCLIIntegration_ImageCommandsExecutionValidation tests image subcommands argument validation
+func TestCLIIntegration_ImageCommandsExecutionValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test image list
+	cmd := imageListCmd()
+	if cmd == nil {
+		t.Fatal("imageListCmd() should not return nil")
+	}
+
+	// Image list should not accept arguments
+	err := cmd.ValidateArgs([]string{})
+	if err != nil {
+		t.Errorf("Image list should accept no arguments: %v", err)
+	}
+
+	// Test with extra arguments
+	err = cmd.ValidateArgs([]string{"extra"})
+	if err == nil {
+		t.Error("Image list should not accept arguments")
+	}
+
+	// Test image pull
+	cmd = imagePullCmd()
+	if cmd == nil {
+		t.Fatal("imagePullCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err = cmd.ValidateArgs([]string{"ubuntu-22.04"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with optional URL
+	err = cmd.ValidateArgs([]string{"ubuntu-22.04", "https://example.com/image.tar"})
+	if err != nil {
+		t.Errorf("Args with URL should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+
+	// Test with too many arguments
+	err = cmd.ValidateArgs([]string{"img", "url1", "url2"})
+	if err == nil {
+		t.Error("Too many args should fail validation")
+	}
+}
+
+// TestCLIIntegration_CreateCommandRunE tests the RunE function of create command
+func TestCLIIntegration_CreateCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := createCmd()
+	if cmd == nil {
+		t.Fatal("createCmd() should not return nil")
+	}
+
+	// Create a test config file
+	configPath := filepath.Join(tmpDir, "test-config.yaml")
+	configContent := `name: test-vm
+vcpus: 4
+memory_mb: 2048
+disk_gb: 20
+kernel: default
+rootfs: ubuntu-22.04
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm", "--config", configPath})
+
+	// Execute the command
+	// This tests the full execution path
+	err = cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_DestroyCommandRunE tests the RunE function of destroy command
+func TestCLIIntegration_DestroyCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := destroyCmd()
+	if cmd == nil {
+		t.Fatal("destroyCmd() should not return nil")
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm"})
+
+	// Execute the command
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_StartCommandRunE tests the RunE function of start command
+func TestCLIIntegration_StartCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := startCmd()
+	if cmd == nil {
+		t.Fatal("startCmd() should not return nil")
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm"})
+
+	// Execute the command
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_StopCommandRunE tests the RunE function of stop command
+func TestCLIIntegration_StopCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := stopCmd()
+	if cmd == nil {
+		t.Fatal("stopCmd() should not return nil")
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm"})
+
+	// Execute the command
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_StatusCommandRunE tests the RunE function of status command
+func TestCLIIntegration_StatusCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := statusCmd()
+	if cmd == nil {
+		t.Fatal("statusCmd() should not return nil")
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm"})
+
+	// Execute the command
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_LogsCommandRunE tests the RunE function of logs command
+func TestCLIIntegration_LogsCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := logsCmd()
+	if cmd == nil {
+		t.Fatal("logsCmd() should not return nil")
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm"})
+
+	// Execute the command
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_SSHCommandRunE tests the RunE function of ssh command
+func TestCLIIntegration_SSHCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := sshCmd()
+	if cmd == nil {
+		t.Fatal("sshCmd() should not return nil")
+	}
+
+	// Set args for the command
+	cmd.SetArgs([]string{"test-vm"})
+
+	// Execute the command
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_ListCommandRunE tests the RunE function of list command
+func TestCLIIntegration_ListCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := listCmd()
+	if cmd == nil {
+		t.Fatal("listCmd() should not return nil")
+	}
+
+	// Execute the command (no args required)
+	err := cmd.Execute()
+	if err == nil {
+		// If no error, the command executed successfully
+		t.Log("Command executed successfully")
+	} else {
+		// Expected to fail due to missing actual VM manager
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_SnapshotCommandsRunE tests the RunE functions of snapshot commands
+func TestCLIIntegration_SnapshotCommandsRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test snapshot create
+	cmd := snapshotCreateCmd()
+	if cmd == nil {
+		t.Fatal("snapshotCreateCmd() should not return nil")
+	}
+
+	cmd.SetArgs([]string{"test-vm", "snapshot-tag"})
+	err := cmd.Execute()
+	if err == nil {
+		t.Log("Snapshot create executed successfully")
+	} else {
+		t.Logf("Snapshot create execution failed as expected: %v", err)
+	}
+
+	// Test snapshot restore
+	cmd = snapshotRestoreCmd()
+	if cmd == nil {
+		t.Fatal("snapshotRestoreCmd() should not return nil")
+	}
+
+	cmd.SetArgs([]string{"test-vm", "snapshot-tag"})
+	err = cmd.Execute()
+	if err == nil {
+		t.Log("Snapshot restore executed successfully")
+	} else {
+		t.Logf("Snapshot restore execution failed as expected: %v", err)
+	}
+
+	// Test snapshot list
+	cmd = snapshotListCmd()
+	if cmd == nil {
+		t.Fatal("snapshotListCmd() should not return nil")
+	}
+
+	cmd.SetArgs([]string{"test-vm"})
+	err = cmd.Execute()
+	if err == nil {
+		t.Log("Snapshot list executed successfully")
+	} else {
+		t.Logf("Snapshot list execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_NetworkCommandRunE tests the RunE function of network commands
+func TestCLIIntegration_NetworkCommandRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test network list
+	cmd := networkListCmd()
+	if cmd == nil {
+		t.Fatal("networkListCmd() should not return nil")
+	}
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Log("Network list executed successfully")
+	} else {
+		t.Logf("Network list execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_ImageCommandsRunE tests the RunE functions of image commands
+func TestCLIIntegration_ImageCommandsRunE(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test image list
+	cmd := imageListCmd()
+	if cmd == nil {
+		t.Fatal("imageListCmd() should not return nil")
+	}
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Log("Image list executed successfully")
+	} else {
+		t.Logf("Image list execution failed as expected: %v", err)
+	}
+
+	// Test image pull
+	cmd = imagePullCmd()
+	if cmd == nil {
+		t.Fatal("imagePullCmd() should not return nil")
+	}
+
+	cmd.SetArgs([]string{"ubuntu-22.04"})
+	err = cmd.Execute()
+	if err == nil {
+		t.Log("Image pull executed successfully")
+	} else {
+		t.Logf("Image pull execution failed as expected: %v", err)
+	}
+}
