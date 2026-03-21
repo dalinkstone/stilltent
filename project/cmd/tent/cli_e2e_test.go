@@ -102,7 +102,7 @@ network:
 	mockState := &MockStateManager{
 		VMs: make(map[string]*models.VMState),
 	}
-	mockFC := &MockFirecrackerClient{}
+	mockFC := &MockHypervisorBackend{}
 	mockNet := &MockNetworkManager{TAPDevice: "tap0"}
 	mockStorage := &MockStorageManager{}
 
@@ -144,7 +144,7 @@ func TestCLI_E2E_CreateCommandWithMockedDependencies_NoConfig(t *testing.T) {
 	mockState := &MockStateManager{
 		VMs: make(map[string]*models.VMState),
 	}
-	mockFC := &MockFirecrackerClient{}
+	mockFC := &MockHypervisorBackend{}
 	mockNet := &MockNetworkManager{TAPDevice: "tap0"}
 	mockStorage := &MockStorageManager{}
 
@@ -220,26 +220,6 @@ func TestCLI_E2E_MockStateManager(t *testing.T) {
 	_, err = mockState.GetVM("vm1")
 	assert.Error(t, err)
 	assert.Equal(t, os.ErrNotExist, err)
-}
-
-// TestCLI_E2E_MockFirecrackerClient tests the mock firecracker client
-func TestCLI_E2E_MockFirecrackerClient(t *testing.T) {
-	mockFC := &MockFirecrackerClient{}
-
-	// Test ConfigureVM
-	err := mockFC.ConfigureVM("/tmp/test.sock", &models.VMConfig{Name: "test-vm"})
-	assert.NoError(t, err)
-	assert.True(t, mockFC.ConfigureCalled)
-
-	// Test StartVM
-	err = mockFC.StartVM("/tmp/test.sock")
-	assert.NoError(t, err)
-	assert.True(t, mockFC.StartVMCalled)
-
-	// Test ShutdownVM
-	err = mockFC.ShutdownVM("/tmp/test.sock")
-	assert.NoError(t, err)
-	assert.True(t, mockFC.ShutdownVMCalled)
 }
 
 // TestCLI_E2E_MockNetworkManager tests the mock network manager
