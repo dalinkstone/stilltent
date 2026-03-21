@@ -28,6 +28,7 @@ func main() {
 	rootCmd.AddCommand(snapshotCmd())
 	rootCmd.AddCommand(networkCmd())
 	rootCmd.AddCommand(imageCmd())
+	rootCmd.AddCommand(composeCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
