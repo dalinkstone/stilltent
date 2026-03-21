@@ -285,3 +285,73 @@ type SnapshotInfo struct {
 	SizeMB    int    `json:"size_mb"`
 	CreatedAt string `json:"created_at"`
 }
+
+// PullImage downloads a base image from a URL to the storage directory
+func (m *Manager) PullImage(name string, url string) (string, error) {
+	// Create base image directory
+	baseImageDir := filepath.Join(m.baseDir, "images")
+	if err := os.MkdirAll(baseImageDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create images directory: %w", err)
+	}
+
+	// Create image file path
+	imagePath := filepath.Join(baseImageDir, fmt.Sprintf("%s.img", name))
+
+	// Download the image
+	if err := m.downloadFile(imagePath, url); err != nil {
+		return "", fmt.Errorf("failed to download image: %w", err)
+	}
+
+	return imagePath, nil
+}
+
+// downloadFile downloads a file from a URL to a local path
+func (m *Manager) downloadFile(filepath string, url string) error {
+	// Use curl to download (more reliable than native Go HTTP for large files)
+	cmd := exec.Command("curl", "-L", "-o", filepath, url)
+	if err := cmd.Run(); err != nil {
+		// Fall back to wget
+		cmd = exec.Command("wget", "-O", filepath, url)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListImages lists all available base images
+func (m *Manager) ListImages() ([]*ImageInfo, error) {
+	imagesDir := filepath.Join(m.baseDir, "images")
+	if _, err := os.Stat(imagesDir); os.IsNotExist(err) {
+		return []*ImageInfo{}, nil
+	}
+
+	var images []*ImageInfo
+
+	entries, err := os.ReadDir(imagesDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read images directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".img") {
+			info, err := entry.Info()
+			if err == nil {
+				images = append(images, &ImageInfo{
+					Name:      strings.TrimSuffix(entry.Name(), ".img"),
+					SizeMB:    int(info.Size() / (1024 * 1024)),
+					CreatedAt: info.ModTime().Format("2006-01-02 15:04:05"),
+				})
+			}
+		}
+	}
+
+	return images, nil
+}
+
+// ImageInfo represents information about a base image
+type ImageInfo struct {
+	Name      string `json:"name"`
+	SizeMB    int    `json:"size_mb"`
+	CreatedAt string `json:"created_at"`
+}
