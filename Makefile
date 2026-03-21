@@ -8,13 +8,15 @@ export
 up:
 	@echo "Starting TiDB and embed-service..."
 	@docker compose up -d tidb embed-service
-	@echo "Waiting for TiDB to be healthy..."
-	@for i in $$(seq 1 30); do \
-		if $(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root -e "SELECT 1" >/dev/null 2>&1; then \
+	@echo "Waiting for TiDB to be healthy (up to 3 minutes)..."
+	@for i in $$(seq 1 90); do \
+		if curl -sf http://127.0.0.1:10080/status >/dev/null 2>&1; then \
+			echo "TiDB is ready."; \
 			break; \
 		fi; \
-		if [ $$i -eq 30 ]; then \
-			echo "ERROR: TiDB did not become healthy after 30 attempts."; \
+		if [ $$i -eq 90 ]; then \
+			echo "ERROR: TiDB did not become healthy after 90 attempts (3 min)."; \
+			echo "Check logs: docker compose logs tidb"; \
 			exit 1; \
 		fi; \
 		sleep 2; \
@@ -139,7 +141,7 @@ scan-secrets:
 
 # Initialize TiDB databases and schema (run once after first tidb startup)
 # Requires: brew install mysql-client@8.4
-MYSQL_BIN ?= /opt/homebrew/opt/mysql-client@8.4/bin/mysql
+MYSQL_BIN ?= $(shell which mysql 2>/dev/null || echo /opt/homebrew/opt/mysql-client@8.4/bin/mysql)
 init-db:
 	@echo "Waiting for TiDB to be healthy..."
 	@for i in $$(seq 1 30); do \

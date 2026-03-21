@@ -55,8 +55,8 @@ fi
 # -------------------------------------------------------------------
 # 3. Install utilities
 # -------------------------------------------------------------------
-echo ">>> Installing git, make, curl, jq, ufw, fail2ban..."
-apt-get install -y -qq git make curl jq ufw fail2ban
+echo ">>> Installing git, make, curl, jq, ufw, fail2ban, mysql-client..."
+apt-get install -y -qq git make curl jq ufw fail2ban default-mysql-client
 
 # -------------------------------------------------------------------
 # 4. Set up swap (4G — good practice on 8GB droplet, critical on 4GB)

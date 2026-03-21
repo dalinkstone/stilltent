@@ -47,6 +47,7 @@ services:
       - tidb-data:/tmp/tidb
     ports:
       - "4000:4000"
+      - "10080:10080"
     networks:
       - stilltent-net
     environment:
