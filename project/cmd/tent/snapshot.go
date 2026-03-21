@@ -38,7 +38,7 @@ func snapshotCreateCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir)
+			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -77,7 +77,7 @@ func snapshotRestoreCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir)
+			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -114,7 +114,7 @@ func snapshotListCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir)
+			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
