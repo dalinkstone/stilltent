@@ -4,9 +4,30 @@ export
 
 .PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all
 
-# Start all services
+# Start all services (initializes DB on first run if needed)
 up:
-	docker compose up -d
+	@echo "Starting TiDB and embed-service..."
+	@docker compose up -d tidb embed-service
+	@echo "Waiting for TiDB to be healthy..."
+	@for i in $$(seq 1 30); do \
+		if $(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root -e "SELECT 1" >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "ERROR: TiDB did not become healthy after 30 attempts."; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done
+	@if ! $(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root -e "USE mnemos" >/dev/null 2>&1; then \
+		echo "Database 'mnemos' not found — running init-db..."; \
+		$(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql; \
+		echo "Database initialized."; \
+	else \
+		echo "Database 'mnemos' exists — skipping init."; \
+	fi
+	@echo "Starting remaining services..."
+	@docker compose up -d
 
 # Stop all services
 down:
