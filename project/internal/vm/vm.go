@@ -16,51 +16,94 @@ import (
 	"github.com/dalinkstone/tent/internal/storage"
 )
 
+// StateManager defines the interface for state persistence
+type StateManager interface {
+	GetVM(name string) (*models.VMState, error)
+	StoreVM(vm *models.VMState) error
+	UpdateVM(name string, updateFn func(*models.VMState) error) error
+	DeleteVM(name string) error
+	ListVMs() ([]*models.VMState, error)
+}
+
+// FirecrackerClient defines the interface for Firecracker API operations
+type FirecrackerClient interface {
+	ConfigureVM(socketPath string, config *models.VMConfig) error
+	StartVM(socketPath string) error
+	ShutdownVM(socketPath string) error
+}
+
+// NetworkManager defines the interface for network operations
+type NetworkManager interface {
+	SetupVMNetwork(name string, config *models.VMConfig) (string, error)
+	CleanupVMNetwork(name string) error
+}
+
+// StorageManager defines the interface for storage operations
+type StorageManager interface {
+	CreateRootFS(name string, config *models.VMConfig) (string, error)
+	DestroyVMStorage(name string) error
+	CreateSnapshot(name string, tag string) (string, error)
+	RestoreSnapshot(name string, tag string) error
+	ListSnapshots(name string) ([]*storage.SnapshotInfo, error)
+}
+
 // VMManager manages microVM lifecycle operations
 type VMManager struct {
-	stateManager  *state.StateManager
-	firecracker   *firecracker.Client
-	networkMgr    *network.Manager
-	storageMgr    *storage.Manager
+	stateManager  StateManager
+	firecracker   FirecrackerClient
+	networkMgr    NetworkManager
+	storageMgr    StorageManager
 	baseDir       string
+	execCommand   func(cmd string, args ...string) *exec.Cmd
 }
 
 // NewManager creates a new VM manager
-func NewManager(baseDir string) (*VMManager, error) {
-	sm, err := state.NewStateManager(filepath.Join(baseDir, "state.json"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create state manager: %w", err)
+func NewManager(baseDir string, stateManager StateManager, fc FirecrackerClient, networkMgr NetworkManager, storageMgr StorageManager) (*VMManager, error) {
+	if stateManager == nil {
+		sm, err := state.NewStateManager(filepath.Join(baseDir, "state.json"))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create state manager: %w", err)
+		}
+		stateManager = sm
+	}
+
+	if fc == nil {
+		c, err := firecracker.NewClient("")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create firecracker client: %w", err)
+		}
+		fc = c
+	}
+
+	if networkMgr == nil {
+		nm, err := network.NewManager()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create network manager: %w", err)
+		}
+		networkMgr = nm
+	}
+
+	if storageMgr == nil {
+		sm, err := storage.NewManager(baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create storage manager: %w", err)
+		}
+		storageMgr = sm
 	}
 
 	return &VMManager{
-		stateManager: sm,
+		stateManager: stateManager,
+		firecracker:  fc,
+		networkMgr:   networkMgr,
+		storageMgr:   storageMgr,
 		baseDir:      baseDir,
+		execCommand:  exec.Command,
 	}, nil
 }
 
 // Setup initializes the VM manager components
 func (m *VMManager) Setup() error {
-	var err error
-
-	// Initialize storage manager
-	m.storageMgr, err = storage.NewManager(m.baseDir)
-	if err != nil {
-		return fmt.Errorf("failed to create storage manager: %w", err)
-	}
-
-	// Initialize network manager
-	m.networkMgr, err = network.NewManager()
-	if err != nil {
-		return fmt.Errorf("failed to create network manager: %w", err)
-	}
-
-	// Initialize firecracker client
-	m.firecracker, err = firecracker.NewClient("")
-	if err != nil {
-		return fmt.Errorf("failed to create firecracker client: %w", err)
-	}
-
-	return nil
+	return nil // Components are initialized in NewManager
 }
 
 // Create creates a new microVM
@@ -127,7 +170,7 @@ func (m *VMManager) Start(name string) error {
 	}
 
 	// Spawn Firecracker process
-	cmd := exec.Command("firecracker", "--api-sock", vmState.SocketPath)
+	cmd := m.execCommand("firecracker", "--api-sock", vmState.SocketPath)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start firecracker: %w", err)
 	}
