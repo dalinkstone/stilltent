@@ -391,6 +391,14 @@ def _extract_token_usage(response: dict):
         }
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
+    
+    # Log when tokens are 0 to help diagnose API issues
+    if prompt_tokens == 0 and completion_tokens == 0:
+        log(
+            "Token usage shows 0 tokens — checking response structure for alternative layouts",
+            logging.DEBUG,
+        )
+    
     _metrics["total_prompt_tokens"] += prompt_tokens
     _metrics["total_completion_tokens"] += completion_tokens
     return prompt_tokens, completion_tokens
