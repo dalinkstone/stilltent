@@ -16,65 +16,57 @@ scp .env root@<DROPLET_IP>:/root/.env
 ssh root@<DROPLET_IP>
 ```
 
-## 3. Clone the repo
+## 3. Clone the repo and move .env into place
 
 ```bash
 git clone https://github.com/dalinkstone/stilltent.git ~/stilltent
-```
-
-## 4. Move .env into place
-
-```bash
 mv /root/.env ~/stilltent/.env
 ```
 
-## 5. Run the deploy script (hardening + config)
+## 4. Run the deploy script
 
-This installs Docker, git, ufw, fail2ban, configures swap, firewall, and log rotation:
+Handles everything in one shot: system hardening (Docker, ufw, fail2ban, swap, log rotation), starts the stack, initializes the database, runs health checks, and bootstraps the first iteration.
 
 ```bash
 cd ~/stilltent
 bash scripts/deploy-digitalocean.sh
 ```
 
-The script is idempotent — safe to run again if interrupted.
+The script is idempotent — safe to run again if interrupted. If `.env` is missing, it will prompt for the three required values (OPENROUTER_API_KEY, GITHUB_TOKEN, TARGET_REPO).
 
-## 6. Start the stack (without orchestrator)
+## 5. Review bootstrap output
 
-```bash
-make up
-```
+The deploy script prints the first iteration result at the end. Check:
 
-Wait ~30 seconds for services to boot, then verify:
+- Did the agent understand SKILL.md?
+- New branches/PRs on the target repo: `gh pr list`
+- Service health: `make health`
 
-```bash
-make health
-```
+## 6. Test the orchestrator loop (optional)
 
-## 7. Initialize the database (first time only)
-
-```bash
-make init-db
-```
-
-## 8. Bootstrap (single test iteration)
-
-```bash
-make bootstrap
-```
-
-Review the output. If it looks good, run a single orchestrated iteration to verify end-to-end:
+Run a single iteration through the orchestrator to verify end-to-end before going autonomous:
 
 ```bash
 make test-run
 ```
 
-## 9. Start autonomous mode
+## 7. Start autonomous mode
 
-Only after confirming the test iteration succeeded:
+Only after confirming the bootstrap (and optional test-run) succeeded:
 
 ```bash
 make start
+```
+
+## Step-by-step alternative
+
+If you want more control instead of the one-shot deploy script, replace step 4 with:
+
+```bash
+bash scripts/harden-vps.sh        # system hardening only
+make up                            # start stack (auto-initializes DB on first run)
+make health                        # verify all services are healthy
+make bootstrap                     # clone target repo, seed memory, run first iteration
 ```
 
 ## Monitor and control
