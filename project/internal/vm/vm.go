@@ -268,6 +268,13 @@ func (m *VMManager) Destroy(name string) error {
 		}
 	}
 
+	// Cleanup network resources (for created/never-started VMs)
+	if vmState.TAPDevice != "" {
+		if err := m.networkMgr.CleanupVMNetwork(name); err != nil {
+			return fmt.Errorf("failed to cleanup network: %w", err)
+		}
+	}
+
 	// Cleanup storage
 	if err := m.storageMgr.DestroyVMStorage(name); err != nil {
 		return fmt.Errorf("failed to destroy storage: %w", err)
