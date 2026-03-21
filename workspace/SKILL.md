@@ -1,7 +1,7 @@
 # SKILL.md — stilltent Autonomous Loop
 
 ## Guiding Documents
-- **`/workspace/LEARNING.md`** — Read this on your first iteration. It defines HOW you learn and improve across iterations. It is as important as this file.
+- **`/workspace/LEARNING.md`** — Read this on your first iteration. It defines HOW you get better at building software across iterations. It is as important as this file.
 - **`/workspace/AGENTS.md`** — Your identity, constraints, and principles.
 
 ## Environment
@@ -22,7 +22,7 @@ Use all available tools. Never work around them. Fix broken tools.
 - **Search:** Start of every iteration (Phase 1); before retrying any past task.
 - **Store:** End of every iteration (Phase 7); after failures; after architectural decisions; after non-obvious learnings.
 - Compact key-value format, not prose. Store file paths/line refs, not raw code. Tag consistently. 5 well-tagged memories > 50 unstructured.
-- **Learning memories:** Also store `hypothesis`, `experiment_result`, `quality_metrics`, `improvement_queue`, `self_reflection` — see LEARNING.md for full details.
+- **Development memories:** Also store `iteration_plan`, `iteration_result`, `project_status`, `improvement_queue`, `self_reflection` — see LEARNING.md for full details.
 
 ## Long-Duration Rules
 1. Check memory for `session_state` each iteration; resume mid-task; update at end.
@@ -32,19 +32,18 @@ Use all available tools. Never work around them. Fix broken tools.
 5. Log failures to memory, retry next iteration. Pin persistent failures (3+) so future iterations route around.
 6. When idle (no failures/PRs/issues): **build the next feature from the SOUL.md roadmap.** If the roadmap is complete, work the improvement queue. Do NOT write standalone tests, docs, or refactors when idle. Build features.
 7. **Every 5th iteration:** Work one item from the improvement queue instead of new features. You are an engineer who revisits and improves past work — not a script that only moves forward.
-8. **Every 10th iteration:** Perform a self-reflection (see LEARNING.md). Evaluate your recent hypotheses, success rate, and process. Store as `self_reflection`.
-9. **Every 25th iteration:** Knowledge consolidation — synthesize technical, process, and architecture insights. Review the improvement queue. Store as `consolidated_learnings`. See LEARNING.md for full protocol.
-10. **Every 50th iteration:** Deep review — re-read the spec entirely, compare to current state, assess quality trajectory, set priorities for next 50 iterations. See LEARNING.md.
+8. **Every 10th iteration:** Perform a self-reflection (see LEARNING.md). Evaluate your recent development efficiency — are you shipping features faster? Store as `self_reflection`.
+9. **Every 25th iteration:** Knowledge consolidation — synthesize what you've learned about the codebase, architecture, and development patterns. Review the improvement queue. Store as `consolidated_learnings`. See LEARNING.md.
+10. **Every 50th iteration:** Deep review — re-read the spec entirely, compare to current state, assess roadmap progress, set feature priorities for next 50 iterations. See LEARNING.md.
 
 ## Phase 1: RECALL
 Search memory (use default `memory_search` settings, never `memory_type: "session"`):
-1. `"latest test results CI status"`
-2. `"current iteration plan in progress"`
-3. `"failed approach do not retry"`
-4. `"architectural decision"`
-5. `"improvement_queue"` — check for queued improvements to revisit
-6. `"quality_metrics"` — know the current quality baseline before making changes
-7. `"self_reflection"` — recall your most recent process insights (every 10th iteration or when stuck)
+1. `"current iteration plan in progress"`
+2. `"failed approach do not retry"`
+3. `"architectural decision"`
+4. `"improvement_queue"` — check for queued improvements to revisit
+5. `"project_status"` — know the current roadmap position before deciding what to build
+6. `"self_reflection"` — recall your most recent development efficiency insights (every 10th iteration or when stuck)
 
 No memories on first iteration = read LEARNING.md first, then skip to Phase 2.
 
@@ -71,11 +70,10 @@ Answer: (1) External PRs to review? (2) Build broken? (3) In-progress plan? (4) 
 ## Phase 3: PLAN
 ```
 Iteration: [N] | Type: [feature|fix|improve]
-Summary: [1-2 sentences — what FEATURE this advances] | Files: [list] | Tests: [included in PR? yes/no]
+Summary: [1-2 sentences — what FEATURE this builds] | Files: [list]
 Confidence: [0.0-1.0] | Risk: [what could go wrong]
-Hypothesis: [What I believe this change will improve and why]
-Prediction: [Measurable expected outcome — e.g., "creates hypervisor.Backend interface, builds clean"]
-Source: [roadmap-phase-N | improvement-queue IQ-XXX | failed-approach-retry | self-reflection]
+Goal: [What this code will do when done — e.g., "hypervisor.Backend interface defined, compiles on darwin and linux"]
+Source: [roadmap-phase-N-item-X | improvement-queue IQ-XXX | failed-approach-retry]
 ```
 Gates: confidence < 0.5 = simpler task. files > 10 = break down. Protected file = `[HUMAN-REVIEW]`, no auto-merge.
 Store plan in memory (tag: `iteration_plan`).
@@ -92,10 +90,10 @@ Store plan in memory (tag: `iteration_plan`).
 ```bash
 cd /workspace/repo && BRANCH_NAME="agent/$(date +%Y%m%d%H%M%S)-<short-slug>" && git checkout -b "$BRANCH_NAME"
 ```
-Incremental changes. Test after each change. Max 3 fix attempts per failure; still failing = revert + record in memory. No unrelated changes. Conventional commits. **8-minute budget.**
+Incremental changes. Build after each change to verify it compiles. Max 3 fix attempts per failure; still failing = revert + record in memory. No unrelated changes. Conventional commits. **8-minute budget.**
 
 ## Phase 5: VALIDATE
-Run full test suite + linter + build + **darwin cross-compile check**. All must pass. If unfixable within 2 min:
+Run build + linter + **darwin cross-compile check** (`GOOS=darwin go vet ./...`). All must pass. If unfixable within 2 min:
 ```bash
 git checkout main && git branch -D "$BRANCH_NAME"
 ```
@@ -106,33 +104,31 @@ Record failure in memory (tag: `failed_approach`).
 cd /workspace/repo && git push origin "$BRANCH_NAME"
 gh pr create --base main --head "$BRANCH_NAME" \
   --title "<conventional-commit-style>" \
-  --body "## Summary\n<what and why>\n## Changes\n<files>\n## Test Results\n<summary>\n## Confidence: <score>\n---\n*Autonomous PR by stilltent.*"
+  --body "## Summary\n<what feature this implements and why>\n## Changes\n<files>\n## Build Status\n<compiles clean on linux and darwin>\n## Confidence: <score>\n---\n*Autonomous PR by stilltent.*"
 ```
-**Merge rules:** confidence >= 0.7 + tests pass + no protected files = `gh pr merge --merge --delete-branch`. 0.5-0.7 = merge + log. < 0.5 = leave open. Protected = `[HUMAN-REVIEW]`, no merge.
+**Merge rules:** confidence >= 0.7 + build passes + no protected files = `gh pr merge --merge --delete-branch`. 0.5-0.7 = merge + log. < 0.5 = leave open. Protected = `[HUMAN-REVIEW]`, no merge.
 
 ## Phase 6b: REVIEW EXTERNAL PRs
-For each: `gh pr checkout <N>`, run tests, `gh pr diff <N>`.
-- All pass = approve + merge. Tests fail = request changes. Misaligned = comment + close. Uncertain = comment + skip.
+For each: `gh pr checkout <N>`, build the code, `gh pr diff <N>`.
+- Build passes = approve + merge. Build fails = request changes. Misaligned with spec = comment + close. Uncertain = comment + skip.
 - Store decision (tag: `pr_review`). Return to `main`.
 
 ## Phase 7: LEARN
 Store in memory (compact key-value):
-1. **`iteration_log`:** iteration N, action, result, PR#, merged?, test delta, lessons, duration
-2. **`repo_state`** (every 5 iter): file count, roadmap phase, features complete, open PRs/issues, last commit, feat_commit_ratio
+1. **`iteration_result`:** iteration N, what you built, result, PR#, merged?, roadmap item advanced, lessons, duration
+2. **`project_status`** (every 5 iter): file count, roadmap phase, features complete, open PRs/issues, last commit, feat_commit_ratio, darwin_build_clean
 3. **`failed_approach`** (on failure): what, why, lesson, do-not-retry flag
 4. **`architectural_decision`** (when applicable): decision, rationale, alternatives, affected files
 
-**Measure and evaluate (from LEARNING.md):**
-5. **`experiment_result`:** Compare your Phase 3 prediction to actual outcome. Was your hypothesis confirmed, partially confirmed, refuted, or inconclusive? Be honest.
-6. **`insight`** (on confirmed hypothesis): What worked, why, and how to apply it again.
-7. **`improvement_queue`:** After every PR, ask: "What feature could be better?" Add items with priority, area, and rationale. Do NOT add test-only or doc-only items.
-8. **`quality_metrics`** (every 5 iter): build_clean, lint_clean, roadmap_phase, roadmap_items_complete, roadmap_items_remaining, features_working_on_macos, known_bugs, code_health (1-5), feat_commit_ratio. Do NOT track test count, test coverage, or test pass rate.
+**Review what you shipped (from LEARNING.md):**
+5. **`insight`** (when an approach worked well): What worked, why, and how to reuse it.
+6. **`improvement_queue`:** After every PR, ask: "What could be built better?" Add items with priority, area, and rationale.
 
-**Quality ratchet:** Before storing `quality_metrics`, compare to the previous entry. If any metric regressed, note WHY and add a high-priority item to the improvement queue to fix it.
+**Forward ratchet:** Before storing `project_status`, compare to the previous entry. Roadmap progress must always advance. Build must stay clean. If anything regressed, add a high-priority item to the improvement queue to fix it.
 
 **Self-reflection** (every 10th iteration): See LEARNING.md for the full protocol. Store as `self_reflection`.
 
-Consolidate every 25 iterations: summarize logs into `consolidated_learnings`, dedupe, update `repo_state`, review improvement queue, re-prioritize.
+Consolidate every 25 iterations: summarize what you've learned into `consolidated_learnings`, dedupe, update `project_status`, review improvement queue, re-prioritize.
 
 ## Bootstrap (empty/README-only project)
 1. Read project spec at `/workspace/repo/project/README.md` — follow exactly
