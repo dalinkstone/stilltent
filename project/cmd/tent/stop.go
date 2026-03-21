@@ -9,8 +9,16 @@ import (
 	"github.com/dalinkstone/tent/internal/vm"
 )
 
-func stopCmd() *cobra.Command {
-	return &cobra.Command{
+// ConfigureStopCmd creates a new stop command with optional dependencies
+func ConfigureStopCmd(options ...CommonCmdOption) *cobra.Command {
+	opts := &CommonCmdOptions{}
+
+	// Apply functional options
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	cmd := &cobra.Command{
 		Use:   "stop <name>",
 		Short: "Gracefully shut down a running microVM",
 		Long:  `Gracefully shut down a running microVM.`,
@@ -25,7 +33,18 @@ func stopCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
+			// Get platform-specific hypervisor backend if not provided
+			hvBackend := opts.Hypervisor
+			if hvBackend == nil {
+				var err error
+				hvBackend, err = vm.NewPlatformBackend(baseDir)
+				if err != nil {
+					return fmt.Errorf("failed to create hypervisor backend: %w", err)
+				}
+			}
+
+			// Create manager with dependencies
+			manager, err := vm.NewManager(baseDir, opts.StateManager, hvBackend, opts.NetworkMgr, opts.StorageMgr)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -43,4 +62,11 @@ func stopCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+// stopCmd is a convenience function that uses default dependencies
+func stopCmd() *cobra.Command {
+	return ConfigureStopCmd()
 }

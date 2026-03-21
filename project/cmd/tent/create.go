@@ -15,12 +15,15 @@ var (
 	configPath string
 )
 
-// getHypervisorBackend returns the appropriate hypervisor backend for the current platform
-func getHypervisorBackend(baseDir string) (vm.HypervisorBackend, error) {
-	return vm.NewPlatformBackend(baseDir)
-}
+// ConfigureCreateCmd creates a new create command with optional dependencies
+func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
+	opts := &CommonCmdOptions{}
 
-func createCmd() *cobra.Command {
+	// Apply functional options
+	for _, opt := range options {
+		opt(opts)
+	}
+
 	cmd := &cobra.Command{
 		Use:   "create <name> [--config <path>]",
 		Short: "Create a new microVM",
@@ -67,14 +70,17 @@ func createCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			// Get platform-specific hypervisor backend
-			hvBackend, err := getHypervisorBackend(baseDir)
-			if err != nil {
-				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			// Get platform-specific hypervisor backend if not provided
+			hvBackend := opts.Hypervisor
+			if hvBackend == nil {
+				hvBackend, err = vm.NewPlatformBackend(baseDir)
+				if err != nil {
+					return fmt.Errorf("failed to create hypervisor backend: %w", err)
+				}
 			}
 
-			// Create manager with platform-specific backend
-			manager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			// Create manager with dependencies
+			manager, err := vm.NewManager(baseDir, opts.StateManager, hvBackend, opts.NetworkMgr, opts.StorageMgr)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -96,6 +102,11 @@ func createCmd() *cobra.Command {
 	cmd.Flags().StringVar(&configPath, "config", "", "Path to YAML configuration file")
 
 	return cmd
+}
+
+// createCmd is a convenience function that uses default dependencies
+func createCmd() *cobra.Command {
+	return ConfigureCreateCmd()
 }
 
 // loadConfigFromFile loads VM config from a YAML file

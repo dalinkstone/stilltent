@@ -9,8 +9,16 @@ import (
 	"github.com/dalinkstone/tent/internal/vm"
 )
 
-func startCmd() *cobra.Command {
-	return &cobra.Command{
+// ConfigureStartCmd creates a new start command with optional dependencies
+func ConfigureStartCmd(options ...CommonCmdOption) *cobra.Command {
+	opts := &CommonCmdOptions{}
+
+	// Apply functional options
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	cmd := &cobra.Command{
 		Use:   "start <name>",
 		Short: "Boot a stopped microVM",
 		Long:  `Boot a stopped microVM.`,
@@ -25,7 +33,18 @@ func startCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
+			// Get platform-specific hypervisor backend if not provided
+			hvBackend := opts.Hypervisor
+			if hvBackend == nil {
+				var err error
+				hvBackend, err = vm.NewPlatformBackend(baseDir)
+				if err != nil {
+					return fmt.Errorf("failed to create hypervisor backend: %w", err)
+				}
+			}
+
+			// Create manager with dependencies
+			manager, err := vm.NewManager(baseDir, opts.StateManager, hvBackend, opts.NetworkMgr, opts.StorageMgr)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -43,4 +62,11 @@ func startCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+// startCmd is a convenience function that uses default dependencies
+func startCmd() *cobra.Command {
+	return ConfigureStartCmd()
 }
