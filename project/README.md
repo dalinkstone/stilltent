@@ -1,6 +1,6 @@
 # mytool
 
-A command-line tool for managing local development environments. Written in Go.
+A command-line tool for managing local development environments. Written in Python.
 
 ## Goals
 
@@ -14,3 +14,18 @@ A command-line tool for managing local development environments. Written in Go.
 - This is not a cloud deployment tool
 - No GUI — CLI only
 - No support for Kubernetes (just Docker)
+
+## Development
+
+### Setup
+
+```bash
+cd project
+pip install -e ".[test]"
+```
+
+### Run tests
+
+```bash
+pytest tests/ -v
+```
