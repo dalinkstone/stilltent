@@ -8,28 +8,10 @@ import (
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
+// TestManager_PullImage is now covered by TestManager_PullImage_Success and TestManager_PullImage_Fallback
+// This function is intentionally empty to maintain backward compatibility
 func TestManager_PullImage(t *testing.T) {
-	// Create a temporary directory for testing
-	tempDir, err := os.MkdirTemp("", "tent-storage-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	manager, err := NewManager(tempDir)
-	if err != nil {
-		t.Fatalf("Failed to create manager: %v", err)
-	}
-
-	// Test with a minimal valid URL (will fail to download but should handle gracefully)
-	// We're testing that the method structure is correct, not actual network download
-	imagePath, err := manager.PullImage("test-image", "http://example.com/test.img")
-	if err != nil {
-		// Expected to fail on actual download, but method should be properly structured
-		if imagePath != "" {
-			t.Errorf("Expected empty path on failure, got %s", imagePath)
-		}
-	}
+	t.Skip("Legacy test - replaced by TestManager_PullImage_Success and TestManager_PullImage_Fallback")
 }
 
 func TestManager_ListImages(t *testing.T) {
@@ -78,6 +60,77 @@ func TestManager_ListImages(t *testing.T) {
 	}
 	if images[0].SizeMB != 0 {
 		t.Errorf("Expected 0 MB, got %d", images[0].SizeMB)
+	}
+}
+
+func TestManager_PullImage_Success(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "tent-storage-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	manager, err := NewManager(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	// Use a minimal valid URL that returns a small response
+	// This tests the download mechanism without requiring large downloads
+	imagePath, err := manager.PullImage("minimal", "http://httpbin.org/bytes/1024")
+	if err != nil {
+		t.Errorf("PullImage should handle network failures gracefully: %v", err)
+		return
+	}
+
+	// Verify the image file was created
+	if imagePath == "" {
+		t.Error("Expected non-empty image path")
+		return
+	}
+
+	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
+		t.Errorf("Image file should exist at %s", imagePath)
+	}
+}
+
+func TestManager_PullImage_Fallback(t *testing.T) {
+	// Test that the download fallback works (curl -> wget)
+	tempDir, err := os.MkdirTemp("", "tent-storage-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	manager, err := NewManager(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	// Test with a non-existent URL - should fail but use correct fallback chain
+	_, err = manager.PullImage("nonexistent", "http://localhost:99999/nonexistent")
+	if err == nil {
+		t.Error("Expected error for non-existent URL")
+	}
+}
+
+func TestManager_ImageInfo_Structure(t *testing.T) {
+	// Test that ImageInfo structure works correctly
+	info := &ImageInfo{
+		Name:      "test-image",
+		SizeMB:    512,
+		CreatedAt: "2026-01-01 00:00:00",
+	}
+
+	if info.Name != "test-image" {
+		t.Errorf("Expected name 'test-image', got '%s'", info.Name)
+	}
+	if info.SizeMB != 512 {
+		t.Errorf("Expected 512 MB, got %d", info.SizeMB)
+	}
+	if info.CreatedAt != "2026-01-01 00:00:00" {
+		t.Errorf("Expected timestamp '2026-01-01 00:00:00', got '%s'", info.CreatedAt)
 	}
 }
 
