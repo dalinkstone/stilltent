@@ -30,7 +30,7 @@ Use all available tools. Never work around them. Fix broken tools.
 3. Write `digest` memory every 10 iterations. Consolidate into `state_of_the_project` every 25 (delete replaced digests).
 4. Read targeted line ranges, not whole files. Every token counts.
 5. Log failures to memory, retry next iteration. Pin persistent failures (3+) so future iterations route around.
-6. When idle (no failures/PRs/issues): work the **improvement queue** first (see LEARNING.md). Only if the queue is empty: implement the next feature from the spec, improve errors, refactor. Do NOT spend idle time writing tests — focus on features.
+6. When idle (no failures/PRs/issues): **build the next feature from the SOUL.md roadmap.** If the roadmap is complete, work the improvement queue. Do NOT write standalone tests, docs, or refactors when idle. Build features.
 7. **Every 5th iteration:** Work one item from the improvement queue instead of new features. You are an engineer who revisits and improves past work — not a script that only moves forward.
 8. **Every 10th iteration:** Perform a self-reflection (see LEARNING.md). Evaluate your recent hypotheses, success rate, and process. Store as `self_reflection`.
 9. **Every 25th iteration:** Knowledge consolidation — synthesize technical, process, and architecture insights. Review the improvement queue. Store as `consolidated_learnings`. See LEARNING.md for full protocol.
@@ -52,32 +52,41 @@ No memories on first iteration = read LEARNING.md first, then skip to Phase 2.
 ```bash
 cd /workspace/repo && git checkout main && git pull origin main
 git log --oneline -10
-find project/ -type f | head -80
-cat project/README.md
-gh pr list --state open --limit 10 && gh issue list --state open --limit 10 && gh run list --limit 5
-# Run tests from project/ (e.g., cd project && go test ./... OR pytest OR npm test) | tail -30
+# Check: what percentage of recent commits are feat: commits?
+git log --oneline -10 | grep -c "^[a-f0-9]* feat:" || true
+find project/ -type f -name "*.go" | head -80
+# Check what directories exist vs what the roadmap requires:
+ls -la project/internal/
+# These directories MUST exist (from SOUL.md roadmap): hypervisor/, virtio/, boot/, image/, network/policy.go, compose/, sandbox/
+# If they don't exist, that is your next feature.
+gh pr list --state open --limit 10 && gh issue list --state open --limit 10
+cd project && go build ./... 2>&1 | tail -20
 ```
-Answer: (1) External PRs to review? (2) Failing tests? (3) In-progress plan? (4) Project maturity? (5) Highest-value next action?
+Answer: (1) External PRs to review? (2) Build broken? (3) In-progress plan? (4) Project maturity? (5) What is the next feature on the roadmap in SOUL.md?
 
-**Priority:** Fix tests > Review PRs > Continue plan > Open issues > Features > Refactor > Docs > Test coverage
+**Priority:** Fix broken build > Review PRs > Continue plan > **Build the next feature from the SOUL.md roadmap** > Open issues > Improve existing features
+
+**BANNED priorities:** Do NOT spend iterations on: standalone tests, documentation, refactoring, or test coverage. These are not valid iteration goals. Tests accompany features in the same PR. Docs come after the tool works.
 
 ## Phase 3: PLAN
 ```
-Iteration: [N] | Type: [fix|review|feature|test|refactor|docs|improve]
-Summary: [1-2 sentences] | Files: [list] | Tests: [commands]
+Iteration: [N] | Type: [feature|fix|improve]
+Summary: [1-2 sentences — what FEATURE this advances] | Files: [list] | Tests: [included in PR? yes/no]
 Confidence: [0.0-1.0] | Risk: [what could go wrong]
 Hypothesis: [What I believe this change will improve and why]
-Prediction: [Measurable expected outcome — e.g., "adds 3 tests, all pass"]
-Source: [new-feature | improvement-queue IQ-XXX | failed-approach-retry | self-reflection]
+Prediction: [Measurable expected outcome — e.g., "creates hypervisor.Backend interface, builds clean"]
+Source: [roadmap-phase-N | improvement-queue IQ-XXX | failed-approach-retry | self-reflection]
 ```
 Gates: confidence < 0.5 = simpler task. files > 10 = break down. Protected file = `[HUMAN-REVIEW]`, no auto-merge.
 Store plan in memory (tag: `iteration_plan`).
 
-**Choosing what to work on — the improvement cycle:**
-- Is this a 5th/10th/25th iteration? → Check LEARNING.md for scheduled activities.
-- Is there a high-priority item in the improvement queue? → Consider working it.
-- Otherwise → Follow the priority list from Phase 2.
-- **Key principle:** You are an engineer who revisits past work. At least 20% of your iterations should be improvements to things you've already built, not just new features.
+**TYPE MUST BE `feature` IN 90%+ OF ITERATIONS.** If your planned type is not `feature`, ask: "What feature does this enable?" If the answer is none, change your plan to build the next feature from the SOUL.md roadmap.
+
+**Choosing what to work on:**
+- Is the build broken? → Fix it (this counts as `fix`, which is allowed).
+- Otherwise → **Build the next feature from the SOUL.md roadmap.** Read the roadmap. Find the first incomplete item. Build it.
+- Every 5th iteration → Revisit and improve a past feature (this counts as `improve`).
+- Do NOT choose to write standalone tests, docs, or refactors. These are not valid iteration goals.
 
 ## Phase 4: IMPLEMENT
 ```bash
@@ -86,7 +95,7 @@ cd /workspace/repo && BRANCH_NAME="agent/$(date +%Y%m%d%H%M%S)-<short-slug>" && 
 Incremental changes. Test after each change. Max 3 fix attempts per failure; still failing = revert + record in memory. No unrelated changes. Conventional commits. **8-minute budget.**
 
 ## Phase 5: VALIDATE
-Run full test suite + linter + build. All must pass. If unfixable within 2 min:
+Run full test suite + linter + build + **darwin cross-compile check**. All must pass. If unfixable within 2 min:
 ```bash
 git checkout main && git branch -D "$BRANCH_NAME"
 ```
@@ -109,15 +118,15 @@ For each: `gh pr checkout <N>`, run tests, `gh pr diff <N>`.
 ## Phase 7: LEARN
 Store in memory (compact key-value):
 1. **`iteration_log`:** iteration N, action, result, PR#, merged?, test delta, lessons, duration
-2. **`repo_state`** (every 5 iter): file count, test count/pass rate, open PRs/issues, last commit
+2. **`repo_state`** (every 5 iter): file count, roadmap phase, features complete, open PRs/issues, last commit, feat_commit_ratio
 3. **`failed_approach`** (on failure): what, why, lesson, do-not-retry flag
 4. **`architectural_decision`** (when applicable): decision, rationale, alternatives, affected files
 
 **Measure and evaluate (from LEARNING.md):**
 5. **`experiment_result`:** Compare your Phase 3 prediction to actual outcome. Was your hypothesis confirmed, partially confirmed, refuted, or inconclusive? Be honest.
 6. **`insight`** (on confirmed hypothesis): What worked, why, and how to apply it again.
-7. **`improvement_queue`:** After every PR, ask: "What could be better about what I just built?" Add items with priority, area, and rationale.
-8. **`quality_metrics`** (every 5 iter): build_clean, lint_clean, features_complete, features_remaining, known_bugs, code_health (1-5). Do NOT track test count as a quality metric — it incentivizes writing tests instead of features.
+7. **`improvement_queue`:** After every PR, ask: "What feature could be better?" Add items with priority, area, and rationale. Do NOT add test-only or doc-only items.
+8. **`quality_metrics`** (every 5 iter): build_clean, lint_clean, roadmap_phase, roadmap_items_complete, roadmap_items_remaining, features_working_on_macos, known_bugs, code_health (1-5), feat_commit_ratio. Do NOT track test count, test coverage, or test pass rate.
 
 **Quality ratchet:** Before storing `quality_metrics`, compare to the previous entry. If any metric regressed, note WHY and add a high-priority item to the improvement queue to fix it.
 
@@ -127,15 +136,16 @@ Consolidate every 25 iterations: summarize logs into `consolidated_learnings`, d
 
 ## Bootstrap (empty/README-only project)
 1. Read project spec at `/workspace/repo/project/README.md` — follow exactly
-2. Scaffold inside `/workspace/repo/project/` per spec (Go: `cd /workspace/repo/project && go mod init`; Python: `pyproject.toml`; Node: `npm init`)
-3. First PR: minimal test framework inside `/workspace/repo/project/`
-4. Store spec summary + architectural decisions in memory
-5. Set up CI (`.github/workflows/ci.yml`) that runs tests from the `project/` directory
+2. Read the SOUL.md roadmap — this is your feature priority list
+3. Scaffold inside `/workspace/repo/project/` per spec (Go: `cd /workspace/repo/project && go mod init`)
+4. **First PR: the first feature from the SOUL.md roadmap** (e.g., create `internal/hypervisor/backend.go` with the Backend interface)
+5. Store spec summary + architectural decisions in memory
 
-First 2-3 iterations: minimal scaffolding (module init, basic project structure, CI). Then immediately start implementing features from the spec. Do NOT spend iterations on test infrastructure alone — write tests only as lightweight validation alongside features. ALL code goes in `/workspace/repo/project/`.
+First 2-3 iterations: scaffold + start building features from the roadmap immediately. Do NOT create PRs for test frameworks, CI setup, or documentation. Build the tool. ALL code goes in `/workspace/repo/project/`.
 
 ## Emergency
 - **Loop (3+ same error):** Stop. Search `failed_approach`. Follow creative escalation from LEARNING.md (reframe → decompose → invert → research → pivot). All approaches exhausted = store `emergency` memory, check `/workspace/PAUSE`.
 - **Broken repo:** `git checkout main && git pull`. Main broken = fix first. 3 failed iterations = create PAUSE file.
 - **Lost context:** Re-read SKILL.md and LEARNING.md, search memory broadly, do safe small task.
-- **Quality regression:** If `quality_metrics` show a downward trend over 3+ measurements, pause new features and focus exclusively on improvement queue items until metrics recover.
+- **Quality regression:** If the build breaks for 3+ iterations, fix it before doing anything else. But NEVER pause feature work to write tests — that is not a quality improvement, it is a distraction.
+- **Feature stall:** If you have gone 3+ iterations without a `feat:` commit, you are stalled. Re-read the SOUL.md roadmap, pick the next item, and build it. No excuses.
