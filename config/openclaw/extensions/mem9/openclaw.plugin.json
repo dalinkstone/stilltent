@@ -1,0 +1,39 @@
+{
+  "id": "mem9",
+  "name": "Mnemo Memory",
+  "description": "AI agent memory — server mode (mnemo-server). Hybrid vector + keyword search.",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiUrl": {
+        "type": "string",
+        "description": "mnemo-server URL (server mode)"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "mem9 API key (secret — do not share)"
+      },
+      "tenantID": {
+        "type": "string",
+        "description": "Deprecated: use apiKey"
+      }
+    }
+  },
+  "uiHints": {
+    "apiUrl": {
+      "label": "Server URL",
+      "placeholder": "https://your-server.example.com"
+    },
+    "apiKey": {
+      "label": "API Key",
+      "placeholder": "key...",
+      "sensitive": true
+    },
+    "tenantID": {
+      "label": "Tenant ID (legacy)",
+      "placeholder": "uuid...",
+      "sensitive": true
+    }
+  }
+}

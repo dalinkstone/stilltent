@@ -245,19 +245,36 @@ services:
       - /bin/sh
       - -c
       - |
-        # Build runtime config with actual API key (avoids leaking key into mounted host file)
+        # --- Phase 1: Permission setup (runs as root from Dockerfile) ---
+        # Make /workspace world-writable so both node (1000) and orchestrator can write
+        chmod 777 /workspace 2>/dev/null || true
+        mkdir -p /workspace/repo
+        chown -R 1000:1000 /workspace/repo 2>/dev/null || chmod -R a+rwX /workspace/repo 2>/dev/null || true
+
+        # --- Phase 2: Build runtime config ---
         mkdir -p /tmp/openclaw-home/.openclaw
-        sed "s/__OPENROUTER_API_KEY__/$${OPENROUTER_API_KEY}/g" \
+        # Use | as sed delimiter (API keys may contain / or &)
+        sed "s|__OPENROUTER_API_KEY__|$${OPENROUTER_API_KEY}|g" \
           /home/node/.openclaw/openclaw.json > /tmp/openclaw-home/.openclaw/openclaw.json
+        # Fallback: if sed produced an empty file, copy the original
+        if [ ! -s /tmp/openclaw-home/.openclaw/openclaw.json ]; then
+          echo "WARNING: config substitution failed, copying config as-is"
+          cp /home/node/.openclaw/openclaw.json /tmp/openclaw-home/.openclaw/openclaw.json
+        fi
         # Link extensions directory so plugins are discoverable at runtime HOME
         ln -sfn /home/node/.openclaw/extensions /tmp/openclaw-home/.openclaw/extensions
         # Carry over git identity from the image
         cp /home/node/.gitconfig /tmp/openclaw-home/.gitconfig 2>/dev/null || true
-        export HOME=/tmp/openclaw-home
-        # Configure git to authenticate via GITHUB_TOKEN (same approach as GitHub Actions)
-        git config --global url."https://x-access-token:$${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-        echo "Starting gateway..."
-        exec node /app/openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
+        # Ensure temp home is owned by node
+        chown -R 1000:1000 /tmp/openclaw-home
+
+        # --- Phase 3: Drop to node user and start gateway ---
+        exec gosu node sh -c '
+          export HOME=/tmp/openclaw-home
+          git config --global url."https://x-access-token:'"$${GITHUB_TOKEN}"'@github.com/".insteadOf "https://github.com/"
+          echo "Starting gateway..."
+          exec node /app/openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
+        '
     healthcheck:
       test:
         [

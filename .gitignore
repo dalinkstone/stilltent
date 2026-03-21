@@ -11,10 +11,14 @@
 *credential*
 *secret*
 
-# OpenClaw runtime config — contains auto-generated gateway auth tokens,
-# installed plugins, logs, and other runtime state. Only .gitkeep is tracked.
+# OpenClaw runtime config — installed plugins, logs, and other runtime state.
+# openclaw.json is tracked (contains __OPENROUTER_API_KEY__ placeholder, not real key).
+# extensions/mem9/ is tracked (the mem9 plugin source, installed from @mem9/openclaw).
 config/openclaw/*
 !config/openclaw/.gitkeep
+!config/openclaw/openclaw.json
+!config/openclaw/extensions/
+!config/openclaw/extensions/mem9/
 
 # mnemo config — same pattern
 config/mnemo/*

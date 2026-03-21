@@ -1,0 +1,89 @@
+{
+  "models": {
+    "providers": {
+      "openrouter": {
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKey": "__OPENROUTER_API_KEY__",
+        "api": "openai-completions",
+        "headers": {
+          "HTTP-Referer": "https://github.com/stilltent",
+          "X-Title": "stilltent-agent"
+        },
+        "models": [
+          {
+            "id": "qwen/qwen3-coder-next",
+            "name": "Qwen3 Coder Next",
+            "reasoning": false,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.12,
+              "output": 0.75,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openrouter/qwen/qwen3-coder-next"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "lan",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ]
+    },
+    "auth": {
+      "mode": "token",
+      "token": "c5855048f69f2f24f35fd40b0e10c9b3540168c7587f31bc"
+    },
+    "http": {
+      "endpoints": {
+        "chatCompletions": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "plugins": {
+    "allow": ["mem9"],
+    "slots": {
+      "memory": "mem9"
+    },
+    "entries": {
+      "mem9": {
+        "enabled": true,
+        "config": {
+          "apiUrl": "http://mnemo-server:8082",
+          "apiKey": "stilltent-local-dev-key"
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.20",
+    "lastTouchedAt": "2026-03-20T23:00:00.000Z"
+  }
+}

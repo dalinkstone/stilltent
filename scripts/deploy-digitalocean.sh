@@ -216,6 +216,10 @@ echo ">>> Bootstrapping — cloning target repo and starting first iteration..."
 chmod 777 "${INSTALL_DIR}/workspace" 2>/dev/null || true
 mkdir -p "${INSTALL_DIR}/workspace/repo"
 chmod 777 "${INSTALL_DIR}/workspace/repo"
+# Ensure config dir is writable by node (uid 1000) inside the container
+chown -R 1000:1000 "${INSTALL_DIR}/config/openclaw" 2>/dev/null || chmod -R a+rw "${INSTALL_DIR}/config/openclaw" || true
+# Remove stale openclaw extension (superseded by mem9 plugin)
+rm -rf "${INSTALL_DIR}/config/openclaw/extensions/openclaw" 2>/dev/null || true
 make bootstrap
 
 # -------------------------------------------------------------------

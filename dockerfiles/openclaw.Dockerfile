@@ -2,7 +2,7 @@ FROM ghcr.io/openclaw/openclaw:latest
 
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends gh wget \
+ && apt-get install -y --no-install-recommends gh wget gosu \
  && wget -q https://go.dev/dl/go1.23.8.linux-amd64.tar.gz \
  && tar -C /usr/local -xzf go1.23.8.linux-amd64.tar.gz \
  && rm go1.23.8.linux-amd64.tar.gz \
@@ -18,4 +18,7 @@ RUN openclaw plugins install @mem9/openclaw
 # Configure git identity for commits inside the container
 RUN git config --global user.email "agent@stilltent.local" \
  && git config --global user.name "stilltent-agent"
+
+# Entrypoint runs as root for permission setup, then drops to node
+USER root
 
