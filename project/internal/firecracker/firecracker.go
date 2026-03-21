@@ -187,18 +187,16 @@ func (c *Client) ShutdownVM(socketPath string) error {
 
 // sendRequest sends a request to the Firecracker API
 func (c *Client) sendRequest(client *http.Client, method, socketPath, path string, body map[string]interface{}) error {
-	// Reuse client if provided, otherwise create new one
-	if client == nil {
-		client = &http.Client{
-			Timeout: 10 * time.Second,
-		}
-
-		transport := &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return net.Dial("unix", socketPath)
-			},
-		}
-		client.Transport = transport
+	// Create client with Unix socket transport for Firecracker API
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return net.Dial("unix", socketPath)
+		},
+	}
+	
+	client = &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: transport,
 	}
 
 	// Serialize body
@@ -211,7 +209,7 @@ func (c *Client) sendRequest(client *http.Client, method, socketPath, path strin
 		reqBody = bytes.NewBuffer(jsonBody)
 	}
 
-	// Build request
+	// Build request - use file:// URL scheme for Unix socket
 	reqURL := "http://localhost" + path
 	req, err := http.NewRequest(method, reqURL, reqBody)
 	if err != nil {
