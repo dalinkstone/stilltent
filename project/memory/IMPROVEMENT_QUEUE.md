@@ -33,9 +33,9 @@ improvement_queue:
     description: Implement kernel/initrd extraction from rootfs images for actual VM booting
     priority: high
     added_iteration: 24
-    rationale: Without kernel loading from rootfs images, VMs cannot boot. This is the final blocker before tent can create functional VMs. KVM backend uses placeholder paths.
-    status: pending
-    notes: Requires rootfs image format parsing (qcow2, raw, etc.) and kernel extraction. High priority - blocks actual VM creation.
+    status: incomplete
+    completed_in_pr: 29
+    notes: ExtractKernel function implemented in storage package with fallback to host kernel. Full kernel extraction from rootfs images (qcow2, raw) still requires additional dependencies (qemu-img, libguestfs). Kernel search now implemented in KVM backend - VMs can start if host kernel is available.
   - id: IQ-007
     area: internal/hypervisor/hvf
     type: feature-gap
@@ -45,3 +45,11 @@ improvement_queue:
     rationale: Current implementation only works on Linux (KVM backend). macOS requires Hypervisor.framework or Virtualization.framework. No cross-platform support without this.
     status: pending
     notes: Requires macOS dev environment and cgo bindings to Hypervisor.framework. High priority - blocks macOS support per spec.
+  - id: IQ-008
+    area: cmd/tent
+    type: refactor
+    description: Add dependency injection pattern to CLI commands for better testability
+    priority: medium
+    added_iteration: 30
+    rationale: Self-reflection identified that CLI commands directly instantiate VM manager without dependency injection, limiting test coverage. Adding DI would enable comprehensive end-to-end testing with mocks.
+    notes: Requires refactoring CLI commands to accept interfaces for VMManager, HypervisorBackend, NetworkManager, StorageManager. High value for testability, moderate risk for code complexity.

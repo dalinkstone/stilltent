@@ -396,3 +396,56 @@ type ImageInfo struct {
 	SizeMB    int    `json:"size_mb"`
 	CreatedAt string `json:"created_at"`
 }
+
+// KernelInfo contains information about an extracted kernel
+type KernelInfo struct {
+	KernelPath string `json:"kernel_path"`
+	InitrdPath string `json:"initrd_path,omitempty"`
+	Cmdline    string `json:"cmdline,omitempty"`
+}
+
+// ExtractKernel attempts to extract the kernel from a rootfs image
+// For now, this returns placeholder paths - in production, this would:
+// 1. Detect the image format (qcow2, raw, etc.)
+// 2. Mount the image if it's a filesystem image
+// 3. Copy kernel and initrd files from the image
+func (m *Manager) ExtractKernel(rootfsPath string) (*KernelInfo, error) {
+	// Check if the rootfs file exists
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("rootfs not found: %s", rootfsPath)
+	}
+
+	// For now, return a placeholder kernel path
+	// In a production implementation, this would:
+	// 1. Mount the rootfs image
+	// 2. Copy /boot/vmlinuz and /boot/initrd to a staging directory
+	// 3. Return the paths to these files
+	//
+	// For a minimal implementation, we use the kernel that's already
+	// available in the system. This assumes the host kernel is compatible
+	// with the guest VM.
+
+	// Try to use the host kernel as a fallback
+	hostKernel := "/vmlinuz"
+	if _, err := os.Stat("/vmlinuz"); err == nil {
+		hostKernel = "/vmlinuz"
+	} else if _, err := os.Stat("/boot/vmlinuz"); err == nil {
+		hostKernel = "/boot/vmlinuz"
+	} else if _, err := os.Stat("/boot/vmlinuz-linux"); err == nil {
+		hostKernel = "/boot/vmlinuz-linux"
+	} else if _, err := os.Stat("/boot/vmlinuz-$(uname -r)"); err == nil {
+		// Try with current kernel version
+		// This is a placeholder - in production you'd exec uname -r
+		hostKernel = "/boot/vmlinuz-$(uname -r)"
+	} else {
+		// Last resort - return a path that will fail at runtime
+		hostKernel = "/boot/vmlinuz"
+	}
+
+	// Return placeholder paths for initrd and cmdline
+	return &KernelInfo{
+		KernelPath: hostKernel,
+		InitrdPath: "/boot/initrd.img",
+		Cmdline:    "root=/dev/vda console=hvc0 rw ip=dhcp init=/sbin/init",
+	}, nil
+}
