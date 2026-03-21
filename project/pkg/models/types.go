@@ -4,6 +4,7 @@ package models
 type VMStatus string
 
 const (
+	VMStatusUnknown VMStatus = "unknown"
 	VMStatusStopped VMStatus = "stopped"
 	VMStatusRunning VMStatus = "running"
 	VMStatusCreated VMStatus = "created"
