@@ -16,8 +16,9 @@ improvement_queue:
     priority: medium
     added_iteration: 22
     rationale: Current architecture docs reference Firecracker but implementation now uses hypervisor abstraction. Documentation needs update to match code.
-    status: pending
-    notes: ARCHITECTURE.md still needs update to reflect current state (hypervisor abstraction complete, Firecracker removed). Priority: medium.
+    status: complete
+    completed_in_pr: 41
+    notes: ARCHITECTURE.md created with comprehensive documentation of current architecture (hypervisor abstraction, VM manager, CLI pattern, platform support).
   - id: IQ-004
     area: tests
     type: test
@@ -44,7 +45,7 @@ improvement_queue:
     added_iteration: 25
     rationale: Current implementation only works on Linux (KVM backend). macOS requires Hypervisor.framework or Virtualization.framework. No cross-platform support without this.
     status: pending
-    notes: Requires macOS dev environment and cgo bindings to Hypervisor.framework. High priority - blocks macOS support per spec.
+    notes: Requires macOS dev environment and cgo bindings to Hypervisor.framework. High priority - blocks macOS support per spec. The hvf_darwin.go file exists with stub implementations but requires actual implementation for Hypervisor.framework calls.
   - id: IQ-008
     area: cmd/tent
     type: refactor
@@ -52,4 +53,6 @@ improvement_queue:
     priority: medium
     added_iteration: 30
     rationale: Self-reflection identified that CLI commands directly instantiate VM manager without dependency injection, limiting test coverage. Adding DI would enable comprehensive end-to-end testing with mocks.
-    notes: Requires refactoring CLI commands to accept interfaces for VMManager, HypervisorBackend, NetworkManager, StorageManager. High value for testability, moderate risk for code complexity.
+    status: complete
+    completed_in_pr: 40
+    notes: Dependency injection pattern added to CLI commands via VMManager constructor. Enables testing with injected mocks for HypervisorBackend, NetworkManager, StorageManager.
