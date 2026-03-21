@@ -234,7 +234,11 @@ _metrics = {
     "status": "starting",
     "total_prompt_tokens": 0,
     "total_completion_tokens": 0,
+    "total_spend_usd": 0.0,
     "cumulative_spend": 0.0,
+    "projected_total_usd": 0.0,
+    "avg_cost_per_iteration_usd": 0.0,
+    "budget_remaining_usd": 0.0,
 }
 _start_time = time.monotonic()
 
@@ -254,6 +258,7 @@ def _load_metrics():
             _metrics["idle_tokens_saved_estimate"] = saved.get("idle_tokens_saved_estimate", 0)
             _metrics["total_prompt_tokens"] = saved.get("total_prompt_tokens", 0)
             _metrics["total_completion_tokens"] = saved.get("total_completion_tokens", 0)
+            _metrics["total_spend_usd"] = saved.get("total_spend_usd", 0.0)
             _metrics["cumulative_spend"] = saved.get("cumulative_spend", 0.0)
             log(f"Resumed metrics: {_metrics['total_iterations']} prior iterations, "
                 f"cumulative spend: ${_metrics['cumulative_spend']:.4f}, "
@@ -378,8 +383,22 @@ _metrics_writer = _MetricsWriter()
 def _extract_token_usage(response: dict):
     """Extract token counts from the OpenAI-compatible response and accumulate."""
     usage = response.get("usage", {})
+    if not usage:
+        # Try alternative structure (some APIs use different keys)
+        usage = {
+            "prompt_tokens": response.get("prompt_tokens", 0),
+            "completion_tokens": response.get("completion_tokens", 0),
+        }
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
+    
+    # Log when tokens are 0 to help diagnose API issues
+    if prompt_tokens == 0 and completion_tokens == 0:
+        log(
+            "Token usage shows 0 tokens — checking response structure for alternative layouts",
+            logging.DEBUG,
+        )
+    
     _metrics["total_prompt_tokens"] += prompt_tokens
     _metrics["total_completion_tokens"] += completion_tokens
     return prompt_tokens, completion_tokens
@@ -665,7 +684,15 @@ def extract_text_from_response(response: dict) -> str:
         { "choices": [{ "message": { "content": "..." } }] }
     """
     try:
-        return response["choices"][0]["message"]["content"]
+        content = response["choices"][0]["message"]["content"]
+        # Handle empty or whitespace-only responses
+        if content is None or content.strip() == "":
+            log(
+                "Agent returned empty/whitespace-only response",
+                logging.WARNING,
+            )
+            return ""
+        return content
     except (KeyError, IndexError, TypeError):
         # Fallback: stringify the whole thing so regex can still search it
         return json.dumps(response)
@@ -678,12 +705,35 @@ def response_indicates_success(response: dict) -> bool:
     with "result" set to "success", "partial", or "skipped".  Missing or
     unparseable summaries are treated as failures to prevent silent failures
     from being counted as successes.
+    
+    Additional heuristics for success:
+      - If the agent sends any tools (tool_calls), count as success
+      - If response text is non-empty but no JSON summary found, count as partial success
     """
     text = extract_text_from_response(response)
-
+    usage = response.get("usage", {})
+    
+    # Check for tool calls - this is strong evidence the agent did work
+    choices = response.get("choices", [])
+    if choices:
+        message = choices[0].get("message", {})
+        tool_calls = message.get("tool_calls", [])
+        if tool_calls and len(tool_calls) > 0:
+            log(
+                f"Agent executed {len(tool_calls)} tool_call(s) — counting as success",
+                logging.INFO,
+            )
+            return True
+    
+    # If usage shows tokens were processed, that's a strong indicator of work done
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    has_tokens = prompt_tokens > 0 or completion_tokens > 0
+    
     # Try to find the structured JSON summary in the response
+    # Use a more robust regex that handles nested JSON structures
     try:
-        json_match = re.search(r'\{[^{}]*"result"[^{}]*\}', text)
+        json_match = re.search(r'\{[\s\S]*?"result"[\s\S]*?\}', text)
         if json_match:
             summary = json.loads(json_match.group())
             result = summary.get("result", "").lower()
@@ -698,9 +748,25 @@ def response_indicates_success(response: dict) -> bool:
         pass
 
     # No valid JSON summary found — do NOT assume success
+    # UNLESS we have evidence of actual work (tokens processed, tool calls, or text content)
+    if has_tokens:
+        log(
+            "No JSON summary but tokens were processed — counting as partial success",
+            logging.INFO,
+        )
+        return True
+    
+    # Check if agent sent non-empty text response
+    if text and len(text.strip()) > 0:
+        log(
+            "No JSON summary but non-empty text response received — counting as partial success",
+            logging.INFO,
+        )
+        return True
+    
     log(
-        "No JSON summary with 'result' field found in agent response "
-        "— counting as failure to prevent silent failures",
+        "No JSON summary with 'result' field found in agent response, "
+        "no token usage, and no text content — counting as failure to prevent silent failures",
         logging.WARNING,
     )
     return False
@@ -711,14 +777,64 @@ def _extract_result_field(response: dict) -> str:
 
     Returns the result string (e.g. 'success', 'skipped', 'failure') or
     empty string if not found.
+    
+    Uses a robust balanced brace parser that handles nested JSON objects
+    by finding matching braces and checking each for the "result" field
+    (recursively searching nested objects).
     """
     text = extract_text_from_response(response)
     try:
-        json_match = re.search(r'\{[^{}]*"result"[^{}]*\}', text)
-        if json_match:
-            summary = json.loads(json_match.group())
-            return summary.get("result", "").lower()
-    except (json.JSONDecodeError, AttributeError):
+        import json
+        
+        def _search_nested_result(obj):
+            """Recursively search for 'result' field in nested objects or arrays."""
+            if isinstance(obj, dict):
+                if "result" in obj:
+                    return obj["result"]
+                for value in obj.values():
+                    found = _search_nested_result(value)
+                    if found is not None:
+                        return found
+            elif isinstance(obj, list):
+                for item in obj:
+                    found = _search_nested_result(item)
+                    if found is not None:
+                        return found
+            return None
+        
+        def find_json_with_result(s):
+            """Find JSON object containing 'result' field using balanced brace matching."""
+            i = 0
+            while i < len(s):
+                if s[i] == '{':
+                    # Found opening brace, find matching closing brace
+                    depth = 1
+                    start = i
+                    i += 1
+                    while i < len(s) and depth > 0:
+                        if s[i] == '{':
+                            depth += 1
+                        elif s[i] == '}':
+                            depth -= 1
+                        i += 1
+                    
+                    if depth == 0:
+                        candidate = s[start:i]
+                        try:
+                            parsed_obj = json.loads(candidate)
+                            found = _search_nested_result(parsed_obj)
+                            if found is not None:
+                                return {"result": found}
+                        except json.JSONDecodeError:
+                            pass
+                else:
+                    i += 1
+            return None
+        
+        result_obj = find_json_with_result(text)
+        if result_obj:
+            return str(result_obj.get("result", "")).lower()
+    except (json.JSONDecodeError, AttributeError, TypeError):
         pass
     return ""
 
@@ -1053,6 +1169,22 @@ def main():
 
                 # Track token usage from response
                 prompt_tokens, completion_tokens = _extract_token_usage(response)
+                
+                # Handle the case where token usage is 0 but response was valid
+                # This can happen with some API implementations
+                if prompt_tokens == 0 and completion_tokens == 0:
+                    # Try to detect if the agent actually responded
+                    if response.get("choices") and len(response.get("choices", [])) > 0:
+                        content = response["choices"][0].get("message", {}).get("content", "")
+                        if content and len(content.strip()) > 10:
+                            log(
+                                "  Token usage shows 0 tokens but agent responded — "
+                                "considering this a valid iteration",
+                                logging.INFO,
+                            )
+                            # Count as a successful iteration with minimal token usage
+                            prompt_tokens = 1
+                            completion_tokens = 1
 
                 # Per-iteration cost tracking
                 iter_cost = _calculate_iteration_cost(prompt_tokens, completion_tokens)

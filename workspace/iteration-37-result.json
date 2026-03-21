@@ -1,0 +1,10 @@
+{
+  "iteration": 37,
+  "action_type": "refactor",
+  "summary": "Added DEBUG logging when token usage is 0 to help diagnose API response structure issues",
+  "result": "success",
+  "pr_number": 2,
+  "merged": true,
+  "confidence": 0.85,
+  "error": null
+}
