@@ -72,3 +72,41 @@ type ImageInfo struct {
 	CreatedAt   int64  `json:"created_at"`
 	SourceURL   string `json:"source_url,omitempty"`
 }
+
+// String returns the string representation of VMStatus
+func (s VMStatus) String() string {
+	return string(s)
+}
+
+// ValidateVMConfig validates a VM configuration
+func ValidateVMConfig(cfg *VMConfig) error {
+	if cfg == nil {
+		return &ValidationError{Errors: []ConfigError{
+			{Field: "config", Message: "config cannot be nil"},
+		}}
+	}
+	
+	var errors []ConfigError
+	
+	if cfg.Name == "" {
+		errors = append(errors, ConfigError{Field: "name", Message: "name is required"})
+	}
+	
+	if cfg.VCPUs <= 0 {
+		errors = append(errors, ConfigError{Field: "vcpus", Message: "vcpus must be positive"})
+	}
+	
+	if cfg.MemoryMB <= 0 {
+		errors = append(errors, ConfigError{Field: "memory_mb", Message: "memory_mb must be positive"})
+	}
+	
+	if cfg.DiskGB <= 0 {
+		errors = append(errors, ConfigError{Field: "disk_gb", Message: "disk_gb must be positive"})
+	}
+	
+	if len(errors) > 0 {
+		return &ValidationError{Errors: errors}
+	}
+	
+	return nil
+}
