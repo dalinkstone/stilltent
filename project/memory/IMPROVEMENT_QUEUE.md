@@ -44,8 +44,8 @@ improvement_queue:
     priority: high
     added_iteration: 25
     rationale: Current implementation only works on Linux (KVM backend). macOS requires Hypervisor.framework or Virtualization.framework. No cross-platform support without this.
-    status: pending
-    notes: Requires macOS dev environment and cgo bindings to Hypervisor.framework. High priority - blocks macOS support per spec. The hvf_darwin.go file exists with stub implementations but requires actual implementation for Hypervisor.framework calls.
+    status: incomplete
+    notes: Stub backend created in iteration 43. Requires CGO with clang on macOS for actual implementation using Hypervisor.framework APIs (hv_vm_create, hv_vm_map, hv_vcpu_create, hv_vcpu_run).
   - id: IQ-008
     area: cmd/tent
     type: refactor
