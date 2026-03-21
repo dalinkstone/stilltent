@@ -110,3 +110,8 @@ func ValidateVMConfig(cfg *VMConfig) error {
 	
 	return nil
 }
+
+// Validate validates the VMConfig
+func (cfg *VMConfig) Validate() error {
+	return ValidateVMConfig(cfg)
+}
