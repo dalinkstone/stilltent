@@ -40,16 +40,23 @@ func imageListCmd() *cobra.Command {
 				return fmt.Errorf("failed to create storage manager: %w", err)
 			}
 
-			// List images (rootfs directories)
-			rootfsDir := manager.GetBaseDir()
-			if rootfsDir == "" {
-				rootfsDir = "/var/lib/tent/rootfs"
+			// List images
+			images, err := manager.ListImages()
+			if err != nil {
+				return fmt.Errorf("failed to list images: %w", err)
 			}
 
-			// List rootfs directories
-			fmt.Println("Listing images:")
-			fmt.Println("(Base images are stored in", rootfsDir, ")")
-			fmt.Println("Run 'tent create <name>' to create a new VM from a base image.")
+			if len(images) == 0 {
+				fmt.Println("No base images found.")
+				fmt.Println("Run 'tent image pull <name> [url]' to download a base image.")
+				return nil
+			}
+
+			fmt.Println("Available base images:")
+			fmt.Println("----------------------")
+			for _, img := range images {
+				fmt.Printf("  %s (%d MB)\n", img.Name, img.SizeMB)
+			}
 
 			return nil
 		},
@@ -57,19 +64,43 @@ func imageListCmd() *cobra.Command {
 }
 
 func imagePullCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "pull <name>",
+	cmd := &cobra.Command{
+		Use:   "pull <name> [url]",
 		Short: "Download a base rootfs image",
-		Long:  `Download a base rootfs image.`,
-		Args:  cobra.ExactArgs(1),
+		Long:  `Download a base rootfs image from a URL.`,
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			url := args[1]
 
-			fmt.Printf("Pulling image: %s\n", name)
-			fmt.Println("Note: Base image downloading not yet implemented.")
-			fmt.Println("Run 'tent create <name>' to create a new VM with a base image.")
+			// Default URLs for common images
+			if url == "" {
+				url = fmt.Sprintf("https://github.com/dalinkstone/tent/releases/download/images/%s.img", name)
+			}
 
+			fmt.Printf("Pulling image '%s' from %s...\n", name, url)
+
+			// Create storage manager
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := storage.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create storage manager: %w", err)
+			}
+
+			// Pull the image
+			imagePath, err := manager.PullImage(name, url)
+			if err != nil {
+				return fmt.Errorf("failed to pull image: %w", err)
+			}
+
+			fmt.Printf("Image '%s' pulled successfully to %s\n", name, imagePath)
 			return nil
 		},
 	}
+	return cmd
 }
