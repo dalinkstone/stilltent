@@ -6,7 +6,6 @@
 #   make up                # starts the stack
 #   make health            # verify everything is running
 #
-# Later phases will add the orchestrator.
 # =============================================================================
 
 # --------------------------------------------------------------------------
@@ -34,13 +33,6 @@ services:
   tidb:
     image: pingcap/tidb:v8.4.0
     container_name: stilltent-tidb
-    ports:
-      # Bind to localhost only — prevents exposure on LAN/public interfaces.
-      # Connect with: mysql -h 127.0.0.1 -P 4000 -u root
-      # NOTE: Requires mysql-client@8.4 (MySQL 9.x removed mysql_native_password)
-      #   brew install mysql-client@8.4
-      #   echo 'export PATH="/opt/homebrew/opt/mysql-client@8.4/bin:$PATH"' >> ~/.zshrc
-      - "127.0.0.1:4000:4000"
     volumes:
       - tidb-data:/tmp/tidb
     networks:
@@ -55,7 +47,7 @@ services:
 
   # ==========================================================================
   # mnemo-server (mem9) — memory API that stores and retrieves memories
-  # using TiDB for persistence and Ollama for embedding generation.
+  # using TiDB for persistence and OpenRouter for embedding generation.
   #
   # Build from source: clone the mem9 repo into ./mnemo-server/
   # then run `make up`.
@@ -68,23 +60,21 @@ services:
     depends_on:
       tidb:
         condition: service_healthy
-    ports:
-      # Expose the mem9 API on localhost only. Adjust MEM9_API_PORT in .env if needed.
-      - "127.0.0.1:${MEM9_API_PORT:-8082}:8082"
     environment:
       # --- Database connection (Go MySQL DSN pointing at the TiDB container) ---
       MNEMO_DSN: "${TIDB_USER:-root}:${TIDB_PASSWORD:-}@tcp(${TIDB_HOST:-tidb}:${TIDB_PORT:-4000})/${TIDB_DATABASE:-mnemos}?parseTime=true"
 
-      # --- Embedding provider (Ollama running on the host) ---
-      MNEMO_EMBED_BASE_URL: "http://${OLLAMA_HOST:-host.docker.internal}:${OLLAMA_PORT:-11434}/v1"
-      MNEMO_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      # --- Embedding provider (OpenRouter) ---
+      EMBEDDING_PROVIDER: openrouter
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-openai/text-embedding-3-small}
 
       # --- Disable TiDB Cloud/Zero provisioning (local TiDB) ---
       MNEMO_TIDB_ZERO_ENABLED: "false"
 
       # --- Vector dimensions (must match embedding model output) ---
-      # nomic-embed-text = 768 dims
-      MNEMO_EMBED_DIMS: 768
+      # text-embedding-3-small = 1536 dims
+      MNEMO_EMBED_DIMS: 1536
 
       # --- Server port inside the container ---
       MNEMO_PORT: 8082
@@ -94,7 +84,7 @@ services:
 
   # ==========================================================================
   # OpenClaw Gateway — agent runtime that manages sessions, routes messages
-  # to the LLM provider (Ollama), and executes tools (shell, file I/O, mem9).
+  # to the LLM provider (OpenRouter), and executes tools (shell, file I/O, mem9).
   #
   # The gateway binds to 0.0.0.0 ("lan" mode) inside the container so Docker
   # port-mapping works. Auth is enforced via OPENCLAW_GATEWAY_TOKEN.
@@ -116,9 +106,6 @@ services:
         condition: service_started
       tidb:
         condition: service_healthy
-    ports:
-      # Gateway HTTP/WS port. Bound to localhost only for security.
-      - "127.0.0.1:${OPENCLAW_PORT:-18789}:18789"
     volumes:
       # OpenClaw reads config from ~/.openclaw inside the container.
       # The container runs as user "node" (uid 1000), so HOME=/home/node.
@@ -134,11 +121,9 @@ services:
       # --- GitHub access for agent tools ---
       GITHUB_TOKEN: ${GITHUB_TOKEN}
 
-      # --- Ollama provider (running on the host) ---
-      # OpenClaw's bundled Ollama extension reads OLLAMA_API_KEY to enable
-      # auto-discovery of models via the Ollama /api/tags endpoint.
-      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-ollama-local}
-      OLLAMA_BASE_URL: http://${OLLAMA_HOST:-host.docker.internal}:${OLLAMA_PORT:-11434}
+      # --- OpenRouter LLM provider ---
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3-0324}
 
       # --- mem9 memory API (mnemo-server container) ---
       MEM9_API_URL: http://mnemo-server:${MEM9_API_PORT:-8082}
@@ -152,24 +137,14 @@ services:
       TERM: xterm-256color
     networks:
       - stilltent-net
-    extra_hosts:
-      # Allows containers on Linux to reach the host's Ollama instance
-      # via http://host.docker.internal:11434. No-op on Docker Desktop.
-      - "host.docker.internal:host-gateway"
     init: true
-    # Wait for Ollama on the host to be reachable before starting the gateway,
-    # so model auto-discovery succeeds on first boot.
     command:
       - /bin/sh
       - -c
       - |
         # Configure git to authenticate via GITHUB_TOKEN (same approach as GitHub Actions)
         git config --global url."https://x-access-token:$${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-        until node -e "fetch('http://host.docker.internal:${OLLAMA_PORT:-11434}/api/tags').then(r=>{if(!r.ok)throw 1}).catch(()=>process.exit(1))" 2>/dev/null; do
-          echo "Waiting for Ollama on host..."
-          sleep 2
-        done
-        echo "Ollama is reachable, starting gateway..."
+        echo "Starting gateway..."
         exec node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
     healthcheck:
       test:
@@ -203,6 +178,7 @@ services:
       OPENCLAW_URL: http://openclaw-gateway:18789
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       TARGET_REPO: ${TARGET_REPO}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-deepseek/deepseek-chat-v3-0324}
       LOOP_INTERVAL: ${LOOP_INTERVAL:-60}
       ITERATION_TIMEOUT: ${ITERATION_TIMEOUT:-600}
       MAX_CONSECUTIVE_FAILURES: ${MAX_CONSECUTIVE_FAILURES:-10}
