@@ -8,6 +8,7 @@ import (
 
 	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/hypervisor"
+	"github.com/dalinkstone/tent/internal/storage"
 	"github.com/c35s/hype/virtio"
 	"github.com/c35s/hype/vmm"
 	"github.com/c35s/hype/os/linux"
@@ -108,43 +109,45 @@ func (v *VM) Start() error {
 	// Add console device for serial output
 	cfg.Devices = append(cfg.Devices, &virtio.ConsoleDevice{})
 
-	// Set up kernel loader
-	// For now, we'll use a placeholder kernel path
-	// In production, this would extract the kernel from the rootfs image
+	// Set up kernel loader using storage manager's ExtractKernel
+	// This extracts kernel/initrd from the rootfs image
+	storageMgr, err := storage.NewManager(v.backend.baseDir)
+	if err != nil {
+		return fmt.Errorf("failed to create storage manager: %w", err)
+	}
+
+	// Find the rootfs path
 	rootfsPath := filepath.Join(v.backend.baseDir, "storage", "images", v.config.RootFS+".img")
 	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
-		// Try alternative path
+		// Try alternative path (VM-specific rootfs)
 		rootfsPath = filepath.Join(v.backend.baseDir, "storage", "rootfs", v.config.Name, "rootfs.img")
 	}
 
-	// Find a kernel to use
-	// Try multiple common kernel paths
-	kernelPaths := []string{
-		"/vmlinuz",
-		"/boot/vmlinuz",
-		"/boot/vmlinuz-linux",
+	// Extract kernel information from the rootfs
+	kernelInfo, err := storageMgr.ExtractKernel(rootfsPath)
+	if err != nil {
+		return fmt.Errorf("failed to extract kernel: %w", err)
 	}
 
-	var kernelFound bool
-	for _, kp := range kernelPaths {
-		// Expand any variables in the path
-		expandedPath := os.ExpandEnv(kp)
-		if _, err := os.Stat(expandedPath); err == nil {
-			kernelFound = true
-			break
+	// Read kernel bytes
+	kernelBytes, err := os.ReadFile(kernelInfo.KernelPath)
+	if err != nil {
+		return fmt.Errorf("failed to read kernel file %s: %w", kernelInfo.KernelPath, err)
+	}
+
+	// Read initrd bytes if available
+	var initrdBytes []byte
+	if kernelInfo.InitrdPath != "" {
+		if initrdBytes, err = os.ReadFile(kernelInfo.InitrdPath); err != nil {
+			return fmt.Errorf("failed to read initrd file %s: %w", kernelInfo.InitrdPath, err)
 		}
 	}
 
-	// If no kernel found, return an error
-	if !kernelFound {
-		return fmt.Errorf("no kernel found in any of the expected locations. Please install a kernel or specify a custom kernel path")
-	}
-
-	// Create a loader with the kernel
+	// Create a loader with the kernel and initrd
 	loader := &linux.Loader{
-		Kernel:  []byte{},
-		Initrd:  []byte{},
-		Cmdline: fmt.Sprintf("root=/dev/vda console=hvc0 rw ip=dhcp init=/sbin/init"),
+		Kernel:  kernelBytes,
+		Initrd:  initrdBytes,
+		Cmdline: kernelInfo.Cmdline,
 	}
 
 	cfg.Loader = loader
