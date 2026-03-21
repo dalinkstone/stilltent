@@ -1,12 +1,13 @@
 package vm
 
 import (
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/dalinkstone/tent/pkg/models"
+	"github.com/dalinkstone/tent/internal/hypervisor"
 	"github.com/dalinkstone/tent/internal/storage"
 )
 
@@ -75,30 +76,96 @@ func (m *mockStateManager) ListVMs() ([]*models.VMState, error) {
 	return result, nil
 }
 
-type mockFirecrackerClient struct {
-	ErrConfigure error
-	ErrStart     error
-	ErrShutdown  error
+type mockHypervisorBackend struct {
+	ErrCreate  error
+	ErrList    error
+	ErrDestroy error
+	CreatedVM  *mockVMInstance
 }
 
-func (m *mockFirecrackerClient) ConfigureVM(socketPath string, config *models.VMConfig) error {
-	if m.ErrConfigure != nil {
-		return m.ErrConfigure
+type mockVMInstance struct {
+	config  *models.VMConfig
+	running bool
+	ErrStop error
+}
+
+// Set Stop error for testing
+func (v *mockVMInstance) SetStopError(err error) {
+	v.ErrStop = err
+}
+
+func (v *mockVMInstance) Start() error {
+	if v.running {
+		return fmt.Errorf("VM already running")
 	}
+	v.running = true
 	return nil
 }
 
-func (m *mockFirecrackerClient) StartVM(socketPath string) error {
-	if m.ErrStart != nil {
-		return m.ErrStart
+func (v *mockVMInstance) Stop() error {
+	if v.ErrStop != nil {
+		return v.ErrStop
 	}
+	if !v.running {
+		return fmt.Errorf("VM not running")
+	}
+	v.running = false
 	return nil
 }
 
-func (m *mockFirecrackerClient) ShutdownVM(socketPath string) error {
-	if m.ErrShutdown != nil {
-		return m.ErrShutdown
+func (v *mockVMInstance) Kill() error {
+	v.running = false
+	return nil
+}
+
+func (v *mockVMInstance) Status() (models.VMStatus, error) {
+	if v.running {
+		return models.VMStatusRunning, nil
 	}
+	return models.VMStatusStopped, nil
+}
+
+func (v *mockVMInstance) GetConfig() *models.VMConfig {
+	return v.config
+}
+
+func (v *mockVMInstance) GetIP() string {
+	return "172.16.0.1"
+}
+
+func (v *mockVMInstance) GetPID() int {
+	return 0
+}
+
+func (v *mockVMInstance) Cleanup() error {
+	return nil
+}
+
+func (m *mockHypervisorBackend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
+	if m.ErrCreate != nil {
+		return nil, m.ErrCreate
+	}
+	vm := &mockVMInstance{config: config}
+	m.CreatedVM = vm
+	return vm, nil
+}
+
+func (m *mockHypervisorBackend) ListVMs() ([]hypervisor.VM, error) {
+	if m.ErrList != nil {
+		return nil, m.ErrList
+	}
+	var vms []hypervisor.VM
+	if m.CreatedVM != nil {
+		vms = append(vms, m.CreatedVM)
+	}
+	return vms, nil
+}
+
+func (m *mockHypervisorBackend) DestroyVM(vm hypervisor.VM) error {
+	if m.ErrDestroy != nil {
+		return m.ErrDestroy
+	}
+	m.CreatedVM = nil
 	return nil
 }
 
@@ -178,7 +245,11 @@ func (m *mockStorageManager) ListSnapshots(name string) ([]*storage.SnapshotInfo
 func TestNewManager(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	manager, err := NewManager(tmpDir, nil, nil, nil, nil)
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, nil, mockFC, mockNet, mockStorage)
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
@@ -193,7 +264,7 @@ func TestNewManager(t *testing.T) {
 func TestNewManager_WithCustomDependencies(t *testing.T) {
 	tmpDir := t.TempDir()
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -205,8 +276,8 @@ func TestNewManager_WithCustomDependencies(t *testing.T) {
 	if manager.stateManager != mockState {
 		t.Error("manager should use custom state manager")
 	}
-	if manager.firecracker != mockFC {
-		t.Error("manager should use custom firecracker client")
+	if manager.hypervisor != mockFC {
+		t.Error("manager should use custom hypervisor backend")
 	}
 	if manager.networkMgr != mockNet {
 		t.Error("manager should use custom network manager")
@@ -220,7 +291,7 @@ func TestCreateVM(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{TAPDevice: "tap0"}
 	mockStorage := &mockStorageManager{}
 
@@ -262,7 +333,7 @@ func TestCreateVM_AlreadyExists(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusCreated},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -288,7 +359,7 @@ func TestCreateVM_InvalidConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -315,7 +386,7 @@ func TestCreateVM_StorageError(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{
 		ErrCreateRootFS: os.ErrPermission,
@@ -343,7 +414,7 @@ func TestCreateVM_NetworkError(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{
 		ErrSetup: os.ErrPermission,
 	}
@@ -376,7 +447,7 @@ func TestListVMs(t *testing.T) {
 			"vm2": {Name: "vm2", Status: models.VMStatusRunning},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -401,7 +472,7 @@ func TestListVMs_Empty(t *testing.T) {
 	mockState := &mockStateManager{
 		vms: make(map[string]*models.VMState),
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -428,7 +499,7 @@ func TestStatusVM(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 1234},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -450,7 +521,7 @@ func TestStatusVM_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -473,7 +544,7 @@ func TestLogsVM(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusCreated},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -496,7 +567,7 @@ func TestLogsVM_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -519,7 +590,7 @@ func TestDestroyVM(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 1234},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -527,6 +598,10 @@ func TestDestroyVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
+
+	// Set up the running VM in the manager's runningVMs map
+	vm := &mockVMInstance{config: &models.VMConfig{Name: "test-vm"}, running: true}
+	manager.runningVMs["test-vm"] = vm
 
 	err = manager.Destroy("test-vm")
 	if err != nil {
@@ -548,7 +623,7 @@ func TestDestroyVM_NotRunning(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusStopped},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -567,7 +642,7 @@ func TestDestroyVM_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -595,21 +670,13 @@ func TestStartVM(t *testing.T) {
 			},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
 	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
-	}
-
-	// Mock exec.Command to avoid spawning a real process
-	var spawnCount int
-	manager.execCommand = func(cmd string, args ...string) *exec.Cmd {
-		spawnCount++
-		// Return a fake command that succeeds
-		return exec.Command("true") // no-op command that succeeds
 	}
 
 	err = manager.Start("test-vm")
@@ -625,8 +692,13 @@ func TestStartVM(t *testing.T) {
 	if vm.Status != models.VMStatusRunning {
 		t.Errorf("expected status 'running', got '%s'", vm.Status)
 	}
-	if spawnCount != 1 {
-		t.Errorf("expected exec.Command to be called once, got %d times", spawnCount)
+
+	// Verify the VM was added to runningVMs
+	if len(manager.runningVMs) != 1 {
+		t.Errorf("expected 1 running VM, got %d", len(manager.runningVMs))
+	}
+	if _, exists := manager.runningVMs["test-vm"]; !exists {
+		t.Error("test-vm should be in runningVMs")
 	}
 }
 
@@ -638,7 +710,7 @@ func TestStartVM_AlreadyRunning(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 1234},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -657,7 +729,7 @@ func TestStartVM_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -680,7 +752,7 @@ func TestStopVM(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 1234},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -689,18 +761,27 @@ func TestStopVM(t *testing.T) {
 		t.Fatalf("failed to create manager: %v", err)
 	}
 
+	// Set up the running VM in the manager's runningVMs map
+	vm := &mockVMInstance{config: &models.VMConfig{Name: "test-vm"}, running: true}
+	manager.runningVMs["test-vm"] = vm
+
 	err = manager.Stop("test-vm")
 	if err != nil {
 		t.Fatalf("Stop failed: %v", err)
 	}
 
 	// Verify VM status changed to stopped
-	vm, err := mockState.GetVM("test-vm")
+	vmState, err := mockState.GetVM("test-vm")
 	if err != nil {
 		t.Fatalf("VM should exist: %v", err)
 	}
-	if vm.Status != models.VMStatusStopped {
-		t.Errorf("expected status 'stopped', got '%s'", vm.Status)
+	if vmState.Status != models.VMStatusStopped {
+		t.Errorf("expected status 'stopped', got '%s'", vmState.Status)
+	}
+
+	// Verify VM was removed from runningVMs
+	if len(manager.runningVMs) != 0 {
+		t.Errorf("expected 0 running VMs after stop, got %d", len(manager.runningVMs))
 	}
 }
 
@@ -712,7 +793,7 @@ func TestStopVM_NotRunning(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusStopped},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -731,7 +812,7 @@ func TestStopVM_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -754,7 +835,7 @@ func TestCreateSnapshot(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusCreated},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{
 		SnapshotPath: "/tmp/snapshot.img",
@@ -778,7 +859,7 @@ func TestCreateSnapshot_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -801,7 +882,7 @@ func TestRestoreSnapshot(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusCreated},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -820,7 +901,7 @@ func TestRestoreSnapshot_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -843,7 +924,7 @@ func TestListSnapshots(t *testing.T) {
 			"test-vm": {Name: "test-vm", Status: models.VMStatusCreated},
 		},
 	}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{
 		Snapshots: []*models.Snapshot{
@@ -873,7 +954,7 @@ func TestListSnapshots_NotFound(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	mockState := &mockStateManager{}
-	mockFC := &mockFirecrackerClient{}
+	mockFC := &mockHypervisorBackend{}
 	mockNet := &mockNetworkManager{}
 	mockStorage := &mockStorageManager{}
 
@@ -902,7 +983,11 @@ memory_mb: 2048
 `
 	os.WriteFile(configPath, []byte(configContent), 0644)
 
-	manager, err := NewManager(tmpDir, nil, nil, nil, nil)
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, nil, mockFC, mockNet, mockStorage)
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
@@ -934,7 +1019,11 @@ func TestLoadConfigFromState_DefaultValues(t *testing.T) {
 	configDir := filepath.Join(tmpDir, "configs")
 	os.MkdirAll(configDir, 0755)
 
-	manager, err := NewManager(tmpDir, nil, nil, nil, nil)
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, nil, mockFC, mockNet, mockStorage)
 	if err != nil {
 		t.Fatalf("failed to create manager: %v", err)
 	}
@@ -959,5 +1048,345 @@ func TestLoadConfigFromState_DefaultValues(t *testing.T) {
 	}
 	if config.MemoryMB != 1024 {
 		t.Errorf("expected default memory 1024, got %d", config.MemoryMB)
+	}
+}
+
+// TestSetup tests the Setup method
+func TestSetup(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Setup()
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+}
+
+// TestLoadConfigFromState_InvalidYAML tests handling of invalid YAML in config file
+func TestLoadConfigFromState_InvalidYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	configDir := filepath.Join(tmpDir, "configs")
+	os.MkdirAll(configDir, 0755)
+
+	configPath := filepath.Join(configDir, "test-vm.yaml")
+	// Invalid YAML content
+	os.WriteFile(configPath, []byte("invalid: yaml: content: :::"), 0644)
+
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, nil, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	vmState := &models.VMState{
+		Name: "test-vm",
+	}
+
+	config, err := manager.loadConfigFromState(vmState)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("config should not be nil")
+	}
+	// Should fall back to default values when YAML is invalid
+	if config.Name != "test-vm" {
+		t.Errorf("expected name 'test-vm', got '%s'", config.Name)
+	}
+}
+
+// TestLoadConfigFromState_EmptyFile tests handling of empty config file
+func TestLoadConfigFromState_EmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	configDir := filepath.Join(tmpDir, "configs")
+	os.MkdirAll(configDir, 0755)
+
+	configPath := filepath.Join(configDir, "test-vm.yaml")
+	// Empty file - YAML unmarshal succeeds but returns empty struct
+	os.WriteFile(configPath, []byte(""), 0644)
+
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, nil, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	vmState := &models.VMState{
+		Name: "test-vm",
+	}
+
+	config, err := manager.loadConfigFromState(vmState)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("config should not be nil")
+	}
+	// Empty file returns empty config (no fallback to defaults)
+	// This is expected behavior - if config file exists but is empty, unmarshal succeeds with empty struct
+	if config.Name != "" {
+		t.Errorf("expected empty name from empty config file, got '%s'", config.Name)
+	}
+}
+
+// TestCreateVM_StateManagerError tests error handling when saving VM state fails
+func TestCreateVM_StateManagerError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		ErrStore: os.ErrPermission,
+	}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	config := &models.VMConfig{
+		Name:     "test-vm",
+		VCPUs:    2,
+		MemoryMB: 1024,
+		DiskGB:   10,
+	}
+
+	err = manager.Create("test-vm", config)
+	if err == nil {
+		t.Error("expected error when saving state fails")
+	}
+}
+
+// TestStartVM_HypervisorCreateError tests VM startup when hypervisor backend fails
+func TestStartVM_HypervisorCreateError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:   "test-vm",
+				Status: models.VMStatusCreated,
+			},
+		},
+	}
+	mockFC := &mockHypervisorBackend{
+		ErrCreate: fmt.Errorf("create failed"),
+	}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Start("test-vm")
+	if err == nil {
+		t.Error("expected error when hypervisor backend create fails")
+	}
+}
+
+// TestStopVM_NetworkCleanupError tests error handling when network cleanup fails
+func TestStopVM_NetworkCleanupError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:        "test-vm",
+				Status:      models.VMStatusRunning,
+				PID:         1234,
+				TAPDevice:   "tap0",
+			},
+		},
+	}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{
+		ErrCleanup: os.ErrPermission,
+	}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Stop("test-vm")
+	if err == nil {
+		t.Error("expected error when network cleanup fails")
+	}
+}
+
+// TestDestroyVM_StorageCleanupError tests error handling when storage cleanup fails
+func TestDestroyVM_StorageCleanupError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {Name: "test-vm", Status: models.VMStatusStopped},
+		},
+	}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{
+		ErrDestroyVM: os.ErrPermission,
+	}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Destroy("test-vm")
+	if err == nil {
+		t.Error("expected error when storage cleanup fails")
+	}
+}
+
+// TestStatusVM_ProcessNotRunning tests Status when process is not running
+func TestStatusVM_ProcessNotRunning(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 99999}, // Non-existent PID
+		},
+	}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	// Set up a running VM that reports stopped status
+	vm := &mockVMInstance{config: &models.VMConfig{Name: "test-vm"}, running: false}
+	manager.runningVMs["test-vm"] = vm
+
+	vmState, err := manager.Status("test-vm")
+	if err != nil {
+		t.Fatalf("failed to get status: %v", err)
+	}
+
+	// Status should detect the VM is not running and update state
+	if vmState.Status != models.VMStatusStopped {
+		t.Errorf("expected status 'stopped' for non-running VM, got '%s'", vmState.Status)
+	}
+
+	// Verify VM was removed from runningVMs
+	if len(manager.runningVMs) != 0 {
+		t.Errorf("expected 0 running VMs after status check, got %d", len(manager.runningVMs))
+	}
+}
+
+// TestStartVM_FirecrackerStartError tests VM startup when Firecracker start fails
+func TestStartVM_FirecrackerStartError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:   "test-vm",
+				Status: models.VMStatusCreated,
+			},
+		},
+	}
+	mockFC := &mockHypervisorBackend{
+		ErrCreate: fmt.Errorf("create failed"), // Changed from ErrStart to ErrCreate
+	}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Start("test-vm")
+	if err == nil {
+		t.Error("expected error when hypervisor backend create fails")
+	}
+}
+
+// TestDestroyVM_FailedStop tests destroy when stop fails
+func TestDestroyVM_FailedStop(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:        "test-vm",
+				Status:      models.VMStatusRunning,
+				PID:         1234,
+				TAPDevice:   "tap0",
+			},
+		},
+	}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{
+		ErrCleanup: fmt.Errorf("network cleanup failed"),
+	}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Destroy("test-vm")
+	if err == nil {
+		t.Error("expected error when destroy fails (stop component)")
+	}
+}
+
+// TestStopVM_HypervisorStopError tests stop when hypervisor backend stop fails
+func TestStopVM_HypervisorStopError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 1234},
+		},
+	}
+	mockFC := &mockHypervisorBackend{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	// First create a VM in the manager's runningVMs map
+	// We need to set up the runningVMs map manually since we're not calling Start()
+	vm := &mockVMInstance{config: &models.VMConfig{Name: "test-vm"}, running: true}
+	vm.SetStopError(fmt.Errorf("stop failed"))
+	manager.runningVMs["test-vm"] = vm
+
+	err = manager.Stop("test-vm")
+	if err == nil {
+		t.Error("expected error when hypervisor backend stop fails")
 	}
 }

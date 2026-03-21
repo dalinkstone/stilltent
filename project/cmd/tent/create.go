@@ -15,6 +15,11 @@ var (
 	configPath string
 )
 
+// getHypervisorBackend returns the appropriate hypervisor backend for the current platform
+func getHypervisorBackend(baseDir string) (vm.HypervisorBackend, error) {
+	return vm.NewPlatformBackend(baseDir)
+}
+
 func createCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create <name> [--config <path>]",
@@ -62,7 +67,14 @@ func createCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
+			// Get platform-specific hypervisor backend
+			hvBackend, err := getHypervisorBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+
+			// Create manager with platform-specific backend
+			manager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
