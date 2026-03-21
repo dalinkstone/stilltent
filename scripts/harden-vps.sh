@@ -10,7 +10,7 @@ set -euo pipefail
 
 # ── Globals ──────────────────────────────────────────────────────────
 USERNAME="stilltent"
-SWAP_SIZE="2G"
+SWAP_SIZE="${STILLTENT_SWAP_SIZE:-4G}"
 WORKSPACE_DIR="${STILLTENT_DIR:-/root/stilltent}/workspace"
 CHANGES=()                       # accumulates a summary of what was done
 

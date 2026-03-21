@@ -318,22 +318,22 @@ Agent → mem9 plugin → mnemo-server → embed-service (256-dim) + TiDB (SQL +
 
 ## Docker Compose — Resource Budget
 
-Tuned for **4 GB RAM / 2 vCPU droplet ($24/month)**:
+Tuned for **8 GB RAM / 2 Intel vCPU / 160 GB disk droplet ($48/month)**:
 
 | Service | Memory | CPU | Notes |
 |---------|--------|-----|-------|
-| TiDB | 1.5 GB | 1.0 | Internal max-memory 1 GB |
-| embed-service | 64 MB | 0.5 | Read-only filesystem, 2 threads |
-| mnemo-server | 256 MB | 1.0 | Depends on TiDB + embed healthy |
-| OpenClaw | 768 MB | 1.5 | Agent runtime |
+| TiDB | 2.5 GB | 1.5 | Internal max-memory 2 GB |
+| embed-service | 128 MB | 0.5 | Read-only filesystem, 2 threads |
+| mnemo-server | 512 MB | 1.0 | Depends on TiDB + embed healthy |
+| OpenClaw | 1.5 GB | 1.5 | Agent runtime |
 | Orchestrator | 128 MB | 0.25 | Budget tracking, idle detection |
-| **Total** | **~2.7 GB** | — | ~1.3 GB for OS/Docker/buffers |
+| **Total** | **~4.8 GB** | — | ~3.2 GB for OS/Docker/buffers/cache |
 
 Startup order: TiDB → embed-service → mnemo-server → OpenClaw → Orchestrator
 
 All services: `restart: unless-stopped`, `on-failure` deploy policy with max 5 attempts, 10s delay, json-file logging with 10m/3 file rotation.
 
-Recommended: 2 GB swap on the droplet.
+Recommended: 4 GB swap on the droplet (good practice with 8 GB RAM).
 
 ---
 
@@ -475,7 +475,7 @@ Small, focused, tested. Branch names: `agent/YYYYMMDDHHMMSS-slug`. Conventional 
 cp .env.example .env && make preflight && make up && make init-db && make bootstrap
 ```
 
-**DigitalOcean:** Ubuntu 24.04, 4GB/2vCPU ($24/mo), 2GB swap, no GPU.
+**DigitalOcean:** Ubuntu 24.04, 8GB RAM / 2 Intel vCPU / 160GB disk ($48/mo). No GPU required.
 ```bash
 curl -fsSL https://get.docker.com | sh && git clone <repo> ~/stilltent && cd ~/stilltent
 cp .env.example .env && nano .env && make bootstrap
@@ -487,6 +487,6 @@ cp .env.example .env && nano .env && make bootstrap
 
 stilltent takes a project description and builds it — one PR at a time, hundreds of PRs over days, autonomously. Five services: TiDB (database), embed-service (local C embeddings, 256-dim, zero cost), mnemo-server (memory API), OpenClaw (agent runtime with Qwen3 Coder Next, 262K context, $0.12/$0.75 per M tokens), orchestrator (budget tracking, circuit breaker, idle detection).
 
-The agent protocol is 106 lines of SKILL.md. The identity is 72 lines of AGENTS.md. The stack fits on a $24/month droplet with a $50 budget for 5 days. The agent uses its tools — memory, testing, GitHub CLI, shell — and fixes them when they're insufficient.
+The agent protocol is 106 lines of SKILL.md. The identity is 72 lines of AGENTS.md. The stack fits on a $48/month droplet (8 GB RAM, 2 Intel vCPU, 160 GB disk) with a $50 budget for 5 days. The agent uses its tools — memory, testing, GitHub CLI, shell — and fixes them when they're insufficient.
 
 Everything is designed for one purpose: take a paragraph of project description and turn it into a working codebase with hundreds of tested, reviewed commits.

@@ -55,11 +55,74 @@ fi
 # -------------------------------------------------------------------
 # 3. Install utilities
 # -------------------------------------------------------------------
-echo ">>> Installing git, make, curl, jq..."
-apt-get install -y -qq git make curl jq
+echo ">>> Installing git, make, curl, jq, ufw, fail2ban..."
+apt-get install -y -qq git make curl jq ufw fail2ban
 
 # -------------------------------------------------------------------
-# 4. Clone the repo (skip if already present)
+# 4. Set up swap (4G — good practice on 8GB droplet, critical on 4GB)
+# -------------------------------------------------------------------
+SWAP_SIZE="${STILLTENT_SWAP_SIZE:-4G}"
+echo ">>> Setting up ${SWAP_SIZE} swap file..."
+
+if swapon --show | grep -q /swapfile; then
+    echo "    (skipped — swap already active)"
+else
+    fallocate -l "$SWAP_SIZE" /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+
+    # Persist across reboots
+    if ! grep -q '/swapfile' /etc/fstab; then
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+
+    echo "    Swap file created and activated."
+fi
+
+# -------------------------------------------------------------------
+# 5. Configure UFW firewall
+# -------------------------------------------------------------------
+echo ">>> Configuring UFW firewall..."
+
+if ufw status | grep -q "Status: active"; then
+    echo "    (skipped — UFW already active)"
+else
+    ufw allow OpenSSH
+    ufw --force enable
+    echo "    UFW enabled — SSH allowed, all other inbound denied."
+fi
+
+# -------------------------------------------------------------------
+# 6. Configure Docker log rotation (prevents disk fill during long runs)
+# -------------------------------------------------------------------
+echo ">>> Configuring Docker log rotation..."
+
+DOCKER_DAEMON="/etc/docker/daemon.json"
+
+if [ -f "$DOCKER_DAEMON" ] && python3 -c "
+import json, sys
+d = json.load(open('$DOCKER_DAEMON'))
+sys.exit(0 if d.get('log-opts',{}).get('max-size') == '50m' else 1)
+" 2>/dev/null; then
+    echo "    (skipped — already configured)"
+else
+    mkdir -p /etc/docker
+    cat > "$DOCKER_DAEMON" << 'EOF'
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "50m",
+    "max-file": "3"
+  }
+}
+EOF
+    systemctl restart docker
+    echo "    Docker log rotation set: max 50MB x 3 files per container."
+fi
+
+# -------------------------------------------------------------------
+# 7. Clone the repo (skip if already present)
 # -------------------------------------------------------------------
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo ">>> Repo already cloned at $INSTALL_DIR — pulling latest..."
@@ -76,7 +139,7 @@ else
 fi
 
 # -------------------------------------------------------------------
-# 5-6. Configure .env
+# 8. Configure .env
 # -------------------------------------------------------------------
 cd "$INSTALL_DIR"
 
@@ -121,38 +184,38 @@ else
 fi
 
 # -------------------------------------------------------------------
-# 7. Start the stack
+# 9. Start the stack
 # -------------------------------------------------------------------
 echo ""
 echo ">>> Starting stilltent stack..."
 make up
 
 # -------------------------------------------------------------------
-# 8. Wait for services to boot
+# 10. Wait for services to boot
 # -------------------------------------------------------------------
 echo ">>> Waiting 30 seconds for services to start..."
 sleep 30
 
 # -------------------------------------------------------------------
-# 9. Initialize the database
+# 11. Initialize the database
 # -------------------------------------------------------------------
 echo ">>> Initializing database..."
 make init-db
 
 # -------------------------------------------------------------------
-# 10. Health check
+# 12. Health check
 # -------------------------------------------------------------------
 echo ">>> Running health checks..."
 make health
 
 # -------------------------------------------------------------------
-# 11. Bootstrap — clone target repo and start first iteration
+# 13. Bootstrap — clone target repo and start first iteration
 # -------------------------------------------------------------------
 echo ">>> Bootstrapping — cloning target repo and starting first iteration..."
 make bootstrap
 
 # -------------------------------------------------------------------
-# 12. Summary
+# 14. Summary
 # -------------------------------------------------------------------
 DROPLET_IP=$(curl -sf http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address 2>/dev/null || hostname -I | awk '{print $1}')
 RUNTIME_HOURS=$(grep -oP '^TOTAL_RUNTIME_HOURS=\K.*' .env 2>/dev/null || echo "120")

@@ -160,9 +160,9 @@ monitor:
 deploy:
 	@echo "=== DigitalOcean Deployment ==="
 	@echo ""
-	@echo "1. Create a Droplet (Ubuntu 24.04, 2GB+ RAM):"
+	@echo "1. Create a Droplet (Ubuntu 24.04, 8GB RAM / 2 vCPU / 160GB disk):"
 	@echo "   doctl compute droplet create stilltent \\"
-	@echo "     --image ubuntu-24-04-x64 --size s-1vcpu-2gb \\"
+	@echo "     --image ubuntu-24-04-x64 --size s-2vcpu-8gb-intel \\"
 	@echo "     --region nyc1 --ssh-keys \$$SSH_KEY_ID"
 	@echo ""
 	@echo "2. SSH into the Droplet:"

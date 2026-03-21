@@ -1,16 +1,16 @@
 # =============================================================================
 # stilltent — Docker Compose (Phase 1–6: TiDB + mnemo-server + OpenClaw + Orchestrator)
 #
-# Target: DigitalOcean 4GB RAM / 2 vCPU droplet ($24/mo)
-# Memory budget: ~2.7G containers + ~1.3G OS/Docker/buffers
+# Target: DigitalOcean 8GB RAM / 2 Intel vCPU / 160GB disk ($48/mo)
+# Memory budget: ~4.8G containers + ~3.2G OS/Docker/buffers/cache
 #
 # Usage:
 #   cp .env.example .env   # fill in your values
 #   make up                # starts the stack
 #   make health            # verify everything is running
 #
-# Recommended: configure 2G swap on the droplet
-# sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+# Recommended: configure 4G swap on the droplet
+# sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
 # sudo mkswap /swapfile && sudo swapon /swapfile
 # echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 #
@@ -50,10 +50,10 @@ services:
     networks:
       - stilltent-net
     environment:
-      # Limit TiDB server memory to 1GB to stay within container budget
+      # Limit TiDB server memory to 2GB to stay within container budget
       TIDB_CONFIG: |
         [performance]
-        max-memory = 1073741824
+        max-memory = 2147483648
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:10080/status"]
       interval: 60s
@@ -63,8 +63,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5G
-          cpus: "1.0"
+          memory: 2.5G
+          cpus: "1.5"
       restart_policy:
         condition: on-failure
         delay: 10s
@@ -89,7 +89,7 @@ services:
     environment:
       EMBED_PORT: "8090"
       EMBED_DIMS: "256"
-      # Reduced from 8 to 2 — matches 2 vCPU droplet
+      # Reduced from 8 to 2 — matches 2 Intel vCPU droplet
       EMBED_THREADS: "2"
     networks:
       stilltent-net:
@@ -104,7 +104,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64M
+          memory: 128M
           cpus: "0.5"
       restart_policy:
         condition: on-failure
@@ -163,7 +163,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 512M
           cpus: "1.0"
       restart_policy:
         condition: on-failure
@@ -264,7 +264,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 768M
+          memory: 1.5G
           cpus: "1.5"
       restart_policy:
         condition: on-failure
