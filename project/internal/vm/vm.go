@@ -1,3 +1,312 @@
 package vm
 
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/dalinkstone/tent/pkg/models"
+	"github.com/dalinkstone/tent/internal/state"
+	"github.com/dalinkstone/tent/internal/firecracker"
+	"github.com/dalinkstone/tent/internal/network"
+	"github.com/dalinkstone/tent/internal/storage"
+)
+
 // VMManager manages microVM lifecycle operations
+type VMManager struct {
+	stateManager  *state.StateManager
+	firecracker   *firecracker.Client
+	networkMgr    *network.Manager
+	storageMgr    *storage.Manager
+	baseDir       string
+}
+
+// NewManager creates a new VM manager
+func NewManager(baseDir string) (*VMManager, error) {
+	sm, err := state.NewStateManager(filepath.Join(baseDir, "state.json"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create state manager: %w", err)
+	}
+
+	return &VMManager{
+		stateManager: sm,
+		baseDir:      baseDir,
+	}, nil
+}
+
+// Setup initializes the VM manager components
+func (m *VMManager) Setup() error {
+	var err error
+
+	// Initialize storage manager
+	m.storageMgr, err = storage.NewManager(m.baseDir)
+	if err != nil {
+		return fmt.Errorf("failed to create storage manager: %w", err)
+	}
+
+	// Initialize network manager
+	m.networkMgr, err = network.NewManager()
+	if err != nil {
+		return fmt.Errorf("failed to create network manager: %w", err)
+	}
+
+	// Initialize firecracker client
+	m.firecracker, err = firecracker.NewClient("")
+	if err != nil {
+		return fmt.Errorf("failed to create firecracker client: %w", err)
+	}
+
+	return nil
+}
+
+// Create creates a new microVM
+func (m *VMManager) Create(name string, config *models.VMConfig) error {
+	// Validate config
+	if err := config.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+
+	// Check if VM already exists
+	if _, err := m.stateManager.GetVM(name); err == nil {
+		return fmt.Errorf("VM %s already exists", name)
+	}
+
+	// Create storage (rootfs)
+	rootfsPath, err := m.storageMgr.CreateRootFS(name, config)
+	if err != nil {
+		return fmt.Errorf("failed to create rootfs: %w", err)
+	}
+
+	// Setup network
+	tapDevice, err := m.networkMgr.SetupVMNetwork(name, config)
+	if err != nil {
+		return fmt.Errorf("failed to setup network: %w", err)
+	}
+
+	// Create firecracker socket path
+	socketPath := filepath.Join(m.baseDir, "sockets", fmt.Sprintf("%s.sock", name))
+
+	// Create VM state
+	vmState := &models.VMState{
+		Name:        name,
+		Status:      models.VMStatusCreated,
+		RootFSPath:  rootfsPath,
+		TAPDevice:   tapDevice,
+		SocketPath:  socketPath,
+		CreatedAt:   time.Now().Unix(),
+		UpdatedAt:   time.Now().Unix(),
+	}
+
+	// Save state
+	if err := m.stateManager.StoreVM(vmState); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
+	}
+
+	return nil
+}
+
+// Start starts a stopped microVM
+func (m *VMManager) Start(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status == models.VMStatusRunning {
+		return fmt.Errorf("VM %s is already running", name)
+	}
+
+	// Get VM config from state
+	config, err := m.loadConfigFromState(vmState)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Spawn Firecracker process
+	cmd := exec.Command("firecracker", "--api-sock", vmState.SocketPath)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start firecracker: %w", err)
+	}
+
+	vmState.PID = cmd.Process.Pid
+	vmState.Status = models.VMStatusRunning
+	vmState.UpdatedAt = time.Now().Unix()
+
+	// Update state
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.PID = vmState.PID
+		s.Status = vmState.Status
+		s.UpdatedAt = vmState.UpdatedAt
+		return nil
+	}); err != nil {
+		cmd.Process.Kill()
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+
+	// Configure VM via Firecracker API
+	if err := m.firecracker.ConfigureVM(vmState.SocketPath, config); err != nil {
+		m.Stop(name)
+		return fmt.Errorf("failed to configure VM: %w", err)
+	}
+
+	// Start the VM
+	if err := m.firecracker.StartVM(vmState.SocketPath); err != nil {
+		m.Stop(name)
+		return fmt.Errorf("failed to start VM: %w", err)
+	}
+
+	return nil
+}
+
+// Stop gracefully shuts down a running microVM
+func (m *VMManager) Stop(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning {
+		return fmt.Errorf("VM %s is not running", name)
+	}
+
+	// Try graceful shutdown first via Firecracker API
+	if err := m.firecracker.ShutdownVM(vmState.SocketPath); err != nil {
+		// If API fails, try sending SIGTERM to the process
+		if vmState.PID > 0 {
+			proc, err := os.FindProcess(vmState.PID)
+			if err == nil {
+				proc.Signal(os.Signal(nil)) // placeholder - need proper signal
+				// Give it a moment to shut down
+				time.Sleep(100 * time.Millisecond)
+				// If still running, kill it
+				proc.Kill()
+			}
+		}
+	}
+
+	// Cleanup network resources
+	if vmState.TAPDevice != "" {
+		if err := m.networkMgr.CleanupVMNetwork(name); err != nil {
+			return fmt.Errorf("failed to cleanup network: %w", err)
+		}
+	}
+
+	// Update state
+	vmState.Status = models.VMStatusStopped
+	vmState.PID = 0
+	vmState.IP = ""
+	vmState.UpdatedAt = time.Now().Unix()
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Status = vmState.Status
+		s.PID = vmState.PID
+		s.IP = vmState.IP
+		s.UpdatedAt = vmState.UpdatedAt
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+
+	return nil
+}
+
+// Destroy removes a microVM and all its resources
+func (m *VMManager) Destroy(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	// Stop if running
+	if vmState.Status == models.VMStatusRunning {
+		if err := m.Stop(name); err != nil {
+			return fmt.Errorf("failed to stop VM before destroy: %w", err)
+		}
+	}
+
+	// Cleanup storage
+	if err := m.storageMgr.DestroyVMStorage(name); err != nil {
+		return fmt.Errorf("failed to destroy storage: %w", err)
+	}
+
+	// Cleanup state
+	if err := m.stateManager.DeleteVM(name); err != nil {
+		return fmt.Errorf("failed to delete state: %w", err)
+	}
+
+	return nil
+}
+
+// Status returns detailed status of a microVM
+func (m *VMManager) Status(name string) (*models.VMState, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+
+	// Update status if running
+	if vmState.Status == models.VMStatusRunning && vmState.PID > 0 {
+		proc, err := os.FindProcess(vmState.PID)
+		if err == nil {
+			// Check if process is still running
+			if err := proc.Signal(os.Signal(nil)); err != nil {
+				vmState.Status = models.VMStatusStopped
+				vmState.PID = 0
+				vmState.UpdatedAt = time.Now().Unix()
+				_ = m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+					s.Status = vmState.Status
+					s.PID = vmState.PID
+					s.UpdatedAt = vmState.UpdatedAt
+					return nil
+				})
+			}
+		}
+	}
+
+	return vmState, nil
+}
+
+// List returns all managed microVMs
+func (m *VMManager) List() ([]*models.VMState, error) {
+	return m.stateManager.ListVMs()
+}
+
+// Logs returns console logs for a microVM
+func (m *VMManager) Logs(name string) (string, error) {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("VM not found: %w", err)
+	}
+
+	// For now, return placeholder - in production, this would read
+	// from the firecracker log file or capture output
+	logPath := filepath.Join(m.baseDir, "logs", fmt.Sprintf("%s.log", name))
+	if data, err := os.ReadFile(logPath); err == nil {
+		return string(data), nil
+	}
+
+	return fmt.Sprintf("No logs available for VM %s", name), nil
+}
+
+// loadConfigFromState loads the VM config from the state file
+func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
+	// Load config from state file if present
+	configPath := filepath.Join(m.baseDir, "configs", fmt.Sprintf("%s.yaml", vmState.Name))
+	if data, err := os.ReadFile(configPath); err == nil {
+		var config models.VMConfig
+		if err := yaml.Unmarshal(data, &config); err == nil {
+			return &config, nil
+		}
+	}
+
+	// Return minimal config based on state
+	return &models.VMConfig{
+		Name:     vmState.Name,
+		VCPUs:    2,  // default
+		MemoryMB: 1024, // default
+	}, nil
+}
