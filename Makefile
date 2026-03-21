@@ -2,7 +2,7 @@
 -include .env
 export
 
-.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight
+.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight monitor deploy cost ssh-tunnel
 
 # Start all services
 up:
@@ -24,9 +24,15 @@ restart:
 status:
 	docker compose ps
 
-# Run health checks against all services
+# Check OpenRouter API connectivity
 health:
-	@bash scripts/health-check.sh
+	@echo "Checking OpenRouter API connectivity..."
+	@curl -sf -H "Authorization: Bearer $$OPENROUTER_API_KEY" \
+		https://openrouter.ai/api/v1/models | head -c 200 > /dev/null \
+		&& echo "OpenRouter API: OK" \
+		|| echo "OpenRouter API: UNREACHABLE (check OPENROUTER_API_KEY)"
+	@echo "Checking running containers..."
+	@docker compose ps
 
 # First-time setup: clone repo, initialize mem9 tenant, send first prompt
 bootstrap:
@@ -93,3 +99,46 @@ validate-workspace:
 # Final pre-flight check: start stack, run all checks, stop orchestrator
 preflight:
 	@bash scripts/preflight.sh
+
+# Run the monitoring dashboard
+monitor:
+	@bash scripts/monitor.sh
+
+# Print DigitalOcean deployment instructions
+deploy:
+	@echo "=== DigitalOcean Deployment ==="
+	@echo ""
+	@echo "1. Create a Droplet (Ubuntu 24.04, 2GB+ RAM):"
+	@echo "   doctl compute droplet create stilltent \\"
+	@echo "     --image ubuntu-24-04-x64 --size s-1vcpu-2gb \\"
+	@echo "     --region nyc1 --ssh-keys \$$SSH_KEY_ID"
+	@echo ""
+	@echo "2. SSH into the Droplet:"
+	@echo "   ssh root@\$$DROPLET_IP"
+	@echo ""
+	@echo "3. Install Docker:"
+	@echo "   curl -fsSL https://get.docker.com | sh"
+	@echo ""
+	@echo "4. Clone and configure:"
+	@echo "   git clone <repo-url> ~/stilltent && cd ~/stilltent"
+	@echo "   cp .env.example .env && nano .env"
+	@echo ""
+	@echo "5. Start the stack:"
+	@echo "   make bootstrap"
+
+# Estimate OpenRouter spend from metrics
+cost:
+	@echo "=== OpenRouter Cost Estimate ==="
+	@if [ -f metrics/openrouter.log ]; then \
+		TOTAL=$$(awk -F',' '{sum+=$$NF} END {printf "%.4f", sum}' metrics/openrouter.log); \
+		CALLS=$$(wc -l < metrics/openrouter.log | tr -d ' '); \
+		echo "Total API calls: $$CALLS"; \
+		echo "Estimated spend: \$$$$TOTAL"; \
+	else \
+		echo "No metrics found at metrics/openrouter.log"; \
+		echo "Cost tracking starts after the first orchestrator run."; \
+	fi
+
+# Print SSH command to connect to VPS
+ssh-tunnel:
+	@echo "ssh root@$$DROPLET_IP"
