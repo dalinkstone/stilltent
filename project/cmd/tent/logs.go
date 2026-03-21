@@ -9,8 +9,16 @@ import (
 	"github.com/dalinkstone/tent/internal/vm"
 )
 
-func logsCmd() *cobra.Command {
-	return &cobra.Command{
+// ConfigureLogsCmd creates a new logs command with optional dependencies
+func ConfigureLogsCmd(options ...CommonCmdOption) *cobra.Command {
+	opts := &CommonCmdOptions{}
+
+	// Apply functional options
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "View microVM console/boot logs",
 		Long:  `View microVM console/boot logs.`,
@@ -25,7 +33,18 @@ func logsCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
+			// Get platform-specific hypervisor backend if not provided
+			hvBackend := opts.Hypervisor
+			if hvBackend == nil {
+				var err error
+				hvBackend, err = vm.NewPlatformBackend(baseDir)
+				if err != nil {
+					return fmt.Errorf("failed to create hypervisor backend: %w", err)
+				}
+			}
+
+			// Create manager with dependencies
+			manager, err := vm.NewManager(baseDir, opts.StateManager, hvBackend, opts.NetworkMgr, opts.StorageMgr)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -46,4 +65,11 @@ func logsCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+// logsCmd is a convenience function that uses default dependencies
+func logsCmd() *cobra.Command {
+	return ConfigureLogsCmd()
 }

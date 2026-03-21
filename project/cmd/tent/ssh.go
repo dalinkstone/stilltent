@@ -10,8 +10,16 @@ import (
 	"github.com/dalinkstone/tent/internal/vm"
 )
 
-func sshCmd() *cobra.Command {
-	return &cobra.Command{
+// ConfigureSshCmd creates a new ssh command with optional dependencies
+func ConfigureSshCmd(options ...CommonCmdOption) *cobra.Command {
+	opts := &CommonCmdOptions{}
+
+	// Apply functional options
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	cmd := &cobra.Command{
 		Use:   "ssh <name>",
 		Short: "SSH into a running microVM",
 		Long:  `SSH into a running microVM.`,
@@ -26,7 +34,18 @@ func sshCmd() *cobra.Command {
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
+			// Get platform-specific hypervisor backend if not provided
+			hvBackend := opts.Hypervisor
+			if hvBackend == nil {
+				var err error
+				hvBackend, err = vm.NewPlatformBackend(baseDir)
+				if err != nil {
+					return fmt.Errorf("failed to create hypervisor backend: %w", err)
+				}
+			}
+
+			// Create manager with dependencies
+			manager, err := vm.NewManager(baseDir, opts.StateManager, hvBackend, opts.NetworkMgr, opts.StorageMgr)
 			if err != nil {
 				return fmt.Errorf("failed to create VM manager: %w", err)
 			}
@@ -62,4 +81,11 @@ func sshCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+// sshCmd is a convenience function that uses default dependencies
+func sshCmd() *cobra.Command {
+	return ConfigureSshCmd()
 }
