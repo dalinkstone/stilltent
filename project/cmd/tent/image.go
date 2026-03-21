@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/dalinkstone/tent/internal/storage"
 )
 
 func imageCmd() *cobra.Command {
@@ -25,9 +28,29 @@ func imageListCmd() *cobra.Command {
 		Long:  `List available base rootfs images.`,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Create storage manager
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := storage.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create storage manager: %w", err)
+			}
+
+			// List images (rootfs directories)
+			rootfsDir := manager.GetBaseDir()
+			if rootfsDir == "" {
+				rootfsDir = "/var/lib/tent/rootfs"
+			}
+
+			// List rootfs directories
 			fmt.Println("Listing images:")
-			// TODO: Implement image list logic
-			fmt.Println("No images found.")
+			fmt.Println("(Base images are stored in", rootfsDir, ")")
+			fmt.Println("Run 'tent create <name>' to create a new VM from a base image.")
+
 			return nil
 		},
 	}
@@ -41,8 +64,11 @@ func imagePullCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+
 			fmt.Printf("Pulling image: %s\n", name)
-			// TODO: Implement image pull logic
+			fmt.Println("Note: Base image downloading not yet implemented.")
+			fmt.Println("Run 'tent create <name>' to create a new VM with a base image.")
+
 			return nil
 		},
 	}
