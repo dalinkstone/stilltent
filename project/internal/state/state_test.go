@@ -2,6 +2,8 @@ package state
 
 import (
 	"testing"
+
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 func TestStateManager_Basic(t *testing.T) {
@@ -12,9 +14,9 @@ func TestStateManager_Basic(t *testing.T) {
 		t.Fatalf("Failed to create state manager: %v", err)
 	}
 	
-	vm := &VMState{
+	vm := &models.VMState{
 		Name:     "test-vm",
-		Status:   VMStatusCreated,
+		Status:   models.VMStatusCreated,
 		CreatedAt: 1234567890,
 	}
 	
@@ -49,9 +51,9 @@ func TestStateManager_ListVMs(t *testing.T) {
 	}
 	
 	for i := 0; i < 3; i++ {
-		vm := &VMState{
+		vm := &models.VMState{
 			Name:      vmName(i),
-			Status:    VMStatusCreated,
+			Status:    models.VMStatusCreated,
 			CreatedAt: 1234567890,
 		}
 		if err := sm.StoreVM(vm); err != nil {
@@ -76,9 +78,9 @@ func TestStateManager_UpdateVM(t *testing.T) {
 		t.Fatalf("Failed to create state manager: %v", err)
 	}
 	
-	vm := &VMState{
+	vm := &models.VMState{
 		Name:      "test-vm",
-		Status:    VMStatusCreated,
+		Status:    models.VMStatusCreated,
 		CreatedAt: 1234567890,
 	}
 	
@@ -86,8 +88,8 @@ func TestStateManager_UpdateVM(t *testing.T) {
 		t.Fatalf("Failed to store VM: %v", err)
 	}
 	
-	if err := sm.UpdateVM("test-vm", func(v *VMState) error {
-		v.Status = VMStatusRunning
+	if err := sm.UpdateVM("test-vm", func(v *models.VMState) error {
+		v.Status = models.VMStatusRunning
 		return nil
 	}); err != nil {
 		t.Fatalf("Failed to update VM: %v", err)
@@ -98,7 +100,7 @@ func TestStateManager_UpdateVM(t *testing.T) {
 		t.Fatalf("Failed to retrieve VM: %v", err)
 	}
 	
-	if retrieved.Status != VMStatusRunning {
+	if retrieved.Status != models.VMStatusRunning {
 		t.Errorf("Expected status 'running', got '%s'", retrieved.Status)
 	}
 }
