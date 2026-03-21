@@ -1,3 +1,6 @@
+//go:build darwin
+// +build darwin
+
 package vm
 
 import (
@@ -12,7 +15,7 @@ import (
 	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/state"
 	"github.com/dalinkstone/tent/internal/hypervisor"
-	"github.com/dalinkstone/tent/internal/hypervisor/kvm"
+	"github.com/dalinkstone/tent/internal/hypervisor/hvf"
 	"github.com/dalinkstone/tent/internal/network"
 	"github.com/dalinkstone/tent/internal/storage"
 )
@@ -73,11 +76,11 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 	}
 
 	if hv == nil {
-		// Try to use KVM backend (Linux only)
-		if backend, err := kvm.NewBackend(baseDir); err == nil {
+		// Try to use Hypervisor.framework backend (macOS only)
+		if backend, err := hvf.NewBackend(baseDir); err == nil {
 			hv = backend
 		} else {
-			return nil, fmt.Errorf("failed to create hypervisor backend: KVM backend not available and no custom backend provided")
+			return nil, fmt.Errorf("failed to create hypervisor backend: Hypervisor.framework backend not available and no custom backend provided")
 		}
 	}
 
