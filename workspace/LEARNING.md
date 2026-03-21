@@ -42,7 +42,7 @@ Execute the hypothesis. This is Phase 4 of SKILL.md. Nothing changes here — sm
 After implementation, measure the outcome against your prediction:
 
 - **Tests:** Did new tests pass? Did existing tests stay green? What's the delta?
-- **Coverage:** Did test coverage increase, decrease, or hold?
+- **Roadmap:** Did this advance a roadmap item? Which one?
 - **Complexity:** Did the change add more code than necessary? Could it be simpler?
 - **Build health:** Clean build? Clean lint? No warnings?
 - **Confidence:** How confident are you that this change is correct? (0.0-1.0)
@@ -75,28 +75,32 @@ Track these metrics in memory (tag: `quality_metrics`). Update every 5 iteration
 
 ```
 quality_metrics:
-  tests_total: [count]
-  tests_passing: [count]
-  test_coverage_estimate: [low/medium/high]
   build_clean: [yes/no]
   lint_clean: [yes/no]
   open_prs: [count]
-  features_complete: [list of spec items done]
-  features_remaining: [list of spec items not done]
+  roadmap_phase: [1/2/3/4/5/6 — which phase of the SOUL.md roadmap are you on?]
+  roadmap_items_complete: [list of completed roadmap items by number]
+  roadmap_items_remaining: [list of remaining roadmap items by number]
+  darwin_build_clean: [yes/no — does `GOOS=darwin go build ./...` succeed?]
+  features_working_on_macos: [list of commands that actually work on macOS]
+  linux_only_code: [list of files that use Linux-only tools without darwin build tags]
   known_bugs: [count and brief descriptions]
   code_health: [1-5 scale, your honest assessment]
-  iteration_success_rate_last_10: [X/10]
+  feat_commit_ratio: [X% — what percentage of your last 10 commits were feat: commits?]
 ```
+
+**DO NOT track test count, test coverage, or test pass rate as quality metrics.** Tracking those numbers incentivizes writing tests instead of features. The only metrics that matter are: build status, feature completeness, and roadmap progress.
 
 ### The Quality Ratchet
 
 Quality metrics must never regress without explicit justification. This is non-negotiable:
 
-- If test count was 47, a PR that drops it to 45 must explain why (consolidation is fine, deletion without replacement is not)
-- If build was clean, a PR that introduces warnings must fix them
-- If coverage was "medium", a PR that drops it to "low" must be a refactor with a follow-up test PR planned
+- If build was clean, a PR that breaks the build must fix it before moving on
+- If lint was clean, a PR that introduces warnings must fix them
+- Roadmap progress must always move forward — never go backwards on completed items
+- `feat_commit_ratio` should stay above 90%
 
-The ratchet enforces forward progress. You can restructure, but you cannot regress.
+The ratchet enforces forward progress on FEATURES. Do not use test count or test coverage as ratchet metrics — they incentivize the wrong behavior.
 
 ---
 
@@ -106,11 +110,10 @@ You maintain a running list of things to revisit and improve (tag: `improvement_
 
 ### When to Add Items
 
-- After every PR: "What could be better about what I just did?"
-- After failures: "What infrastructure would have prevented this?"
-- After reviewing code: "What patterns are getting repetitive?"
-- After test runs: "What edge cases am I not covering?"
-- When you notice tech debt: "What shortcuts did I take that need cleanup?"
+- After every PR: "What feature could be better about what I just built?"
+- After failures: "What feature work would have prevented this?"
+- After reviewing code: "What feature patterns are getting repetitive?"
+- When you notice incomplete features: "What feature gap needs filling?"
 
 ### Queue Format
 
@@ -118,12 +121,14 @@ You maintain a running list of things to revisit and improve (tag: `improvement_
 improvement_queue:
   - id: IQ-001
     area: [file or module]
-    type: [test|refactor|perf|error-handling|feature-gap|debt]
-    description: [what needs improving]
+    type: [feature-gap|perf|error-handling|debt]
+    description: [what feature needs improving]
     priority: [high|medium|low]
     added_iteration: [N]
-    rationale: [why this matters]
+    rationale: [why this matters for the user]
 ```
+
+**`test` and `refactor` are NOT valid improvement queue types.** If you want to improve tests, do it inside a feature PR. If you want to refactor, do it because a feature requires it.
 
 ### When to Work the Queue
 
@@ -152,6 +157,8 @@ self_reflection:
   hypotheses_tested: [count]
   hypotheses_confirmed: [count]
   hypotheses_refuted: [count]
+  feat_commit_count_last_10: [how many of last 10 commits were feat:]
+  roadmap_items_completed_last_10: [which roadmap items were completed]
   most_valuable_learning: [what]
   biggest_mistake: [what and why]
   process_improvement: [what would I do differently]
@@ -161,15 +168,17 @@ self_reflection:
 
 ### What to Reflect On
 
-1. **Am I solving the right problems?** Check the spec. Are your recent iterations aligned with what needs to be built, or have you drifted into yak-shaving?
+1. **Am I building features?** Count your last 10 commits. How many are `feat:` commits? If less than 9 out of 10, you are drifting. Go build the next feature from the SOUL.md roadmap.
 
-2. **Am I learning from failures?** Look at your `failed_approach` memories. Are you repeating the same categories of mistake? If so, you have a systemic problem to fix, not just individual bugs.
+2. **Am I advancing the roadmap?** Check the SOUL.md roadmap. What phase are you on? How many items have you completed? If progress is slow, ask why — are you getting distracted by tests, docs, or refactors?
 
-3. **Am I improving my own process?** Your test suite, CI, memory structure, and coding patterns should all be getting better over time. If iteration 100 looks the same as iteration 10, you're not learning — you're just executing.
+3. **Am I learning from failures?** Look at your `failed_approach` memories. Are you repeating the same categories of mistake? If so, you have a systemic problem to fix, not just individual bugs.
 
-4. **What would a senior engineer critique?** Step back and review your recent PRs as if you were reviewing someone else's work. What would you flag?
+4. **Can a user run `tent create mybox --from ubuntu:22.04` on macOS yet?** If not, everything else is secondary. Build the features that make this work. Does `GOOS=darwin go build ./...` even succeed? If not, fix that first.
 
-5. **Am I revisiting and improving past work?** Check your improvement queue. If it's growing but never shrinking, you're accumulating debt. If it's always empty, you're not being critical enough.
+5. **Am I writing Linux-only code?** Check for files that shell out to `ip`, `iptables`, `mkfs.ext4`, `mount`, etc. without macOS equivalents behind build tags. Every Linux-only file must have a `_darwin.go` counterpart.
+
+6. **Am I revisiting and improving past features?** Check your improvement queue. At least 20% of iterations should improve past features (not add tests to them — improve the feature itself).
 
 ---
 
