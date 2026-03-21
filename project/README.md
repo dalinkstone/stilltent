@@ -1,119 +1,142 @@
 # tent
 
-A cross-platform command-line tool for creating, managing, and destroying lightweight VMs as isolated development environments. Written in Go. Runs on **macOS and Linux**.
+A cross-platform CLI for creating, managing, and orchestrating lightweight **microVM sandboxes**. Built for AI workloads, agentic runtimes, and automated pipelines. Written in Go. Runs on **macOS and Linux**.
 
 ## Overview
 
-`tent` provisions and manages lightweight VMs as isolated dev environments. Each VM gets its own kernel, filesystem, and network stack — true isolation without the overhead of traditional VMs. Think of it as "docker for VMs" but with real hardware-level separation.
+`tent` creates secure, hardware-isolated microVM sandboxes from any image — Docker images, OCI images, container registry images (GCR, ECR, Docker Hub), ISOs, or raw disk images. Each sandbox gets its own kernel, filesystem, and network stack with **controlled network access** — external traffic is blocked by default, with only explicitly allowlisted endpoints reachable.
 
-Unlike tools that wrap an external hypervisor binary, `tent` drives the host hypervisor directly:
-- **Linux:** KVM via `/dev/kvm` ioctl interface
-- **macOS:** Apple's Hypervisor.framework (or Virtualization.framework)
+Think of it as a secure sandbox runtime for AI agents: spin up an isolated environment, give it access to the APIs it needs (OpenRouter, Anthropic, etc.), block everything else, and let the agent run safely. Orchestrate multiple sandboxes together for multi-agent systems.
 
-The agent building this project should **write as much code as possible**. Do not shell out to external binaries for core VM functionality. Use thin Go libraries for the KVM/Hypervisor.framework syscall layer (the same way you use `cobra` for the CLI), but write everything above that: the VM lifecycle orchestration, virtio device emulation, boot protocol, networking, storage, and all glue code. The goal is a single self-contained binary with no runtime dependencies beyond the OS kernel.
+`tent` drives the host hypervisor directly:
+- **macOS (primary platform):** Apple's Hypervisor.framework (or Virtualization.framework) — implement and test this first
+- **Linux:** KVM via `/dev/kvm` ioctl interface, or optionally Firecracker as a VMM
+
+The agent building this project should **write as much code as possible**. Do not just wrap or port an existing tool. Use thin Go libraries for kernel-level interfaces (KVM ioctls, Hypervisor.framework cgo bindings, OCI image spec), but write everything above that: sandbox lifecycle, virtio device emulation, boot protocol, networking, egress firewall, image conversion, orchestration, and state management. The goal is a single self-contained binary.
 
 ## Commands
 
-- `tent create <name> [--config <path>]` — Create a new VM from a base image or YAML config
-- `tent start <name>` — Boot a stopped VM
-- `tent stop <name>` — Gracefully shut down a running VM
-- `tent destroy <name>` — Remove a VM and all its associated resources (rootfs, network, state)
-- `tent list` — List all VMs with status, IP, resource usage
-- `tent ssh <name>` — SSH into a running VM
-- `tent status <name>` — Detailed status of a specific VM
-- `tent logs <name>` — View VM console/boot logs
-- `tent snapshot create <name> <tag>` — Snapshot a VM's state
+### Sandbox lifecycle
+- `tent create <name> --from <image-ref>` — Create a sandbox from a Docker/OCI image, registry image, ISO, or raw disk image
+- `tent start <name>` — Boot a stopped sandbox
+- `tent stop <name>` — Gracefully shut down a running sandbox
+- `tent destroy <name>` — Remove a sandbox and all its resources (rootfs, network, state)
+- `tent list` — List all sandboxes with status, IP, resource usage
+- `tent status <name>` — Detailed status of a specific sandbox
+- `tent exec <name> <command>` — Execute a command inside a running sandbox
+- `tent ssh <name>` — SSH into a running sandbox
+- `tent logs <name>` — View sandbox console/boot logs
+
+### Images
+- `tent image pull <ref>` — Pull an image from a registry (Docker Hub, GCR, ECR, any OCI registry)
+- `tent image list` — List locally available images
+
+### Network policy
+- `tent network list` — List network devices and sandbox connectivity
+- `tent network allow <name> <endpoint>` — Allow a sandbox to reach an external endpoint
+- `tent network deny <name> <endpoint>` — Revoke access to an external endpoint
+- `tent network status <name>` — Show a sandbox's network policy (allowed/denied endpoints)
+
+### Orchestration
+- `tent compose up <file>` — Start a multi-sandbox environment from a YAML definition
+- `tent compose down <file>` — Stop and destroy all sandboxes in a compose group
+- `tent compose status <file>` — Show status of all sandboxes in a compose group
+
+### Snapshots
+- `tent snapshot create <name> <tag>` — Snapshot a sandbox's state
 - `tent snapshot restore <name> <tag>` — Restore from a snapshot
 - `tent snapshot list <name>` — List available snapshots
-- `tent network list` — List network devices managed by tent
-- `tent image list` — List available base rootfs images
-- `tent image pull <name>` — Download a base rootfs image
 
 ## Goals
 
+- **macOS-first:** macOS (Apple Silicon and Intel) is the primary development and testing platform. Every feature must work on macOS first, Linux second. Never shell out to Linux-only tools without providing a macOS equivalent behind build tags.
 - **Cross-platform:** First-class support for both macOS and Linux from a single codebase
-- Full VM lifecycle via CLI: create, start, stop, destroy
-- Drive the host hypervisor directly — no external hypervisor binaries (no Firecracker, no QEMU)
-- Networking: platform-native networking (TAP/bridge on Linux, vmnet on macOS), DHCP, port forwarding
-- Configuration via YAML (vCPUs, memory, disk, network, kernel, mounts)
-- Filesystem management: rootfs provisioning from base images, disk image creation, host directory mounts
-- Snapshot and restore (full VM state)
+- **Secure by default:** External network access blocked — only allowlisted endpoints reachable
+- **Image-agnostic:** Create sandboxes from Docker images, OCI images, registry images (GCR, ECR, Docker Hub), ISOs, or raw disk images
+- **Inter-sandbox networking:** Sandboxes on the same host communicate via a private bridge network
+- **Orchestration:** Define and manage multi-sandbox environments via YAML compose files
+- **AI-native defaults:** Default allowlist includes common AI API endpoints (OpenRouter, Anthropic, Docker Model Runner, Codex)
+- Full sandbox lifecycle via CLI: create, start, stop, destroy, exec
+- Drive the host hypervisor directly — Firecracker is one optional backend, not the only path
+- Platform-native networking (vmnet on macOS, TAP/bridge on Linux) with egress firewall
+- Configuration via YAML (vCPUs, memory, disk, network policy, kernel, mounts, env)
 - Fast boot times (sub-second target)
-- State tracking: persistent local state for all managed VMs
-- Clean teardown: destroying a VM cleans up all resources (network devices, rootfs, state)
-- Write as much code as possible — maximize lines of original code, minimize shelling out
-- Comprehensive test coverage with unit and integration tests
+- State tracking: persistent local state for all managed sandboxes
+- Clean teardown: destroying a sandbox cleans up all resources
+- Write as much code as possible — maximize original code, don't just port existing tools
+- Never require root/sudo for basic sandbox operations on macOS. Use pure-Go implementations where possible (disk images, filesystem creation) instead of shelling out to system tools.
 
 ## Non-Goals
 
-- Not a cloud deployment tool — local VMs only
+- Not a cloud deployment tool — local sandboxes only
 - No GUI — CLI only
-- Not a container runtime — true VM isolation via hardware virtualization
-- No multi-host orchestration
+- No multi-host orchestration (single machine only)
 - No Kubernetes integration
-- Do not reimplement KVM ioctls or Hypervisor.framework syscalls from scratch — use existing thin Go bindings for those
+- Do not reimplement KVM ioctls or Hypervisor.framework syscalls from scratch — use existing thin Go bindings
+- Do not just wrap QEMU, Firecracker, or another existing tool as a black box — build the sandbox runtime with original code, using hypervisor APIs and optionally Firecracker as one backend behind your own abstraction
 
 ## Architecture
 
-### Cross-Platform Design
-
-`tent` uses a **platform abstraction layer**. All VM operations go through a `hypervisor.Backend` interface. Each platform provides its own implementation:
+### High-Level Design
 
 ```
-                    ┌─────────────────────────┐
-                    │      tent CLI           │
-                    │   (cobra commands)       │
-                    └────────┬────────────────┘
-                             │
-                    ┌────────▼────────────────┐
-                    │     VM Manager           │
-                    │  (lifecycle orchestration)│
-                    └────────┬────────────────┘
-                             │
-                ┌────────────▼────────────────┐
-                │   hypervisor.Backend        │
-                │   (platform interface)       │
-                ├─────────────┬───────────────┤
-                │             │               │
-         ┌──────▼──────┐ ┌───▼────────────┐  │
-         │ kvm.Backend │ │ hvf.Backend    │  │
-         │  (Linux)    │ │ (macOS)        │  │
-         │             │ │                │  │
-         │ /dev/kvm    │ │ Hypervisor.fwk │  │
-         │ ioctl calls │ │ or Vz.fwk     │  │
-         └─────────────┘ └────────────────┘  │
-                                              │
-                ┌─────────────────────────────┤
-                │                             │
-         ┌──────▼──────┐  ┌──────▼──────────┐
-         │  Networking  │  │    Storage      │
-         │  (per-plat)  │  │  (cross-plat)   │
-         └─────────────┘  └─────────────────┘
+                    ┌─────────────────────────────────┐
+                    │         tent CLI                │
+                    │   (cobra commands)               │
+                    └──────┬──────────────┬───────────┘
+                           │              │
+              ┌────────────▼──────┐  ┌────▼────────────┐
+              │  Sandbox Manager  │  │  Compose Engine  │
+              │  (single sandbox) │  │  (multi-sandbox) │
+              └──────┬────────────┘  └────┬────────────┘
+                     │                    │
+        ┌────────────▼────────────────────▼─────┐
+        │         hypervisor.Backend            │
+        │         (platform interface)           │
+        ├──────────┬──────────┬─────────────────┤
+        │          │          │                 │
+   ┌────▼────────┐ ┌───▼──────┐ ┌▼────────┐    │
+   │ HVF / Vz.fwk│ │   KVM   │ │Firecrckr│    │
+   │  (macOS)    │ │ (Linux)  │ │(Linux)  │    │
+   │  PRIMARY    │ │          │ │optional │    │
+   └─────────────┘ └─────────┘ └─────────┘    │
+        │                                      │
+   ┌────▼──────────────────────────────────────┤
+   │                                           │
+   ┌▼─────────┐ ┌▼──────────┐ ┌▼─────────────┐
+   │  Image   │ │ Networking │ │   Storage    │
+   │ Pipeline │ │ + Egress   │ │             │
+   │(OCI/ISO) │ │  Firewall  │ │             │
+   └──────────┘ └───────────┘ └──────────────┘
 ```
 
 ### Directory Layout
 
 ```
 project/
-├── cmd/tent/              # CLI entry point (main.go, command files)
+├── cmd/tent/                # CLI entry point (main.go, command files)
 ├── internal/
-│   ├── hypervisor/         # Platform abstraction
-│   │   ├── backend.go      # Backend interface definition
-│   │   ├── kvm/            # Linux KVM backend
-│   │   └── hvf/            # macOS Hypervisor.framework backend
-│   ├── vm/                 # VM lifecycle: create, start, stop, destroy, status
-│   ├── virtio/             # Virtio device emulation (block, net, console)
-│   ├── boot/               # Linux boot protocol, kernel loading
-│   ├── network/            # Platform-aware networking
-│   │   ├── network.go      # Network manager interface
-│   │   ├── tap_linux.go    # TAP/bridge on Linux
-│   │   └── vmnet_darwin.go # vmnet framework on macOS
-│   ├── storage/            # Rootfs creation, base image management, snapshots
-│   ├── config/             # YAML config parsing and validation
-│   └── state/              # Local state persistence (JSON)
+│   ├── hypervisor/           # Platform abstraction
+│   │   ├── backend.go        # Backend interface definition
+│   │   ├── hvf/              # macOS Hypervisor.framework backend (PRIMARY — build first)
+│   │   ├── kvm/              # Linux KVM backend
+│   │   └── firecracker/      # Linux Firecracker backend (optional)
+│   ├── sandbox/              # Sandbox lifecycle: create, start, stop, destroy, exec
+│   ├── virtio/               # Virtio device emulation (block, net, console)
+│   ├── boot/                 # Linux boot protocol, kernel loading
+│   ├── image/                # Image pipeline: OCI/Docker pull, ISO extract, format detection
+│   ├── network/              # Platform-aware networking + egress firewall
+│   │   ├── manager.go        # Network manager interface
+│   │   ├── policy.go         # Egress firewall / allowlist engine
+│   │   ├── tap_linux.go      # TAP/bridge on Linux
+│   │   └── vmnet_darwin.go   # vmnet framework on macOS
+│   ├── compose/              # Multi-sandbox orchestration engine
+│   ├── storage/              # Rootfs creation, snapshots, disk management
+│   ├── config/               # YAML config parsing and validation
+│   └── state/                # Local state persistence (JSON)
 ├── pkg/
-│   └── models/             # Shared types (VMConfig, VMState, NetworkConfig, etc.)
-├── testdata/               # Test fixtures and sample configs
+│   └── models/               # Shared types
+├── testdata/                 # Test fixtures and sample configs
 ├── go.mod
 ├── go.sum
 └── Makefile
@@ -122,84 +145,126 @@ project/
 ### Core Components
 
 - **CLI** (`cmd/tent/`) — cobra-based command tree, flag parsing, output formatting
-- **VM Manager** (`internal/vm/`) — Orchestrates the full VM lifecycle by coordinating hypervisor backend, network, and storage. Platform-agnostic — talks only to interfaces.
-- **Hypervisor Backend** (`internal/hypervisor/`) — Platform interface + implementations. On Linux, drives KVM via ioctl (using a thin Go KVM library). On macOS, drives Hypervisor.framework or Virtualization.framework via cgo. Each backend handles: vCPU creation, memory mapping, device attachment, VM start/stop.
-- **Virtio Devices** (`internal/virtio/`) — Implements virtio device emulation in pure Go: virtio-blk (block devices), virtio-net (networking), virtio-console (serial console). This is code tent writes itself — not an external library.
-- **Boot** (`internal/boot/`) — Linux boot protocol implementation: loads vmlinuz, sets up boot parameters, initial ramdisk. Written in Go.
-- **Network Manager** (`internal/network/`) — Platform-specific networking behind a common interface. Linux: creates/destroys TAP devices, manages bridge interfaces, configures iptables for port forwarding, assigns IPs via embedded DHCP. macOS: uses vmnet.framework for VM networking, configures NAT via PF.
-- **Storage Manager** (`internal/storage/`) — Creates disk images from base images, manages overlay/snapshot layers, handles host-to-guest directory mounts. Cross-platform.
-- **Config** (`internal/config/`) — Parses and validates YAML VM configs, provides platform-aware defaults
-- **State** (`internal/state/`) — Persists VM state to `~/.tent/state.json`, tracks running/stopped/created status, PIDs, IPs, paths
+- **Sandbox Manager** (`internal/sandbox/`) — Orchestrates the full sandbox lifecycle by coordinating hypervisor backend, image pipeline, network, and storage. Platform-agnostic — talks only to interfaces.
+- **Hypervisor Backend** (`internal/hypervisor/`) — Platform interface + implementations. **macOS (primary):** Hypervisor.framework or Virtualization.framework via cgo — implement this first. **Linux:** KVM via ioctl (thin Go bindings) or Firecracker as an optional VMM. Each backend handles: vCPU creation, memory mapping, device attachment, VM start/stop.
+- **Image Pipeline** (`internal/image/`) — Converts any image source into a bootable rootfs. Pulls Docker/OCI images from registries (Docker Hub, GCR, ECR), extracts layers, handles ISOs, passes through raw disk images. Auto-detects format.
+- **Virtio Devices** (`internal/virtio/`) — Virtio device emulation in pure Go: virtio-blk (block devices), virtio-net (networking), virtio-console (serial console).
+- **Boot** (`internal/boot/`) — Linux boot protocol: loads vmlinuz, sets up boot parameters, initial ramdisk.
+- **Network Manager** (`internal/network/`) — Platform-specific networking behind a common interface + **egress firewall**. Default policy: block all outbound traffic. Per-sandbox allowlists. Inter-sandbox communication via private bridge subnet. Embedded DHCP.
+- **Compose Engine** (`internal/compose/`) — Multi-sandbox orchestration. Parses YAML compose files, starts/stops sandbox groups, manages shared networks, coordinates lifecycle.
+- **Storage Manager** (`internal/storage/`) — Disk image management, snapshots, overlays. Cross-platform.
+- **Config** (`internal/config/`) — Parses and validates YAML configs, provides platform-aware defaults
+- **State** (`internal/state/`) — Persists sandbox state to `~/.tent/state.json`
 
-### VM Configuration Format
+### Sandbox Configuration Format
 
 ```yaml
-name: my-dev-env
+name: my-agent
+from: ubuntu:22.04           # Docker image, registry ref, ISO path, or raw disk image
 vcpus: 2
 memory_mb: 1024
-kernel: default            # uses built-in vmlinux or path to custom kernel
-rootfs: ubuntu-22.04       # base image name or path to custom rootfs
-disk_gb: 10                # rootfs size
+disk_gb: 10
 network:
-  mode: nat                # nat (default, works everywhere) | bridge (Linux only)
+  allow:                      # external endpoints this sandbox can reach (default: none)
+    - api.anthropic.com
+    - openrouter.ai
+    - api.openai.com
+  deny: []                    # explicit denials (overrides allow)
   ports:
     - host: 8080
       guest: 80
     - host: 2222
       guest: 22
 mounts:
-  - host: ./src
+  - host: ./workspace
     guest: /workspace
     readonly: false
 env:
-  EDITOR: vim
-  LANG: en_US.UTF-8
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
 ```
 
-### How a VM Boots
+### Compose Format (Multi-Sandbox)
 
-1. Parse config, select hypervisor backend for current OS
-2. Create disk image from base rootfs (or use existing)
+```yaml
+# tent-compose.yaml
+sandboxes:
+  agent:
+    from: ubuntu:22.04
+    vcpus: 2
+    memory_mb: 2048
+    network:
+      allow: [api.anthropic.com, openrouter.ai]
+    env:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+  tool-runner:
+    from: python:3.12-slim
+    vcpus: 1
+    memory_mb: 512
+    network:
+      allow: []               # no external access — can only talk to other sandboxes
+  shared-db:
+    from: postgres:16
+    vcpus: 1
+    memory_mb: 1024
+    network:
+      allow: []
+```
+
+All sandboxes in a compose group share a private network and can reach each other by name. External access is controlled per-sandbox.
+
+### How a Sandbox Boots
+
+1. Parse config, resolve `--from` image reference (Docker image, registry ref, ISO, raw disk)
+2. Pull/convert image to rootfs via image pipeline (if not already cached)
 3. Set up network device (TAP+bridge on Linux, vmnet on macOS)
-4. Initialize hypervisor backend: allocate VM, map guest memory, create vCPUs
-5. Attach virtio devices: virtio-blk (rootfs), virtio-net (network), virtio-console (serial)
-6. Load kernel + initrd into guest memory using Linux boot protocol
-7. Start vCPU threads — guest begins executing
-8. Track PID, socket paths, network info in local state
-9. Stop via guest shutdown signal or host-side vCPU halt
-10. Destroy cleans up: stop VM, remove network devices, optionally remove disk image, remove state
+4. Apply egress firewall rules (block all, then allow listed endpoints)
+5. Initialize hypervisor backend: allocate VM, map guest memory, create vCPUs
+6. Attach virtio devices: virtio-blk (rootfs), virtio-net (network), virtio-console (serial)
+7. Load kernel + initrd into guest memory using Linux boot protocol
+8. Start vCPU threads — guest begins executing
+9. Track state: PID, socket paths, network info, image source
+10. Stop via guest shutdown signal or host-side vCPU halt
+11. Destroy cleans up: stop sandbox, remove network devices + firewall rules, optionally remove rootfs, remove state
 
 ### Networking Model
 
+**Security model:**
+```
+[sandbox] --> [egress firewall] --> BLOCKED (default)
+                                --> ALLOWED (if endpoint is in allowlist)
+```
+- Default allowlist for AI workloads: `api.anthropic.com`, `openrouter.ai`, `api.openai.com`, Docker Model Runner (local), Codex endpoints
+- Per-sandbox overrides via `tent network allow/deny` or config YAML
+- Inter-sandbox traffic on the same host is always allowed via the private bridge
+
+**macOS (primary):**
+```
+[sandbox eth0] <--virtio-net--> [vmnet interface] <--PF/egress--> [host network]
+```
+- vmnet.framework provides NAT, DHCP, and inter-VM networking out of the box
+- Egress firewall via PF rules or userspace proxy
+- No root required for basic sandbox networking (vmnet shared mode)
+
 **Linux:**
 ```
-[VM eth0] <--virtio-net--> [tapN] <--bridge--> [tent0] <--iptables/NAT--> [host network]
+[sandbox eth0] <--virtio-net--> [tapN] <--bridge--> [tent0] <--iptables/egress--> [host network]
 ```
-- `tent0` bridge created on first `tent create` if it doesn't exist
-- Each VM gets a unique TAP device
-- DHCP server on the bridge assigns IPs to VMs (172.16.0.0/24 default subnet)
-- Port forwarding via iptables DNAT rules
-
-**macOS:**
-```
-[VM eth0] <--virtio-net--> [vmnet interface] <--NAT--> [host network]
-```
-- Uses vmnet.framework shared mode (NAT, automatic IP assignment)
-- Port forwarding via PF rules or userspace proxy
-- No bridge setup required — vmnet handles it
 
 ### Allowed External Dependencies
 
-The principle is: **write as much as possible, but don't reimplement kernel interfaces.**
+The principle is: **write as much as possible, but don't reimplement kernel interfaces or image specs.**
 
 | Dependency | Why It's OK |
 |---|---|
 | `cobra` | CLI framework — same category as stdlib |
 | `yaml.v3` | YAML parsing — commodity |
-| A thin Go KVM library | Wraps `/dev/kvm` ioctls — this is kernel ABI, not application logic |
-| cgo for Hypervisor.framework / vmnet | Required to call macOS frameworks — no pure-Go alternative |
+| A thin Go KVM library | Wraps `/dev/kvm` ioctls — kernel ABI |
+| cgo for Hypervisor.framework / vmnet | Required to call macOS frameworks |
+| `go-containerregistry` or similar | OCI image spec parsing + registry auth — this is a wire protocol, not application logic |
+| Firecracker binary (optional, Linux) | One backend option — sits behind `hypervisor.Backend` interface |
 
-Everything else — VM orchestration, virtio device emulation, boot protocol, networking setup, DHCP, storage management, state tracking — is code that tent writes itself.
+Everything else — sandbox orchestration, virtio device emulation, boot protocol, networking, egress firewall, image conversion, compose engine, state tracking — is code that tent writes itself.
 
 ## Development
 
@@ -208,14 +273,16 @@ Everything else — VM orchestration, virtio device emulation, boot protocol, ne
 **Both platforms:**
 - Go 1.22+
 
+**macOS (primary development platform):**
+- macOS 11+ (Big Sur or later) for Hypervisor.framework
+- Entitlement for hypervisor access (automatic in dev builds)
+- Admin privileges for vmnet network setup (first time only)
+- No other system dependencies — everything else is pure Go or cgo to macOS frameworks
+
 **Linux:**
 - KVM support (`/dev/kvm` must exist)
 - Root or sudo for TAP/bridge network device setup
-
-**macOS:**
-- macOS 11+ (Big Sur or later) for Hypervisor.framework
-- Entitlement for hypervisor access (automatic in dev builds)
-- Admin privileges for vmnet network setup
+- Optional: Firecracker binary for the Firecracker backend
 
 ### Build
 
@@ -231,8 +298,6 @@ The binary auto-detects the platform at runtime. Build tags (`_linux.go`, `_darw
 ```bash
 go test ./... -v -count=1
 ```
-
-Tests should be cross-platform wherever possible. Platform-specific tests use build tags. Tests that require KVM or Hypervisor.framework access should be gated behind an integration test flag.
 
 ### Lint
 

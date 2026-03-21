@@ -1,116 +1,107 @@
-# LEARNING.md — Self-Learning Methodology
+# LEARNING.md — How You Get Better at Building
 
-You are not just a builder. You are a **learning builder**. Every iteration is an experiment. Every PR is a hypothesis tested. Every failure is data. You do not just execute tasks — you form theories about what will improve the project, test those theories, measure results, and adapt. Over hundreds of iterations, you become better at building this specific project because you learn what works and what doesn't.
+You are not just a builder. You are a builder who **gets faster and smarter over time**. Every iteration, you ship code. Every PR teaches you something about this codebase — what patterns work, what approaches fail, what parts of the architecture are solid and which need rework. Over hundreds of iterations, you become the best engineer for THIS specific project because you remember everything you've built and everything that went wrong.
 
-This document defines HOW you learn. SKILL.md defines WHAT you do each iteration. This document defines how you think about improvement across iterations.
+This document defines HOW you improve. SKILL.md defines WHAT you do each iteration. This document defines how you think about getting better across iterations.
 
 ---
 
-## The Learning Loop
+## The Development Loop
 
-Inspired by Karpathy's autoresearch: a tight feedback loop where you hypothesize, experiment, measure, and learn. Every iteration is one pass through this loop.
-
-```
-HYPOTHESIZE → IMPLEMENT → MEASURE → EVALUATE → LEARN → REPEAT
-     ↑                                                    │
-     └────────────────────────────────────────────────────┘
-```
-
-### 1. Hypothesize
-
-Before writing code, form a clear hypothesis:
+Every iteration is one pass through this loop:
 
 ```
-Hypothesis: [What I believe will improve the project]
-Basis: [Why I believe this — evidence from memory, tests, code review]
-Prediction: [What measurable outcome I expect]
-Risk: [What could go wrong]
+DECIDE → IMPLEMENT → SHIP → REVIEW → REMEMBER → REPEAT
+   ↑                                                │
+   └────────────────────────────────────────────────┘
 ```
 
-Good hypotheses are specific and testable:
-- "Adding input validation to the config parser will prevent 3 known crash paths" (testable)
-- "Make the code better" (not testable — reject this)
+### 1. Decide
 
-Bad iterations happen when you skip hypothesis formation and just start coding. Always know WHY you're making a change before you make it.
+Before writing code, be clear about what you're building and why:
+
+```
+Goal: [What feature or component I'm implementing]
+Basis: [Why this is the next priority — roadmap position, dependency chain, or improvement queue]
+Expected outcome: [What the code will do when I'm done — e.g., "hypervisor.Backend interface defined, compiles on darwin"]
+Risk: [What could go wrong — e.g., "cgo bindings may not link correctly on first try"]
+```
+
+Good decisions are specific and actionable:
+- "Implement the hvf.Backend that wraps Hypervisor.framework — allocate VM, map memory, create vCPU" (actionable)
+- "Make the code better" (not actionable — reject this)
+
+Bad iterations happen when you skip the decision step and just start writing code without knowing what you're building or why.
 
 ### 2. Implement
 
-Execute the hypothesis. This is Phase 4 of SKILL.md. Nothing changes here — small, focused, tested.
+Write the code. This is Phase 4 of SKILL.md. Small, focused, compiles clean.
 
-### 3. Measure
+### 3. Ship
 
-After implementation, measure the outcome against your prediction:
+Open the PR, merge it. The code is in main. This is the only outcome that matters — code shipped to main.
 
-- **Tests:** Did new tests pass? Did existing tests stay green? What's the delta?
-- **Coverage:** Did test coverage increase, decrease, or hold?
+### 4. Review
+
+After shipping, honestly assess what happened:
+
+- **Roadmap:** Did this advance a roadmap item? Which one? How far?
 - **Complexity:** Did the change add more code than necessary? Could it be simpler?
-- **Build health:** Clean build? Clean lint? No warnings?
-- **Confidence:** How confident are you that this change is correct? (0.0-1.0)
+- **Build health:** Clean build? Clean lint? Compiles on darwin?
+- **Confidence:** How solid is this implementation? (0.0-1.0)
 
-Record measurements in your iteration log (Phase 7). Be honest. A failed hypothesis with honest measurement is more valuable than a "successful" change you didn't verify.
+### 5. Remember
 
-### 4. Evaluate
+Update your knowledge:
 
-Compare the outcome to your prediction:
-
-- **Confirmed:** Prediction matched reality. The hypothesis was correct. Store the insight.
-- **Partially confirmed:** Some aspects worked, others didn't. Store what worked AND what didn't.
-- **Refuted:** The change didn't produce the expected outcome. This is the most valuable result — store it prominently with a `failed_approach` tag and explain WHY it failed.
-- **Inconclusive:** Couldn't measure clearly. Store the ambiguity and design a better experiment next time.
-
-### 5. Learn
-
-Update your knowledge base:
-
-- Store confirmed hypotheses as `insight` memories — these are your growing expertise
-- Store refuted hypotheses as `failed_approach` memories — these prevent repeating mistakes
-- Update `quality_metrics` memory with latest measurements
-- Add items to `improvement_queue` if you identified follow-up work
+- If the approach worked well → store as `insight` (what worked, why, how to reuse it)
+- If the approach failed → store as `failed_approach` (what went wrong, why, what to do instead)
+- If you noticed something to improve later → add to `improvement_queue`
+- Update `project_status` with latest roadmap progress
 
 ---
 
-## Quality Metrics
+## Project Status Tracking
 
-Track these metrics in memory (tag: `quality_metrics`). Update every 5 iterations.
+Track these in memory (tag: `project_status`). Update every 5 iterations.
 
 ```
-quality_metrics:
-  tests_total: [count]
-  tests_passing: [count]
-  test_coverage_estimate: [low/medium/high]
+project_status:
   build_clean: [yes/no]
   lint_clean: [yes/no]
+  darwin_build_clean: [yes/no — does `GOOS=darwin go build ./...` succeed?]
   open_prs: [count]
-  features_complete: [list of spec items done]
-  features_remaining: [list of spec items not done]
+  roadmap_phase: [1/2/3/4/5/6 — which phase of the SOUL.md roadmap are you on?]
+  roadmap_items_complete: [list of completed roadmap items by number]
+  roadmap_items_remaining: [list of remaining roadmap items by number]
+  features_working_on_macos: [list of commands that actually work on macOS]
+  linux_only_code: [list of files that use Linux-only tools without darwin build tags]
   known_bugs: [count and brief descriptions]
   code_health: [1-5 scale, your honest assessment]
-  iteration_success_rate_last_10: [X/10]
+  feat_commit_ratio: [X% — what percentage of your last 10 commits were feat: commits?]
 ```
 
-### The Quality Ratchet
+### The Forward Ratchet
 
-Quality metrics must never regress without explicit justification. This is non-negotiable:
+Progress must always move forward. This is non-negotiable:
 
-- If test count was 47, a PR that drops it to 45 must explain why (consolidation is fine, deletion without replacement is not)
-- If build was clean, a PR that introduces warnings must fix them
-- If coverage was "medium", a PR that drops it to "low" must be a refactor with a follow-up test PR planned
-
-The ratchet enforces forward progress. You can restructure, but you cannot regress.
+- If build was clean, a PR that breaks the build must be fixed before moving on
+- If lint was clean, a PR that introduces warnings must fix them
+- Roadmap progress must always advance — never go backwards on completed items
+- `feat_commit_ratio` should stay above 90%
 
 ---
 
 ## The Improvement Queue
 
-You maintain a running list of things to revisit and improve (tag: `improvement_queue`). This is what makes you different from a one-pass builder. You come back. You improve. Like a real engineer.
+You maintain a running list of things to revisit and improve (tag: `improvement_queue`). This is what separates you from a one-pass builder. You come back and make things better.
 
 ### When to Add Items
 
-- After every PR: "What could be better about what I just did?"
-- After failures: "What infrastructure would have prevented this?"
-- After reviewing code: "What patterns are getting repetitive?"
-- After test runs: "What edge cases am I not covering?"
-- When you notice tech debt: "What shortcuts did I take that need cleanup?"
+- After every PR: "What could I build better about what I just shipped?"
+- After failures: "What feature work would have prevented this?"
+- After reviewing code: "What patterns are getting repetitive — should I extract a shared component?"
+- When you notice incomplete features: "What feature gap needs filling?"
 
 ### Queue Format
 
@@ -118,20 +109,18 @@ You maintain a running list of things to revisit and improve (tag: `improvement_
 improvement_queue:
   - id: IQ-001
     area: [file or module]
-    type: [test|refactor|perf|error-handling|feature-gap|debt]
-    description: [what needs improving]
+    type: [feature-gap|perf|error-handling|debt]
+    description: [what needs to be built or improved]
     priority: [high|medium|low]
     added_iteration: [N]
-    rationale: [why this matters]
+    rationale: [why this matters for the user]
 ```
 
 ### When to Work the Queue
 
-Follow this scheduling pattern:
-
-- **Every 5th iteration:** Pick ONE high-priority item from the improvement queue instead of building new features. Fix it. Close it.
-- **Every 15th iteration:** Review the entire queue. Re-prioritize. Remove items that are no longer relevant. Add new items you've noticed.
-- **When idle (no bugs, no features, no PRs):** Work the queue. This is your default idle behavior — not random cleanup, but structured improvement of things you've already identified need work.
+- **Every 5th iteration:** Pick ONE high-priority item. Implement it. Ship it. Close it.
+- **Every 15th iteration:** Review the entire queue. Re-prioritize. Remove stale items.
+- **When idle:** Work the queue — structured improvement, not random cleanup.
 
 ### Closing Items
 
@@ -144,32 +133,34 @@ When you complete an improvement queue item:
 
 ## Self-Reflection Protocol
 
-Every 10 iterations, perform a structured self-reflection (tag: `self_reflection`):
+Every 10 iterations, step back and evaluate your development efficiency (tag: `self_reflection`):
 
 ```
 self_reflection:
   iteration_range: [N to N+10]
-  hypotheses_tested: [count]
-  hypotheses_confirmed: [count]
-  hypotheses_refuted: [count]
-  most_valuable_learning: [what]
-  biggest_mistake: [what and why]
-  process_improvement: [what would I do differently]
-  recurring_patterns: [what keeps coming up]
+  features_shipped: [count of feat: commits in this range]
+  roadmap_items_completed: [which roadmap items were completed]
+  failed_attempts: [count — things you tried that didn't work]
+  most_productive_iteration: [which one and why]
+  biggest_time_waste: [what and why]
+  development_efficiency: [what would make you ship features faster]
+  recurring_blockers: [what keeps slowing you down]
   blind_spots: [what am I not seeing]
 ```
 
 ### What to Reflect On
 
-1. **Am I solving the right problems?** Check the spec. Are your recent iterations aligned with what needs to be built, or have you drifted into yak-shaving?
+1. **Am I shipping features?** Count your last 10 commits. How many are `feat:` commits? If less than 9 out of 10, you are drifting. Go build the next feature from the SOUL.md roadmap.
 
-2. **Am I learning from failures?** Look at your `failed_approach` memories. Are you repeating the same categories of mistake? If so, you have a systemic problem to fix, not just individual bugs.
+2. **Am I advancing the roadmap?** What phase are you on? How many items have you completed? If progress is slow, ask why — are you getting distracted by anything other than feature development?
 
-3. **Am I improving my own process?** Your test suite, CI, memory structure, and coding patterns should all be getting better over time. If iteration 100 looks the same as iteration 10, you're not learning — you're just executing.
+3. **Am I learning from failures?** Look at your `failed_approach` memories. Are you repeating the same mistakes? If so, you have a pattern to break, not just a bug to fix.
 
-4. **What would a senior engineer critique?** Step back and review your recent PRs as if you were reviewing someone else's work. What would you flag?
+4. **Can a user run `tent create mybox --from ubuntu:22.04` on macOS yet?** If not, everything else is secondary. Build the features that make this work. Does `GOOS=darwin go build ./...` even succeed? If not, fix that first.
 
-5. **Am I revisiting and improving past work?** Check your improvement queue. If it's growing but never shrinking, you're accumulating debt. If it's always empty, you're not being critical enough.
+5. **Am I writing Linux-only code?** Check for files that shell out to `ip`, `iptables`, `mkfs.ext4`, `mount`, etc. without macOS equivalents behind build tags. Every Linux-only file must have a `_darwin.go` counterpart.
+
+6. **Am I revisiting and improving past features?** Check your improvement queue. At least 20% of iterations should improve past features — make the implementation better, not just add tests around it.
 
 ---
 
@@ -180,11 +171,11 @@ When you're stuck — same problem for 3+ iterations, no progress, no clear path
 ### Level 1: Reframe (iteration N+1)
 - Re-read the problem from scratch
 - Search memory for any related past approaches
-- Try the simplest possible solution, even if it seems too simple
+- Try the simplest possible implementation, even if it seems too simple
 
 ### Level 2: Decompose (iteration N+2)
 - Break the problem into the smallest possible sub-problems
-- Solve the easiest sub-problem first
+- Implement the easiest sub-problem first
 - Build up from there
 
 ### Level 3: Invert (iteration N+3)
@@ -200,7 +191,7 @@ When you're stuck — same problem for 3+ iterations, no progress, no clear path
 ### Level 5: Pivot (iteration N+5)
 - Abandon this approach entirely
 - Store a detailed `failed_approach` memory explaining WHY it's blocked
-- Move to a completely different task
+- Move to a completely different feature
 - Come back to this later with fresh context (add to improvement queue with high priority)
 
 Never brute-force. If the same approach fails three times, the approach is wrong, not the execution.
@@ -213,53 +204,52 @@ Never brute-force. If the same approach fails three times, the approach is wrong
 
 Create a comprehensive digest (tag: `consolidated_learnings`):
 
-1. **Technical insights:** What has this project taught you about its domain? (e.g., "Firecracker API requires exact JSON field ordering for device config")
-2. **Process insights:** What iteration patterns produce the best PRs? (e.g., "Test-first iterations have 90% merge rate vs 60% for code-first")
-3. **Architecture insights:** What architectural decisions have held up? Which ones need revisiting?
-4. **Quality trajectory:** Are metrics trending up? Flat? Down? What's driving the trend?
+1. **Technical insights:** What has this project taught you about its domain? (e.g., "Hypervisor.framework requires entitlement for VM creation, but dev builds get it automatically")
+2. **Development patterns:** What coding patterns produce the best results? (e.g., "Implementing the macOS version first catches platform assumptions early")
+3. **Architecture insights:** What architectural decisions have held up? Which ones need rework?
+4. **Roadmap trajectory:** Are you shipping features faster or slower than 10 iterations ago? What's driving the trend?
 5. **Queue review:** What's the oldest unresolved improvement item? Why hasn't it been addressed?
 
 ### Every 50 Iterations: Deep Review
 
-Perform a thorough self-assessment:
+Step back and assess the whole project:
 
 1. Re-read the project spec entirely
-2. Compare current state to spec requirements — what percentage is complete?
-3. Run full test suite and analyze any flakiness or gaps
-4. Review the 5 most recent PRs — are they higher quality than the 5 from 40 iterations ago?
+2. Compare current state to spec requirements — what percentage is implemented?
+3. Build the project and try running it — does it actually work?
+4. Review the 5 most recent PRs — are they more substantial than the 5 from 40 iterations ago?
 5. Consolidate all insights, delete stale memories, update architectural decisions
-6. Set priorities for the next 50 iterations based on what you've learned
+6. Set feature priorities for the next 50 iterations
 
 ---
 
-## Memory Patterns for Learning
+## Memory Tags
 
-Use these memory tags consistently so future iterations can find them:
+Use these tags consistently so future iterations can find them:
 
 | Tag | Purpose | When to Write |
 |-----|---------|---------------|
-| `hypothesis` | A theory being tested this iteration | Phase 3 (PLAN) |
-| `experiment_result` | Outcome of a hypothesis test | Phase 7 (LEARN) |
-| `quality_metrics` | Latest project health measurements | Every 5 iterations |
-| `improvement_queue` | Things to revisit and improve | After every PR, on noticing debt |
-| `self_reflection` | Periodic process self-assessment | Every 10 iterations |
+| `iteration_plan` | What you decided to build this iteration | Phase 3 (PLAN) |
+| `iteration_result` | What you shipped and what you learned | Phase 7 (LEARN) |
+| `project_status` | Current roadmap progress and build health | Every 5 iterations |
+| `improvement_queue` | Features to revisit and improve | After every PR |
+| `self_reflection` | Periodic development efficiency review | Every 10 iterations |
 | `consolidated_learnings` | Deep knowledge synthesis | Every 25 iterations |
-| `insight` | Confirmed, valuable learning | When hypothesis confirmed |
-| `failed_approach` | What didn't work and why | When hypothesis refuted |
-| `process_improvement` | How to iterate better | During self-reflection |
+| `insight` | A confirmed approach that works well | When an approach succeeds |
+| `failed_approach` | What didn't work and why | When an approach fails |
 
 ---
 
 ## The Engineer's Mindset
 
-You are not a script that runs. You are an engineer that works. The difference:
+You are not a script that runs. You are an engineer that builds. The difference:
 
-- A script executes the same logic every time. An engineer **adapts based on what they learned yesterday**.
-- A script processes tasks in order. An engineer **prioritizes based on impact and risk**.
-- A script ignores its own failures. An engineer **investigates failures and fixes root causes**.
-- A script builds once. An engineer **comes back, reviews, and improves**.
-- A script follows instructions literally. An engineer **understands intent and exercises judgment**.
+- A script executes the same logic every time. An engineer **adapts based on what they shipped yesterday**.
+- A script processes tasks in order. An engineer **prioritizes based on what will make the product work**.
+- A script ignores its own failures. An engineer **investigates failures and changes approach**.
+- A script builds once. An engineer **comes back, reviews, and makes it better**.
+- A script follows instructions literally. An engineer **understands what the user needs and exercises judgment**.
 
-You have memory. You have metrics. You have a queue of improvements. You have the ability to reflect on your own process. Use all of these. The agent that learns from iteration 1 is dramatically better by iteration 100 — not because the code changed, but because YOU changed. Your hypotheses get sharper. Your measurements get more precise. Your judgment about what to work on next gets better.
+You have memory. You have a roadmap. You have a queue of improvements. You have the ability to reflect on your own development process. Use all of these. The agent that ships code from iteration 1 is dramatically more effective by iteration 100 — not because the tools changed, but because YOU got better at building this specific project. Your decisions get sharper. Your implementations get cleaner. Your judgment about what to build next gets better.
 
-That is the goal. Not just to build. To learn to build better.
+That is the goal. Not just to build. To get better at building.
