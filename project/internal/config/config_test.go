@@ -1,7 +1,10 @@
 package config
 
 import (
+	"os"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestDefaultConfig(t *testing.T) {
