@@ -142,10 +142,17 @@ services:
       - /bin/sh
       - -c
       - |
+        # Build runtime config with actual API key (avoids leaking key into mounted host file)
+        mkdir -p /tmp/openclaw-home/.openclaw
+        sed "s/__OPENROUTER_API_KEY__/$${OPENROUTER_API_KEY}/g" \
+          /home/node/.openclaw/openclaw.json > /tmp/openclaw-home/.openclaw/openclaw.json
+        # Carry over git identity from the image
+        cp /home/node/.gitconfig /tmp/openclaw-home/.gitconfig 2>/dev/null || true
+        export HOME=/tmp/openclaw-home
         # Configure git to authenticate via GITHUB_TOKEN (same approach as GitHub Actions)
         git config --global url."https://x-access-token:$${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
         echo "Starting gateway..."
-        exec node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
+        exec node /app/openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
     healthcheck:
       test:
         [
