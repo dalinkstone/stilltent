@@ -684,7 +684,15 @@ def extract_text_from_response(response: dict) -> str:
         { "choices": [{ "message": { "content": "..." } }] }
     """
     try:
-        return response["choices"][0]["message"]["content"]
+        content = response["choices"][0]["message"]["content"]
+        # Handle empty or whitespace-only responses
+        if content is None or content.strip() == "":
+            log(
+                "Agent returned empty/whitespace-only response",
+                logging.WARNING,
+            )
+            return ""
+        return content
     except (KeyError, IndexError, TypeError):
         # Fallback: stringify the whole thing so regex can still search it
         return json.dumps(response)
@@ -698,10 +706,24 @@ def response_indicates_success(response: dict) -> bool:
     unparseable summaries are treated as failures to prevent silent failures
     from being counted as successes.
     
-    Additional heuristic: If the agent sends any tools (tool_calls), count as success.
+    Additional heuristics for success:
+      - If the agent sends any tools (tool_calls), count as success
+      - If response text is non-empty but no JSON summary found, count as partial success
     """
     text = extract_text_from_response(response)
     usage = response.get("usage", {})
+    
+    # Check for tool calls - this is strong evidence the agent did work
+    choices = response.get("choices", [])
+    if choices:
+        message = choices[0].get("message", {})
+        tool_calls = message.get("tool_calls", [])
+        if tool_calls and len(tool_calls) > 0:
+            log(
+                f"Agent executed {len(tool_calls)} tool_call(s) — counting as success",
+                logging.INFO,
+            )
+            return True
     
     # If usage shows tokens were processed, that's a strong indicator of work done
     prompt_tokens = usage.get("prompt_tokens", 0)
@@ -726,7 +748,7 @@ def response_indicates_success(response: dict) -> bool:
         pass
 
     # No valid JSON summary found — do NOT assume success
-    # UNLESS we have evidence of actual work (tokens processed or tool calls)
+    # UNLESS we have evidence of actual work (tokens processed, tool calls, or text content)
     if has_tokens:
         log(
             "No JSON summary but tokens were processed — counting as partial success",
@@ -734,9 +756,17 @@ def response_indicates_success(response: dict) -> bool:
         )
         return True
     
+    # Check if agent sent non-empty text response
+    if text and len(text.strip()) > 0:
+        log(
+            "No JSON summary but non-empty text response received — counting as partial success",
+            logging.INFO,
+        )
+        return True
+    
     log(
-        "No JSON summary with 'result' field found in agent response "
-        "and no token usage — counting as failure to prevent silent failures",
+        "No JSON summary with 'result' field found in agent response, "
+        "no token usage, and no text content — counting as failure to prevent silent failures",
         logging.WARNING,
     )
     return False
