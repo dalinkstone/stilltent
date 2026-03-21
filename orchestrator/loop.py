@@ -6,6 +6,14 @@ Sends trigger prompts to the OpenClaw gateway on a configurable interval,
 monitors for hangs (via timeout), tracks success/failure metrics, and
 auto-pauses after too many consecutive failures.
 
+Designed for multi-day unattended runs (3-5 days). Features:
+  - Exponential backoff on consecutive failures (caps at 1 hour)
+  - Scheduled shutdown after TOTAL_RUNTIME_HOURS
+  - Periodic health summaries every 50 iterations
+  - Cooldown between iterations to avoid API hammering
+  - Retry wrapper on HTTP calls (3 retries on connection/5xx errors)
+  - Dual logging to stdout and workspace/orchestrator.log
+
 The orchestrator does NOT make decisions — the agent (via SKILL.md) makes
 all decisions. This script only:
 
@@ -13,7 +21,7 @@ all decisions. This script only:
   2. Sends a trigger prompt to the OpenClaw gateway
   3. Waits for the response (with a timeout)
   4. Logs the result and writes metrics
-  5. Sleeps for the configured interval
+  5. Sleeps for the configured cooldown
   6. Repeats
 
 Uses ONLY the Python standard library (no pip dependencies).
@@ -25,8 +33,10 @@ Usage:
 Environment variables:
     OPENCLAW_URL               OpenClaw gateway URL (default: http://openclaw-gateway:18789)
     LOOP_INTERVAL              Seconds between iterations (default: 60)
+    COOLDOWN_SECONDS           Cooldown pause between iterations (default: 30)
     ITERATION_TIMEOUT          Max seconds per iteration (default: 600)
-    MAX_CONSECUTIVE_FAILURES   Pause after this many failures (default: 10)
+    MAX_CONSECUTIVE_FAILURES   Pause after this many failures (default: 25)
+    TOTAL_RUNTIME_HOURS        Graceful shutdown after this many hours (default: 120)
     WORKSPACE_DIR              Path to workspace (default: /workspace)
     LOG_FILE                   Path to log file (default: /workspace/orchestrator.log)
     OPENCLAW_GATEWAY_TOKEN     Bearer token for the gateway (optional)
@@ -55,12 +65,18 @@ from pathlib import Path
 OPENCLAW_URL = os.environ.get("OPENCLAW_URL", "http://openclaw-gateway:18789")
 
 LOOP_INTERVAL = int(os.environ.get("LOOP_INTERVAL", "60"))
+COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "30"))
 ITERATION_TIMEOUT = int(os.environ.get("ITERATION_TIMEOUT", "600"))
-MAX_CONSECUTIVE_FAILURES = int(os.environ.get("MAX_CONSECUTIVE_FAILURES", "10"))
+MAX_CONSECUTIVE_FAILURES = int(os.environ.get("MAX_CONSECUTIVE_FAILURES", "25"))
+TOTAL_RUNTIME_HOURS = float(os.environ.get("TOTAL_RUNTIME_HOURS", "120"))
 WORKSPACE_DIR = Path(os.environ.get("WORKSPACE_DIR", "/workspace"))
 LOG_FILE = Path(os.environ.get("LOG_FILE", str(WORKSPACE_DIR / "orchestrator.log")))
 OPENCLAW_GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 TARGET_REPO = os.environ.get("TARGET_REPO", "")
+
+# HTTP retry settings for the OpenClaw gateway call
+HTTP_RETRY_COUNT = 3
+HTTP_RETRY_DELAY = 10  # seconds between retries
 
 # =============================================================================
 # Logging — dual output to stdout (for `docker logs`) and a log file
@@ -118,6 +134,8 @@ _metrics = {
     "last_iteration_at": None,
     "uptime_seconds": 0,
     "status": "starting",
+    "total_prompt_tokens": 0,
+    "total_completion_tokens": 0,
 }
 _start_time = time.monotonic()
 
@@ -132,6 +150,8 @@ def _load_metrics():
             _metrics["total_iterations"] = saved.get("total_iterations", 0)
             _metrics["successful_iterations"] = saved.get("successful_iterations", 0)
             _metrics["failed_iterations"] = saved.get("failed_iterations", 0)
+            _metrics["total_prompt_tokens"] = saved.get("total_prompt_tokens", 0)
+            _metrics["total_completion_tokens"] = saved.get("total_completion_tokens", 0)
             log(f"Resumed metrics: {_metrics['total_iterations']} prior iterations")
         except (json.JSONDecodeError, OSError) as exc:
             log(f"Could not load prior metrics: {exc}", logging.WARNING)
@@ -163,6 +183,74 @@ def write_metrics(iteration: int, consecutive_failures: int):
 
 
 # =============================================================================
+# Token tracking & spend estimation
+# =============================================================================
+
+def _extract_token_usage(response: dict):
+    """Extract token counts from the OpenAI-compatible response and accumulate."""
+    usage = response.get("usage", {})
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    _metrics["total_prompt_tokens"] += prompt_tokens
+    _metrics["total_completion_tokens"] += completion_tokens
+    return prompt_tokens, completion_tokens
+
+
+def _estimate_spend() -> str:
+    """Rough spend estimate based on accumulated token counts.
+
+    Uses approximate OpenRouter pricing for typical models:
+      - Prompt:     $3.00 / 1M tokens
+      - Completion: $15.00 / 1M tokens
+    These are rough estimates — actual prices vary by model.
+    """
+    prompt_cost = (_metrics["total_prompt_tokens"] / 1_000_000) * 3.00
+    completion_cost = (_metrics["total_completion_tokens"] / 1_000_000) * 15.00
+    total = prompt_cost + completion_cost
+    return f"${total:.2f}"
+
+
+# =============================================================================
+# Periodic health logging
+# =============================================================================
+
+def log_health_summary(iteration: int):
+    """Log a health summary every 50 iterations."""
+    elapsed_hours = (time.monotonic() - _start_time) / 3600
+    success_rate = (
+        _metrics["successful_iterations"] / iteration * 100 if iteration > 0 else 0.0
+    )
+    total_tokens = _metrics["total_prompt_tokens"] + _metrics["total_completion_tokens"]
+    spend = _estimate_spend()
+
+    log("=" * 60)
+    log(f"HEALTH SUMMARY (every 50 iterations)")
+    log(f"  Total iterations:    {iteration}")
+    log(f"  Successful:          {_metrics['successful_iterations']}")
+    log(f"  Failed:              {_metrics['failed_iterations']}")
+    log(f"  Success rate:        {success_rate:.1f}%")
+    log(f"  Wall-clock hours:    {elapsed_hours:.1f}h")
+    log(f"  Total tokens used:   {total_tokens:,}")
+    log(f"  Estimated spend:     {spend}")
+    log("=" * 60)
+
+
+# =============================================================================
+# Exponential backoff
+# =============================================================================
+
+def backoff_delay(consecutive_failures: int) -> float:
+    """Calculate exponential backoff delay after consecutive failures.
+
+    Returns min(60 * 2^N, 3600) seconds — caps at 1 hour.
+    """
+    if consecutive_failures <= 0:
+        return 0
+    delay = min(60 * (2 ** consecutive_failures), 3600)
+    return delay
+
+
+# =============================================================================
 # Prompt builder
 # =============================================================================
 
@@ -190,18 +278,28 @@ def build_prompt(iteration: int) -> str:
 # OpenClaw gateway communication
 # =============================================================================
 
+def _is_retryable_error(exc: Exception) -> bool:
+    """Check if an exception is a retryable connection error or 5xx."""
+    if isinstance(exc, urllib.error.URLError):
+        # Connection refused, DNS failure, timeout, etc.
+        return True
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    if isinstance(exc, RuntimeError) and "HTTP 5" in str(exc):
+        return True
+    return False
+
+
 def send_to_openclaw(prompt: str, timeout: int) -> dict:
     """Send a prompt to the OpenClaw gateway and return the parsed response.
 
-    The gateway exposes an OpenAI-compatible chat completions endpoint at
-    /v1/chat/completions. Adjust the URL, model name, or payload structure
-    if your OpenClaw version uses a different API shape.
+    Retries up to HTTP_RETRY_COUNT times on connection errors or 5xx responses
+    with HTTP_RETRY_DELAY seconds between attempts.
 
-    Things you may need to change:
-      - OPENCLAW_URL: container hostname vs localhost
-      - The model field: must match a model configured in OpenClaw
-      - Auth: set OPENCLAW_GATEWAY_TOKEN if the gateway requires a bearer token
-      - Session management: OpenClaw may support session IDs for context
+    The gateway exposes an OpenAI-compatible chat completions endpoint at
+    /v1/chat/completions.
     """
     url = f"{OPENCLAW_URL}/v1/chat/completions"
 
@@ -216,21 +314,54 @@ def send_to_openclaw(prompt: str, timeout: int) -> dict:
     if OPENCLAW_GATEWAY_TOKEN:
         headers["Authorization"] = f"Bearer {OPENCLAW_GATEWAY_TOKEN}"
 
-    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    last_exc = None
 
-    try:
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        body = resp.read().decode("utf-8")
-        return json.loads(body)
-    except urllib.error.HTTPError as exc:
-        body = ""
+    for attempt in range(1, HTTP_RETRY_COUNT + 1):
         try:
-            body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        raise RuntimeError(
-            f"OpenClaw returned HTTP {exc.code}: {body[:500]}"
-        ) from exc
+            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            body = resp.read().decode("utf-8")
+            return json.loads(body)
+
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+
+            if exc.code >= 500 and attempt < HTTP_RETRY_COUNT:
+                log(
+                    f"  Retry {attempt}/{HTTP_RETRY_COUNT}: HTTP {exc.code} "
+                    f"— waiting {HTTP_RETRY_DELAY}s",
+                    logging.WARNING,
+                )
+                last_exc = RuntimeError(
+                    f"OpenClaw returned HTTP {exc.code}: {body[:500]}"
+                )
+                time.sleep(HTTP_RETRY_DELAY)
+                continue
+
+            raise RuntimeError(
+                f"OpenClaw returned HTTP {exc.code}: {body[:500]}"
+            ) from exc
+
+        except (urllib.error.URLError, ConnectionError, OSError) as exc:
+            if attempt < HTTP_RETRY_COUNT:
+                log(
+                    f"  Retry {attempt}/{HTTP_RETRY_COUNT}: {type(exc).__name__}: {exc} "
+                    f"— waiting {HTTP_RETRY_DELAY}s",
+                    logging.WARNING,
+                )
+                last_exc = exc
+                time.sleep(HTTP_RETRY_DELAY)
+                continue
+            raise
+
+    # Should not reach here, but just in case
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("send_to_openclaw: exhausted retries with no result")
 
 
 def extract_text_from_response(response: dict) -> str:
@@ -293,17 +424,38 @@ signal.signal(signal.SIGINT, _handle_signal)
 
 
 # =============================================================================
+# Interruptible sleep helper
+# =============================================================================
+
+def _interruptible_sleep(seconds: float):
+    """Sleep in small increments so we can respond to signals promptly."""
+    remaining = seconds
+    while remaining > 0 and not _shutdown_requested:
+        chunk = min(remaining, 5)
+        time.sleep(chunk)
+        remaining -= chunk
+
+
+# =============================================================================
 # Main loop
 # =============================================================================
 
 def main():
     """Entry point: run the orchestrator loop."""
+    # Effective cooldown is the larger of COOLDOWN_SECONDS and LOOP_INTERVAL
+    effective_cooldown = max(COOLDOWN_SECONDS, LOOP_INTERVAL)
+
     log("=" * 60)
     log("stilltent orchestrator starting")
     log(f"  OPENCLAW_URL              = {OPENCLAW_URL}")
     log(f"  LOOP_INTERVAL             = {LOOP_INTERVAL}s")
+    log(f"  COOLDOWN_SECONDS          = {COOLDOWN_SECONDS}s")
+    log(f"  EFFECTIVE_COOLDOWN        = {effective_cooldown}s")
     log(f"  ITERATION_TIMEOUT         = {ITERATION_TIMEOUT}s")
     log(f"  MAX_CONSECUTIVE_FAILURES  = {MAX_CONSECUTIVE_FAILURES}")
+    log(f"  TOTAL_RUNTIME_HOURS       = {TOTAL_RUNTIME_HOURS}h")
+    log(f"  HTTP_RETRY_COUNT          = {HTTP_RETRY_COUNT}")
+    log(f"  HTTP_RETRY_DELAY          = {HTTP_RETRY_DELAY}s")
     log(f"  WORKSPACE_DIR             = {WORKSPACE_DIR}")
     log(f"  LOG_FILE                  = {LOG_FILE}")
     log(f"  TARGET_REPO               = {TARGET_REPO or '(not set)'}")
@@ -315,11 +467,29 @@ def main():
     consecutive_failures = 0
 
     while not _shutdown_requested:
+        # -- 0. Check total runtime limit --------------------------------------
+        elapsed_hours = (time.monotonic() - _start_time) / 3600
+        if elapsed_hours >= TOTAL_RUNTIME_HOURS:
+            log(
+                f"Scheduled shutdown after {elapsed_hours:.1f} hours "
+                f"(limit: {TOTAL_RUNTIME_HOURS}h)"
+            )
+            pause_file = WORKSPACE_DIR / "PAUSE"
+            try:
+                pause_file.parent.mkdir(parents=True, exist_ok=True)
+                pause_file.write_text(
+                    f"Scheduled shutdown after {elapsed_hours:.1f} hours\n",
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                log(f"Could not create PAUSE file: {exc}", logging.ERROR)
+            break
+
         # -- 1. Check for PAUSE file ------------------------------------------
         pause_file = WORKSPACE_DIR / "PAUSE"
         if pause_file.exists():
             log("PAUSED — remove workspace/PAUSE to resume")
-            time.sleep(LOOP_INTERVAL)
+            _interruptible_sleep(effective_cooldown)
             continue
 
         # -- 2. Check consecutive failure threshold ---------------------------
@@ -335,6 +505,17 @@ def main():
                 log(f"Could not create PAUSE file: {exc}", logging.ERROR)
             continue
 
+        # -- 2b. Exponential backoff on consecutive failures -------------------
+        if consecutive_failures > 0:
+            delay = backoff_delay(consecutive_failures)
+            log(
+                f"Backoff: {consecutive_failures} consecutive failures "
+                f"— waiting {delay:.0f}s before retry"
+            )
+            _interruptible_sleep(delay)
+            if _shutdown_requested:
+                break
+
         # -- 3. Send trigger prompt to OpenClaw --------------------------------
         iteration += 1
         log(f"=== Iteration {iteration} starting ===")
@@ -343,6 +524,9 @@ def main():
 
         try:
             response = send_to_openclaw(prompt, timeout=ITERATION_TIMEOUT)
+
+            # Track token usage from response
+            _extract_token_usage(response)
 
             if response_indicates_success(response):
                 consecutive_failures = 0
@@ -381,16 +565,15 @@ def main():
         # -- 4. Write metrics --------------------------------------------------
         write_metrics(iteration, consecutive_failures)
 
-        # -- 5. Sleep ----------------------------------------------------------
+        # -- 5. Periodic health summary ----------------------------------------
+        if iteration % 50 == 0:
+            log_health_summary(iteration)
+
+        # -- 6. Cooldown -------------------------------------------------------
         if _shutdown_requested:
             break
-        log(f"Sleeping {LOOP_INTERVAL}s before next iteration")
-        # Sleep in small increments so we can respond to signals promptly
-        sleep_remaining = LOOP_INTERVAL
-        while sleep_remaining > 0 and not _shutdown_requested:
-            chunk = min(sleep_remaining, 5)
-            time.sleep(chunk)
-            sleep_remaining -= chunk
+        log(f"Cooling down {effective_cooldown}s before next iteration")
+        _interruptible_sleep(effective_cooldown)
 
     # ---- Clean shutdown ------------------------------------------------------
     log("Shutting down gracefully")
