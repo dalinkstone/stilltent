@@ -1,0 +1,46 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Binary output
+server/bin
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Node (openclaw-plugin)
+node_modules/
+dist/
+*.tgz
+.netlify/
+
+# Benchmark results
+benchmark/results/*
+!benchmark/results/.gitkeep
+
+# Claude Code
+.claude/
+__pycache__/
+/benchmark/MR-NIAH/origin/
+/benchmark/MR-NIAH/output/
+/benchmark/MR-NIAH/results*/
+/benchmark/MR-NIAH/.cache/

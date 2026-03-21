@@ -1,0 +1,13 @@
+{
+  "name": "mem9",
+  "owner": {
+    "name": "mem9-ai"
+  },
+  "plugins": [
+    {
+      "name": "mem9",
+      "source": "./claude-plugin",
+      "description": "Persistent cloud memory for Claude Code. Auto-loads memories on session start, auto-saves on stop, with on-demand store/recall skills."
+    }
+  ]
+}

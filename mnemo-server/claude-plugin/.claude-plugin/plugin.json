@@ -1,0 +1,10 @@
+{
+  "name": "mem9",
+  "version": "0.2.0",
+  "description": "Persistent cloud memory for Claude Code. Auto-loads memories on session start, auto-saves on stop, with on-demand store/recall skills.",
+  "author": {
+    "name": "mem9-ai"
+  },
+  "repository": "https://github.com/mem9-ai/mem9-claude-plugin",
+  "license": "Apache-2.0"
+}
