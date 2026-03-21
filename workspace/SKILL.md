@@ -1,8 +1,8 @@
 # SKILL.md — stilltent Autonomous Loop
 
 ## Guiding Documents
-- **LEARNING.md** — Read this on your first iteration. It defines HOW you learn and improve across iterations. It is as important as this file.
-- **AGENTS.md** — Your identity, constraints, and principles.
+- **`/workspace/LEARNING.md`** — Read this on your first iteration. It defines HOW you learn and improve across iterations. It is as important as this file.
+- **`/workspace/AGENTS.md`** — Your identity, constraints, and principles.
 
 ## Environment
 - **Repo:** `$TARGET_REPO` at `/workspace/repo/`, branch `main`, your prefix `agent/`
