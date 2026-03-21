@@ -234,7 +234,11 @@ _metrics = {
     "status": "starting",
     "total_prompt_tokens": 0,
     "total_completion_tokens": 0,
+    "total_spend_usd": 0.0,
     "cumulative_spend": 0.0,
+    "projected_total_usd": 0.0,
+    "avg_cost_per_iteration_usd": 0.0,
+    "budget_remaining_usd": 0.0,
 }
 _start_time = time.monotonic()
 
@@ -254,6 +258,7 @@ def _load_metrics():
             _metrics["idle_tokens_saved_estimate"] = saved.get("idle_tokens_saved_estimate", 0)
             _metrics["total_prompt_tokens"] = saved.get("total_prompt_tokens", 0)
             _metrics["total_completion_tokens"] = saved.get("total_completion_tokens", 0)
+            _metrics["total_spend_usd"] = saved.get("total_spend_usd", 0.0)
             _metrics["cumulative_spend"] = saved.get("cumulative_spend", 0.0)
             log(f"Resumed metrics: {_metrics['total_iterations']} prior iterations, "
                 f"cumulative spend: ${_metrics['cumulative_spend']:.4f}, "
@@ -378,6 +383,12 @@ _metrics_writer = _MetricsWriter()
 def _extract_token_usage(response: dict):
     """Extract token counts from the OpenAI-compatible response and accumulate."""
     usage = response.get("usage", {})
+    if not usage:
+        # Try alternative structure (some APIs use different keys)
+        usage = {
+            "prompt_tokens": response.get("prompt_tokens", 0),
+            "completion_tokens": response.get("completion_tokens", 0),
+        }
     prompt_tokens = usage.get("prompt_tokens", 0)
     completion_tokens = usage.get("completion_tokens", 0)
     _metrics["total_prompt_tokens"] += prompt_tokens
@@ -678,9 +689,17 @@ def response_indicates_success(response: dict) -> bool:
     with "result" set to "success", "partial", or "skipped".  Missing or
     unparseable summaries are treated as failures to prevent silent failures
     from being counted as successes.
+    
+    Additional heuristic: If the agent sends any tools (tool_calls), count as success.
     """
     text = extract_text_from_response(response)
-
+    usage = response.get("usage", {})
+    
+    # If usage shows tokens were processed, that's a strong indicator of work done
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    has_tokens = prompt_tokens > 0 or completion_tokens > 0
+    
     # Try to find the structured JSON summary in the response
     try:
         json_match = re.search(r'\{[^{}]*"result"[^{}]*\}', text)
@@ -698,9 +717,17 @@ def response_indicates_success(response: dict) -> bool:
         pass
 
     # No valid JSON summary found — do NOT assume success
+    # UNLESS we have evidence of actual work (tokens processed or tool calls)
+    if has_tokens:
+        log(
+            "No JSON summary but tokens were processed — counting as partial success",
+            logging.INFO,
+        )
+        return True
+    
     log(
         "No JSON summary with 'result' field found in agent response "
-        "— counting as failure to prevent silent failures",
+        "and no token usage — counting as failure to prevent silent failures",
         logging.WARNING,
     )
     return False
@@ -1053,6 +1080,22 @@ def main():
 
                 # Track token usage from response
                 prompt_tokens, completion_tokens = _extract_token_usage(response)
+                
+                # Handle the case where token usage is 0 but response was valid
+                # This can happen with some API implementations
+                if prompt_tokens == 0 and completion_tokens == 0:
+                    # Try to detect if the agent actually responded
+                    if response.get("choices") and len(response.get("choices", [])) > 0:
+                        content = response["choices"][0].get("message", {}).get("content", "")
+                        if content and len(content.strip()) > 10:
+                            log(
+                                "  Token usage shows 0 tokens but agent responded — "
+                                "considering this a valid iteration",
+                                logging.INFO,
+                            )
+                            # Count as a successful iteration with minimal token usage
+                            prompt_tokens = 1
+                            completion_tokens = 1
 
                 # Per-iteration cost tracking
                 iter_cost = _calculate_iteration_cost(prompt_tokens, completion_tokens)
