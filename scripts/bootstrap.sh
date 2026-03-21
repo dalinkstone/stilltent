@@ -71,6 +71,7 @@ echo "[4/6] Verifying workspace..."
 docker compose exec -T openclaw-gateway sh -c '
     echo "SKILL.md:    $([ -f /workspace/SKILL.md ] && echo OK || echo MISSING)"
     echo "AGENTS.md:   $([ -f /workspace/AGENTS.md ] && echo OK || echo MISSING)"
+    echo "LEARNING.md: $([ -f /workspace/LEARNING.md ] && echo OK || echo MISSING)"
     echo "Target repo: $([ -d /workspace/repo/.git ] && echo OK || echo MISSING)"
 '
 

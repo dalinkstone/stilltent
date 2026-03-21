@@ -256,7 +256,7 @@ Backoff: 60s base, doubles each idle iteration, caps at 15 minutes. Exits immedi
 
 **Phase 6b: REVIEW EXTERNAL PRs** — Checkout, test, review diff. Approve/merge, request changes, comment/close, or skip.
 
-**Phase 7: LEARN** — Store: iteration log, repo state (every 5), failed approaches, architectural decisions. Consolidate every 50 iterations.
+**Phase 7: LEARN** — Store: iteration log, repo state (every 5), failed approaches, architectural decisions. **Measure the outcome against your Phase 3 hypothesis** — was it confirmed, refuted, partial, or inconclusive? Update quality metrics. Add items to the improvement queue. Consolidate every 25 iterations, deep review every 50.
 
 ### Long-Duration Rules
 
@@ -265,7 +265,11 @@ Backoff: 60s base, doubles each idle iteration, caps at 15 minutes. Exits immedi
 3. Digest every 10 iterations, consolidate every 25
 4. Read targeted ranges, not whole files
 5. Pin persistent failures (3+)
-6. When idle: edge-case tests, error messages, refactor, CI hardening
+6. When idle: work the **improvement queue** first, then edge-case tests, error messages, refactor, CI hardening
+7. **Every 5th iteration:** Work one improvement queue item instead of new features
+8. **Every 10th iteration:** Self-reflection — evaluate hypotheses, success rate, process
+9. **Every 25th iteration:** Knowledge consolidation — synthesize insights, review queue
+10. **Every 50th iteration:** Deep review — re-read spec, compare to current state, set priorities
 
 ### Memory Format
 
@@ -275,7 +279,7 @@ Compact key-value, not prose. File paths/line refs, not raw code. Tag consistent
 
 ## The Agent Identity — AGENTS.md
 
-72 lines. Core principles:
+Core principles:
 1. Every change through a PR
 2. Tests non-negotiable
 3. Memory is continuity
@@ -283,10 +287,42 @@ Compact key-value, not prose. File paths/line refs, not raw code. Tag consistent
 5. Pause when uncertain
 6. Leave breadcrumbs
 7. Never stop building
+8. **Learn from every iteration** — every change is a hypothesis tested
+9. **Revisit and improve** — at least 20% of iterations should improve past work
+10. **Never regress** — track quality metrics, enforce the quality ratchet
+11. **Reflect on your process** — self-evaluate every 10 iterations
 
 **Tool usage:** Use tools, never circumvent them. If a tool is broken, fix it. Test suite doesn't catch regressions → write better tests. Memory queries return noise → store better-structured memories.
 
-**Hard limits:** Never delete >30%, modify secrets, push to main, modify SKILL.md/AGENTS.md, bypass tests, circumvent tools, destructive commands, install system packages.
+**Hard limits:** Never delete >30%, modify secrets, push to main, modify SKILL.md/AGENTS.md/LEARNING.md, bypass tests, circumvent tools, destructive commands, install system packages.
+
+---
+
+## The Self-Learning Methodology — LEARNING.md
+
+This is the core addition inspired by Karpathy's autoresearch pattern. It defines HOW the agent learns across iterations:
+
+### The Learning Loop
+
+```
+HYPOTHESIZE → IMPLEMENT → MEASURE → EVALUATE → LEARN → REPEAT
+```
+
+Every iteration is one pass through this loop. The agent forms a hypothesis before coding (Phase 3), measures the result after (Phase 7), and stores what it learned. Over hundreds of iterations, the agent becomes genuinely better at building this specific project.
+
+### Key Concepts
+
+- **Hypothesis-driven development:** No change without a testable prediction. "Adding input validation will prevent 3 known crash paths" (good) vs. "Make the code better" (rejected).
+- **Quality metrics tracking:** Test counts, build health, coverage estimates, code health score. Updated every 5 iterations.
+- **Quality ratchet:** Metrics must never regress without justification. If tests drop from 47 to 45, the agent must explain why and plan a fix.
+- **Improvement queue:** A running list of things to revisit. After every PR, the agent asks "What could be better?" — and adds items. Every 5th iteration, works one item instead of new features.
+- **Self-reflection:** Every 10 iterations, the agent evaluates: Am I solving the right problems? Am I repeating mistakes? Is my success rate improving?
+- **Creative escalation:** When stuck for 3+ iterations: reframe → decompose → invert → research → pivot. Never brute-force.
+- **Knowledge consolidation:** Every 25 iterations, synthesize insights. Every 50, deep review against the spec.
+
+### The Engineer's Mindset
+
+The core philosophy: a script executes the same logic every time; an engineer adapts. The agent maintains memory, metrics, a queue of improvements, and the ability to reflect on its own process. Iteration 100 should be dramatically better than iteration 1.
 
 ---
 

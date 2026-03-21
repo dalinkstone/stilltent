@@ -63,6 +63,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 3b. LEARNING.md exists
+# ---------------------------------------------------------------------------
+LEARNING_FILE="$WORKSPACE_DIR/LEARNING.md"
+if [ -f "$LEARNING_FILE" ]; then
+    pass "LEARNING.md exists"
+else
+    fail "LEARNING.md not found at $LEARNING_FILE"
+fi
+
+# ---------------------------------------------------------------------------
 # 4. SKILL.md contains expected phase headers (Phase 1 through Phase 7)
 # ---------------------------------------------------------------------------
 if [ -f "$SKILL_FILE" ]; then

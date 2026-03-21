@@ -239,6 +239,12 @@ _metrics = {
     "projected_total_usd": 0.0,
     "avg_cost_per_iteration_usd": 0.0,
     "budget_remaining_usd": 0.0,
+    # Learning metrics — track self-improvement activity
+    "hypotheses_confirmed": 0,
+    "hypotheses_refuted": 0,
+    "hypotheses_partial": 0,
+    "hypotheses_inconclusive": 0,
+    "improvement_iterations": 0,
 }
 _start_time = time.monotonic()
 
@@ -260,6 +266,12 @@ def _load_metrics():
             _metrics["total_completion_tokens"] = saved.get("total_completion_tokens", 0)
             _metrics["total_spend_usd"] = saved.get("total_spend_usd", 0.0)
             _metrics["cumulative_spend"] = saved.get("cumulative_spend", 0.0)
+            # Learning metrics
+            _metrics["hypotheses_confirmed"] = saved.get("hypotheses_confirmed", 0)
+            _metrics["hypotheses_refuted"] = saved.get("hypotheses_refuted", 0)
+            _metrics["hypotheses_partial"] = saved.get("hypotheses_partial", 0)
+            _metrics["hypotheses_inconclusive"] = saved.get("hypotheses_inconclusive", 0)
+            _metrics["improvement_iterations"] = saved.get("improvement_iterations", 0)
             log(f"Resumed metrics: {_metrics['total_iterations']} prior iterations, "
                 f"cumulative spend: ${_metrics['cumulative_spend']:.4f}, "
                 f"idle iterations avoided: {_metrics['idle_iterations_avoided']}")
@@ -529,6 +541,17 @@ def log_health_summary(iteration: int):
         f"(consecutive: {_metrics['current_consecutive_idles']})")
     log(f"  Idle iterations saved:  {_metrics['idle_iterations_avoided']}")
     log(f"  Idle tokens saved est:  {_metrics['idle_tokens_saved_estimate']:,}")
+    # Learning metrics
+    total_hyp = (_metrics["hypotheses_confirmed"] + _metrics["hypotheses_refuted"]
+                 + _metrics["hypotheses_partial"] + _metrics["hypotheses_inconclusive"])
+    if total_hyp > 0:
+        confirm_rate = _metrics["hypotheses_confirmed"] / total_hyp * 100
+        log(f"  --- Learning ---")
+        log(f"  Hypotheses tested:      {total_hyp}")
+        log(f"  Confirmed:              {_metrics['hypotheses_confirmed']} ({confirm_rate:.0f}%)")
+        log(f"  Refuted:                {_metrics['hypotheses_refuted']}")
+        log(f"  Partial/Inconclusive:   {_metrics['hypotheses_partial']}/{_metrics['hypotheses_inconclusive']}")
+        log(f"  Improvement iterations: {_metrics['improvement_iterations']}")
     log("=" * 60)
 
 
@@ -553,9 +576,42 @@ def backoff_delay(consecutive_failures: int) -> float:
 
 def build_prompt(iteration: int) -> str:
     """Build the trigger prompt sent to the OpenClaw agent each iteration."""
-    return (
+    # Determine if this iteration has a special learning activity
+    learning_hint = ""
+    if iteration % 50 == 0:
+        learning_hint = (
+            "LEARNING CYCLE: This is a 50th iteration. Perform a DEEP REVIEW "
+            "per LEARNING.md — re-read the spec, compare to current state, "
+            "assess quality trajectory, set priorities for the next 50 iterations."
+        )
+    elif iteration % 25 == 0:
+        learning_hint = (
+            "LEARNING CYCLE: This is a 25th iteration. Perform KNOWLEDGE "
+            "CONSOLIDATION per LEARNING.md — synthesize insights, review "
+            "improvement queue, store as consolidated_learnings."
+        )
+    elif iteration % 10 == 0:
+        learning_hint = (
+            "LEARNING CYCLE: This is a 10th iteration. Perform a "
+            "SELF-REFLECTION per LEARNING.md — evaluate your recent "
+            "hypotheses, success rate, and process. Store as self_reflection."
+        )
+    elif iteration % 5 == 0:
+        learning_hint = (
+            "LEARNING CYCLE: This is a 5th iteration. Work ONE item from "
+            "your IMPROVEMENT QUEUE instead of building new features. "
+            "Revisit and improve past work."
+        )
+
+    prompt_parts = [
         f"Read and follow /workspace/SKILL.md. "
-        f"This is iteration {iteration}. "
+        f"This is iteration {iteration}. ",
+    ]
+
+    if learning_hint:
+        prompt_parts.append(f"\n\n{learning_hint}")
+
+    prompt_parts.append(
         f"\n\n"
         f"CRITICAL: Your project spec is at /workspace/repo/project/README.md. "
         f"Read it FIRST. ALL your implementation work (code, tests, configs) MUST "
@@ -566,18 +622,24 @@ def build_prompt(iteration: int) -> str:
         f"are infrastructure that runs you — do NOT touch them."
         f"\n\n"
         f"Execute the complete iteration protocol (Phase 1 through Phase 7). "
+        f"Remember: form a hypothesis before coding, measure the result after, "
+        f"and store what you learned. Every iteration is an experiment."
+        f"\n\n"
         f"When finished, respond with a JSON summary:\n"
         "{\n"
         '  "iteration": <number>,\n'
-        '  "action_type": "<fix|review|feature|test|refactor|docs|bootstrap>",\n'
+        '  "action_type": "<fix|review|feature|test|refactor|docs|bootstrap|improve>",\n'
         '  "summary": "<1-2 sentence description>",\n'
         '  "result": "<success|failure|partial|skipped>",\n'
         '  "pr_number": <number or null>,\n'
         '  "merged": <true|false|null>,\n'
         '  "confidence": <0.0 to 1.0>,\n'
+        '  "hypothesis_result": "<confirmed|refuted|partial|inconclusive|null>",\n'
         '  "error": "<error message or null>"\n'
         "}"
     )
+
+    return "".join(prompt_parts)
 
 
 # =============================================================================
@@ -762,7 +824,8 @@ def extract_summary(response: dict) -> dict:
             # the top-level fields we care about
             summary = {}
             for field in ("iteration", "action_type", "summary", "result",
-                          "pr_number", "merged", "confidence", "error"):
+                          "pr_number", "merged", "confidence",
+                          "hypothesis_result", "error"):
                 val = _search_nested(obj, field)
                 if val is not None:
                     summary[field] = val
@@ -1227,6 +1290,20 @@ def main():
                 classification = classify_iteration(response)
                 result = _extract_result_field(response)
                 _save_iteration_log(iteration, response, classification)
+
+                # Track learning metrics from the summary
+                summary = extract_summary(response)
+                hyp_result = summary.get("hypothesis_result")
+                if hyp_result == "confirmed":
+                    _metrics["hypotheses_confirmed"] += 1
+                elif hyp_result == "refuted":
+                    _metrics["hypotheses_refuted"] += 1
+                elif hyp_result == "partial":
+                    _metrics["hypotheses_partial"] += 1
+                elif hyp_result == "inconclusive":
+                    _metrics["hypotheses_inconclusive"] += 1
+                if summary.get("action_type") == "improve":
+                    _metrics["improvement_iterations"] += 1
 
                 if classification == "success":
                     consecutive_failures = 0

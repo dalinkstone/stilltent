@@ -109,6 +109,25 @@ def main():
     print(f"Budget remaining:    ${budget_remaining:.2f} / ${budget_limit:.2f}")
     print(f"Pricing:             $0.12/M input, $0.75/M output")
 
+    # Learning metrics
+    hyp_confirmed = m.get("hypotheses_confirmed", 0)
+    hyp_refuted = m.get("hypotheses_refuted", 0)
+    hyp_partial = m.get("hypotheses_partial", 0)
+    hyp_inconclusive = m.get("hypotheses_inconclusive", 0)
+    total_hyp = hyp_confirmed + hyp_refuted + hyp_partial + hyp_inconclusive
+    improve_iters = m.get("improvement_iterations", 0)
+
+    if total_hyp > 0 or improve_iters > 0:
+        confirm_pct = f"{hyp_confirmed / total_hyp * 100:.0f}%" if total_hyp > 0 else "N/A"
+        improve_pct = f"{improve_iters / total * 100:.0f}%" if total > 0 else "N/A"
+        print(f"\n=== learning ===")
+        print(f"Hypotheses tested:   {total_hyp}")
+        print(f"Confirmed:           {hyp_confirmed} ({confirm_pct})")
+        print(f"Refuted:             {hyp_refuted}")
+        print(f"Partial:             {hyp_partial}")
+        print(f"Inconclusive:        {hyp_inconclusive}")
+        print(f"Improvement iters:   {improve_iters} ({improve_pct} of total)")
+
 
 if __name__ == "__main__":
     main()

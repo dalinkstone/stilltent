@@ -1,5 +1,9 @@
 # SKILL.md — stilltent Autonomous Loop
 
+## Guiding Documents
+- **LEARNING.md** — Read this on your first iteration. It defines HOW you learn and improve across iterations. It is as important as this file.
+- **AGENTS.md** — Your identity, constraints, and principles.
+
 ## Environment
 - **Repo:** `$TARGET_REPO` at `/workspace/repo/`, branch `main`, your prefix `agent/`
 - **Project spec:** `/workspace/repo/project/README.md` — this is your ONLY source of truth for what to build.
@@ -18,6 +22,7 @@ Use all available tools. Never work around them. Fix broken tools.
 - **Search:** Start of every iteration (Phase 1); before retrying any past task.
 - **Store:** End of every iteration (Phase 7); after failures; after architectural decisions; after non-obvious learnings.
 - Compact key-value format, not prose. Store file paths/line refs, not raw code. Tag consistently. 5 well-tagged memories > 50 unstructured.
+- **Learning memories:** Also store `hypothesis`, `experiment_result`, `quality_metrics`, `improvement_queue`, `self_reflection` — see LEARNING.md for full details.
 
 ## Long-Duration Rules
 1. Check memory for `session_state` each iteration; resume mid-task; update at end.
@@ -25,7 +30,11 @@ Use all available tools. Never work around them. Fix broken tools.
 3. Write `digest` memory every 10 iterations. Consolidate into `state_of_the_project` every 25 (delete replaced digests).
 4. Read targeted line ranges, not whole files. Every token counts.
 5. Log failures to memory, retry next iteration. Pin persistent failures (3+) so future iterations route around.
-6. When idle (no failures/PRs/issues): add edge-case tests, improve errors, refactor, harden CI.
+6. When idle (no failures/PRs/issues): work the **improvement queue** first (see LEARNING.md). Only if the queue is empty: add edge-case tests, improve errors, refactor, harden CI.
+7. **Every 5th iteration:** Work one item from the improvement queue instead of new features. You are an engineer who revisits and improves past work — not a script that only moves forward.
+8. **Every 10th iteration:** Perform a self-reflection (see LEARNING.md). Evaluate your recent hypotheses, success rate, and process. Store as `self_reflection`.
+9. **Every 25th iteration:** Knowledge consolidation — synthesize technical, process, and architecture insights. Review the improvement queue. Store as `consolidated_learnings`. See LEARNING.md for full protocol.
+10. **Every 50th iteration:** Deep review — re-read the spec entirely, compare to current state, assess quality trajectory, set priorities for next 50 iterations. See LEARNING.md.
 
 ## Phase 1: RECALL
 Search memory (use default `memory_search` settings, never `memory_type: "session"`):
@@ -33,8 +42,11 @@ Search memory (use default `memory_search` settings, never `memory_type: "sessio
 2. `"current iteration plan in progress"`
 3. `"failed approach do not retry"`
 4. `"architectural decision"`
+5. `"improvement_queue"` — check for queued improvements to revisit
+6. `"quality_metrics"` — know the current quality baseline before making changes
+7. `"self_reflection"` — recall your most recent process insights (every 10th iteration or when stuck)
 
-No memories on first iteration = skip to Phase 2.
+No memories on first iteration = read LEARNING.md first, then skip to Phase 2.
 
 ## Phase 2: ASSESS
 ```bash
@@ -51,12 +63,21 @@ Answer: (1) External PRs to review? (2) Failing tests? (3) In-progress plan? (4)
 
 ## Phase 3: PLAN
 ```
-Iteration: [N] | Type: [fix|review|feature|test|refactor|docs]
+Iteration: [N] | Type: [fix|review|feature|test|refactor|docs|improve]
 Summary: [1-2 sentences] | Files: [list] | Tests: [commands]
 Confidence: [0.0-1.0] | Risk: [what could go wrong]
+Hypothesis: [What I believe this change will improve and why]
+Prediction: [Measurable expected outcome — e.g., "adds 3 tests, all pass"]
+Source: [new-feature | improvement-queue IQ-XXX | failed-approach-retry | self-reflection]
 ```
 Gates: confidence < 0.5 = simpler task. files > 10 = break down. Protected file = `[HUMAN-REVIEW]`, no auto-merge.
 Store plan in memory (tag: `iteration_plan`).
+
+**Choosing what to work on — the improvement cycle:**
+- Is this a 5th/10th/25th iteration? → Check LEARNING.md for scheduled activities.
+- Is there a high-priority item in the improvement queue? → Consider working it.
+- Otherwise → Follow the priority list from Phase 2.
+- **Key principle:** You are an engineer who revisits past work. At least 20% of your iterations should be improvements to things you've already built, not just new features.
 
 ## Phase 4: IMPLEMENT
 ```bash
@@ -92,7 +113,17 @@ Store in memory (compact key-value):
 3. **`failed_approach`** (on failure): what, why, lesson, do-not-retry flag
 4. **`architectural_decision`** (when applicable): decision, rationale, alternatives, affected files
 
-Consolidate every 50 iterations: summarize logs into `consolidated_learnings`, dedupe, update `repo_state`.
+**Measure and evaluate (from LEARNING.md):**
+5. **`experiment_result`:** Compare your Phase 3 prediction to actual outcome. Was your hypothesis confirmed, partially confirmed, refuted, or inconclusive? Be honest.
+6. **`insight`** (on confirmed hypothesis): What worked, why, and how to apply it again.
+7. **`improvement_queue`:** After every PR, ask: "What could be better about what I just built?" Add items with priority, area, and rationale.
+8. **`quality_metrics`** (every 5 iter): tests_total, tests_passing, build_clean, lint_clean, features_complete, features_remaining, known_bugs, code_health (1-5).
+
+**Quality ratchet:** Before storing `quality_metrics`, compare to the previous entry. If any metric regressed, note WHY and add a high-priority item to the improvement queue to fix it.
+
+**Self-reflection** (every 10th iteration): See LEARNING.md for the full protocol. Store as `self_reflection`.
+
+Consolidate every 25 iterations: summarize logs into `consolidated_learnings`, dedupe, update `repo_state`, review improvement queue, re-prioritize.
 
 ## Bootstrap (empty/README-only project)
 1. Read project spec at `/workspace/repo/project/README.md` — follow exactly
@@ -104,6 +135,7 @@ Consolidate every 50 iterations: summarize logs into `consolidated_learnings`, d
 First 5-10 iterations: scaffolding + test infra only. Then implement spec systematically. ALL code goes in `/workspace/repo/project/`.
 
 ## Emergency
-- **Loop (3+ same error):** Stop. Search `failed_approach`. Pick different task. All fail = store `emergency` memory, check `/workspace/PAUSE`.
+- **Loop (3+ same error):** Stop. Search `failed_approach`. Follow creative escalation from LEARNING.md (reframe → decompose → invert → research → pivot). All approaches exhausted = store `emergency` memory, check `/workspace/PAUSE`.
 - **Broken repo:** `git checkout main && git pull`. Main broken = fix first. 3 failed iterations = create PAUSE file.
-- **Lost context:** Re-read SKILL.md, search memory broadly, do safe small task.
+- **Lost context:** Re-read SKILL.md and LEARNING.md, search memory broadly, do safe small task.
+- **Quality regression:** If `quality_metrics` show a downward trend over 3+ measurements, pause new features and focus exclusively on improvement queue items until metrics recover.
