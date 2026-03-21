@@ -5,14 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/state"
-	"github.com/dalinkstone/tent/internal/firecracker"
+	"github.com/dalinkstone/tent/internal/hypervisor"
+	"github.com/dalinkstone/tent/internal/hypervisor/kvm"
 	"github.com/dalinkstone/tent/internal/network"
 	"github.com/dalinkstone/tent/internal/storage"
 )
@@ -26,11 +26,14 @@ type StateManager interface {
 	ListVMs() ([]*models.VMState, error)
 }
 
-// FirecrackerClient defines the interface for Firecracker API operations
-type FirecrackerClient interface {
-	ConfigureVM(socketPath string, config *models.VMConfig) error
-	StartVM(socketPath string) error
-	ShutdownVM(socketPath string) error
+// HypervisorBackend defines the interface for hypervisor VM operations
+type HypervisorBackend interface {
+	// CreateVM creates a new VM
+	CreateVM(config *models.VMConfig) (hypervisor.VM, error)
+	// ListVMs returns all active VMs
+	ListVMs() ([]hypervisor.VM, error)
+	// DestroyVM destroys a VM
+	DestroyVM(vm hypervisor.VM) error
 }
 
 // NetworkManager defines the interface for network operations
@@ -50,16 +53,17 @@ type StorageManager interface {
 
 // VMManager manages microVM lifecycle operations
 type VMManager struct {
-	stateManager  StateManager
-	firecracker   FirecrackerClient
-	networkMgr    NetworkManager
-	storageMgr    StorageManager
-	baseDir       string
-	execCommand   func(cmd string, args ...string) *exec.Cmd
+	stateManager   StateManager
+	hypervisor     HypervisorBackend
+	networkMgr     NetworkManager
+	storageMgr     StorageManager
+	baseDir        string
+	execCommand    func(cmd string, args ...string) *exec.Cmd
+	runningVMs     map[string]hypervisor.VM // Track running VM instances
 }
 
 // NewManager creates a new VM manager
-func NewManager(baseDir string, stateManager StateManager, fc FirecrackerClient, networkMgr NetworkManager, storageMgr StorageManager) (*VMManager, error) {
+func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend, networkMgr NetworkManager, storageMgr StorageManager) (*VMManager, error) {
 	if stateManager == nil {
 		sm, err := state.NewStateManager(filepath.Join(baseDir, "state.json"))
 		if err != nil {
@@ -68,12 +72,13 @@ func NewManager(baseDir string, stateManager StateManager, fc FirecrackerClient,
 		stateManager = sm
 	}
 
-	if fc == nil {
-		c, err := firecracker.NewClient("")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create firecracker client: %w", err)
+	if hv == nil {
+		// Try to use KVM backend (Linux only)
+		if backend, err := kvm.NewBackend(baseDir); err == nil {
+			hv = backend
+		} else {
+			return nil, fmt.Errorf("failed to create hypervisor backend: KVM backend not available and no custom backend provided")
 		}
-		fc = c
 	}
 
 	if networkMgr == nil {
@@ -93,12 +98,13 @@ func NewManager(baseDir string, stateManager StateManager, fc FirecrackerClient,
 	}
 
 	return &VMManager{
-		stateManager: stateManager,
-		firecracker:  fc,
-		networkMgr:   networkMgr,
-		storageMgr:   storageMgr,
-		baseDir:      baseDir,
-		execCommand:  exec.Command,
+		stateManager:   stateManager,
+		hypervisor:     hv,
+		networkMgr:     networkMgr,
+		storageMgr:     storageMgr,
+		baseDir:        baseDir,
+		execCommand:    exec.Command,
+		runningVMs:     make(map[string]hypervisor.VM),
 	}, nil
 }
 
@@ -131,16 +137,12 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		return fmt.Errorf("failed to setup network: %w", err)
 	}
 
-	// Create firecracker socket path
-	socketPath := filepath.Join(m.baseDir, "sockets", fmt.Sprintf("%s.sock", name))
-
 	// Create VM state
 	vmState := &models.VMState{
 		Name:        name,
 		Status:      models.VMStatusCreated,
 		RootFSPath:  rootfsPath,
 		TAPDevice:   tapDevice,
-		SocketPath:  socketPath,
 		CreatedAt:   time.Now().Unix(),
 		UpdatedAt:   time.Now().Unix(),
 	}
@@ -170,37 +172,34 @@ func (m *VMManager) Start(name string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Spawn Firecracker process
-	cmd := m.execCommand("firecracker", "--api-sock", vmState.SocketPath)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start firecracker: %w", err)
-	}
-
-	vmState.PID = cmd.Process.Pid
-	vmState.Status = models.VMStatusRunning
-	vmState.UpdatedAt = time.Now().Unix()
-
-	// Update state
-	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
-		s.PID = vmState.PID
-		s.Status = vmState.Status
-		s.UpdatedAt = vmState.UpdatedAt
-		return nil
-	}); err != nil {
-		cmd.Process.Kill()
-		return fmt.Errorf("failed to update state: %w", err)
-	}
-
-	// Configure VM via Firecracker API
-	if err := m.firecracker.ConfigureVM(vmState.SocketPath, config); err != nil {
-		m.Stop(name)
-		return fmt.Errorf("failed to configure VM: %w", err)
+	// Use hypervisor backend to start VM
+	vm, err := m.hypervisor.CreateVM(config)
+	if err != nil {
+		return fmt.Errorf("failed to create VM: %w", err)
 	}
 
 	// Start the VM
-	if err := m.firecracker.StartVM(vmState.SocketPath); err != nil {
-		m.Stop(name)
+	if err := vm.Start(); err != nil {
 		return fmt.Errorf("failed to start VM: %w", err)
+	}
+
+	// Track running VM
+	m.runningVMs[name] = vm
+
+	// Update state
+	vmState.Status = models.VMStatusRunning
+	vmState.IP = vm.GetIP()
+	vmState.UpdatedAt = time.Now().Unix()
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Status = vmState.Status
+		s.IP = vmState.IP
+		s.UpdatedAt = vmState.UpdatedAt
+		return nil
+	}); err != nil {
+		vm.Stop()
+		delete(m.runningVMs, name)
+		return fmt.Errorf("failed to update state: %w", err)
 	}
 
 	return nil
@@ -217,19 +216,15 @@ func (m *VMManager) Stop(name string) error {
 		return fmt.Errorf("VM %s is not running", name)
 	}
 
-	// Try graceful shutdown first via Firecracker API
-	if err := m.firecracker.ShutdownVM(vmState.SocketPath); err != nil {
-		// If API fails, try sending SIGTERM to the process
-		if vmState.PID > 0 {
-			proc, err := os.FindProcess(vmState.PID)
-			if err == nil {
-				proc.Signal(os.Signal(syscall.SIGTERM))
-				// Give it a moment to shut down
-				time.Sleep(100 * time.Millisecond)
-				// If still running, kill it
-				proc.Kill()
-			}
-		}
+	// Get running VM instance
+	vm, ok := m.runningVMs[name]
+	if !ok {
+		return fmt.Errorf("VM %s not found in running VMs", name)
+	}
+
+	// Stop the VM
+	if err := vm.Stop(); err != nil {
+		return fmt.Errorf("failed to stop VM: %w", err)
 	}
 
 	// Cleanup network resources
@@ -239,15 +234,16 @@ func (m *VMManager) Stop(name string) error {
 		}
 	}
 
+	// Remove from running VMs
+	delete(m.runningVMs, name)
+
 	// Update state
 	vmState.Status = models.VMStatusStopped
-	vmState.PID = 0
 	vmState.IP = ""
 	vmState.UpdatedAt = time.Now().Unix()
 
 	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
 		s.Status = vmState.Status
-		s.PID = vmState.PID
 		s.IP = vmState.IP
 		s.UpdatedAt = vmState.UpdatedAt
 		return nil
@@ -293,20 +289,23 @@ func (m *VMManager) Status(name string) (*models.VMState, error) {
 	}
 
 	// Update status if running
-	if vmState.Status == models.VMStatusRunning && vmState.PID > 0 {
-		proc, err := os.FindProcess(vmState.PID)
-		if err == nil {
-			// Check if process is still running
-			if err := proc.Signal(os.Signal(nil)); err != nil {
+	if vmState.Status == models.VMStatusRunning {
+		vm, ok := m.runningVMs[name]
+		if ok {
+			status, _ := vm.Status()
+			if status == models.VMStatusStopped {
 				vmState.Status = models.VMStatusStopped
-				vmState.PID = 0
+				vmState.IP = ""
 				vmState.UpdatedAt = time.Now().Unix()
+				delete(m.runningVMs, name)
 				_ = m.stateManager.UpdateVM(name, func(s *models.VMState) error {
 					s.Status = vmState.Status
-					s.PID = vmState.PID
+					s.IP = vmState.IP
 					s.UpdatedAt = vmState.UpdatedAt
 					return nil
 				})
+			} else {
+				vmState.IP = vm.GetIP()
 			}
 		}
 	}
@@ -327,7 +326,7 @@ func (m *VMManager) Logs(name string) (string, error) {
 	}
 
 	// For now, return placeholder - in production, this would read
-	// from the firecracker log file or capture output
+	// from the hypervisor log or capture output
 	logPath := filepath.Join(m.baseDir, "logs", fmt.Sprintf("%s.log", name))
 	if data, err := os.ReadFile(logPath); err == nil {
 		return string(data), nil
