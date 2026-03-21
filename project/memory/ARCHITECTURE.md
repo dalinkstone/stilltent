@@ -1,0 +1,1 @@
+architectural_decision: decision Firecracker socket-based API, rationale Firecracker provides REST API over Unix socket for VM control - this is the standard integration pattern, alternatives considered direct kernel loading (rejected - Firecracker handles this), process spawning (rejected - Firecracker API required), affected files internal/firecracker/, internal/vm/
