@@ -1,1 +1,0 @@
-architectural_decision: Firecracker API uses Unix socket for VM control via REST API - this is the standard integration pattern, alternatives direct kernel loading (rejected - Firecracker handles this), affected files internal/firecracker/, internal/vm/
