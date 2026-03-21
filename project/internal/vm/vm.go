@@ -292,6 +292,54 @@ func (m *VMManager) Logs(name string) (string, error) {
 	return fmt.Sprintf("No logs available for VM %s", name), nil
 }
 
+// CreateSnapshot creates a snapshot of a VM's rootfs
+func (m *VMManager) CreateSnapshot(name string, tag string) (string, error) {
+	// Check if VM exists
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("VM not found: %w", err)
+	}
+
+	return m.storageMgr.CreateSnapshot(name, tag)
+}
+
+// RestoreSnapshot restores a VM's rootfs from a snapshot
+func (m *VMManager) RestoreSnapshot(name string, tag string) error {
+	// Check if VM exists
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	return m.storageMgr.RestoreSnapshot(name, tag)
+}
+
+// ListSnapshots lists all snapshots for a VM
+func (m *VMManager) ListSnapshots(name string) ([]*models.Snapshot, error) {
+	// Check if VM exists
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+
+	snapshots, err := m.storageMgr.ListSnapshots(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert storage SnapshotInfo to models Snapshot
+	var result []*models.Snapshot
+	for _, snap := range snapshots {
+		result = append(result, &models.Snapshot{
+			Tag:       snap.Tag,
+			SizeMB:    snap.SizeMB,
+			Timestamp: snap.CreatedAt,
+		})
+	}
+
+	return result, nil
+}
+
 // loadConfigFromState loads the VM config from the state file
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
 	// Load config from state file if present

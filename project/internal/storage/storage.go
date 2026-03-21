@@ -26,6 +26,11 @@ func NewManager(baseDir string) (*Manager, error) {
 	}, nil
 }
 
+// GetBaseDir returns the base directory for storage
+func (m *Manager) GetBaseDir() string {
+	return m.baseDir
+}
+
 // CreateRootFS creates a root filesystem for a VM
 func (m *Manager) CreateRootFS(vmName string, config *models.VMConfig) (string, error) {
 	// Create directories
