@@ -1,0 +1,21 @@
+name: test-vm
+vcpus: 2
+memory_mb: 1024
+kernel: default
+rootfs: ubuntu-22.04
+disk_gb: 10
+network:
+  mode: bridge
+  bridge: tent0
+  ports:
+    - host: 8080
+      guest: 80
+    - host: 2222
+      guest: 22
+mounts:
+  - host: ./src
+    guest: /workspace
+    readonly: false
+env:
+  EDITOR: vim
+  LANG: en_US.UTF-8
