@@ -779,11 +779,28 @@ def _extract_result_field(response: dict) -> str:
     empty string if not found.
     
     Uses a robust balanced brace parser that handles nested JSON objects
-    by finding matching braces and checking each for the "result" field.
+    by finding matching braces and checking each for the "result" field
+    (recursively searching nested objects).
     """
     text = extract_text_from_response(response)
     try:
         import json
+        
+        def _search_nested_result(obj):
+            """Recursively search for 'result' field in nested objects or arrays."""
+            if isinstance(obj, dict):
+                if "result" in obj:
+                    return obj["result"]
+                for value in obj.values():
+                    found = _search_nested_result(value)
+                    if found is not None:
+                        return found
+            elif isinstance(obj, list):
+                for item in obj:
+                    found = _search_nested_result(item)
+                    if found is not None:
+                        return found
+            return None
         
         def find_json_with_result(s):
             """Find JSON object containing 'result' field using balanced brace matching."""
@@ -804,9 +821,10 @@ def _extract_result_field(response: dict) -> str:
                     if depth == 0:
                         candidate = s[start:i]
                         try:
-                            obj = json.loads(candidate)
-                            if "result" in obj:
-                                return obj
+                            parsed_obj = json.loads(candidate)
+                            found = _search_nested_result(parsed_obj)
+                            if found is not None:
+                                return {"result": found}
                         except json.JSONDecodeError:
                             pass
                 else:
