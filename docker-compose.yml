@@ -87,6 +87,8 @@ services:
       dockerfile: Dockerfile
     container_name: stilltent-embed
     read_only: true
+    tmpfs:
+      - /tmp:size=10m
     environment:
       EMBED_PORT: "8090"
       EMBED_DIMS: "256"
@@ -103,16 +105,16 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 10s
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 256M
           cpus: "0.5"
       restart_policy:
         condition: on-failure
         delay: 10s
-        max_attempts: 5
+        max_attempts: 10
     logging:
       driver: json-file
       options:
