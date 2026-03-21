@@ -3,10 +3,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/dalinkstone/tent/pkg/models"
+	"github.com/dalinkstone/tent/internal/hypervisor"
 	"github.com/dalinkstone/tent/internal/storage"
 )
 
@@ -72,36 +74,93 @@ func (m *MockStateManager) ListVMs() ([]*models.VMState, error) {
 	return result, nil
 }
 
-type MockFirecrackerClient struct {
-	ConfigureCalled   bool
-	StartVMCalled     bool
-	ShutdownVMCalled  bool
-	ErrConfigure      error
-	ErrStart          error
-	ErrShutdown       error
+// MockVMInstance implements hypervisor.VM for testing
+type MockVMInstance struct {
+	config  *models.VMConfig
+	running bool
+	errStop error
 }
 
-func (m *MockFirecrackerClient) ConfigureVM(socketPath string, config *models.VMConfig) error {
-	m.ConfigureCalled = true
-	if m.ErrConfigure != nil {
-		return m.ErrConfigure
+func (v *MockVMInstance) Start() error {
+	if v.running {
+		return fmt.Errorf("VM already running")
 	}
+	v.running = true
 	return nil
 }
 
-func (m *MockFirecrackerClient) StartVM(socketPath string) error {
-	m.StartVMCalled = true
-	if m.ErrStart != nil {
-		return m.ErrStart
+func (v *MockVMInstance) Stop() error {
+	if v.errStop != nil {
+		return v.errStop
 	}
+	if !v.running {
+		return fmt.Errorf("VM not running")
+	}
+	v.running = false
 	return nil
 }
 
-func (m *MockFirecrackerClient) ShutdownVM(socketPath string) error {
-	m.ShutdownVMCalled = true
-	if m.ErrShutdown != nil {
-		return m.ErrShutdown
+func (v *MockVMInstance) Kill() error {
+	v.running = false
+	return nil
+}
+
+func (v *MockVMInstance) Status() (models.VMStatus, error) {
+	if v.running {
+		return models.VMStatusRunning, nil
 	}
+	return models.VMStatusStopped, nil
+}
+
+func (v *MockVMInstance) GetConfig() *models.VMConfig {
+	return v.config
+}
+
+func (v *MockVMInstance) GetIP() string {
+	return "172.16.0.1"
+}
+
+func (v *MockVMInstance) GetPID() int {
+	return 0
+}
+
+func (v *MockVMInstance) Cleanup() error {
+	return nil
+}
+
+// MockHypervisorBackend implements vm.HypervisorBackend for testing
+type MockHypervisorBackend struct {
+	ErrCreate error
+	ErrList   error
+	ErrDestroy error
+	CreatedVM *MockVMInstance
+}
+
+func (m *MockHypervisorBackend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
+	if m.ErrCreate != nil {
+		return nil, m.ErrCreate
+	}
+	vm := &MockVMInstance{config: config}
+	m.CreatedVM = vm
+	return vm, nil
+}
+
+func (m *MockHypervisorBackend) ListVMs() ([]hypervisor.VM, error) {
+	if m.ErrList != nil {
+		return nil, m.ErrList
+	}
+	var vms []hypervisor.VM
+	if m.CreatedVM != nil {
+		vms = append(vms, m.CreatedVM)
+	}
+	return vms, nil
+}
+
+func (m *MockHypervisorBackend) DestroyVM(vm hypervisor.VM) error {
+	if m.ErrDestroy != nil {
+		return m.ErrDestroy
+	}
+	m.CreatedVM = nil
 	return nil
 }
 
