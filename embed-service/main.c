@@ -519,14 +519,23 @@ int main(int argc, char **argv)
     /* Initialize work queue and thread pool */
     queue_init(&g_queue);
 
+    /* Worker threads need a larger stack than musl's 128KB default.
+     * embed_text() + channel_code() use ~132KB of stack (two token_list_t
+     * arrays of 64KB each), which overflows musl's default and causes
+     * SIGSEGV on every embedding request. Set 512KB for safety. */
+    pthread_attr_t thread_attr;
+    pthread_attr_init(&thread_attr);
+    pthread_attr_setstacksize(&thread_attr, 512 * 1024);
+
     pthread_t threads[MAX_THREAD_POOL];
     for (int i = 0; i < g_thread_pool_size; i++) {
-        if (pthread_create(&threads[i], NULL, worker_thread, NULL) != 0) {
+        if (pthread_create(&threads[i], &thread_attr, worker_thread, NULL) != 0) {
             perror("[fatal] pthread_create");
             close(server_fd);
             return 1;
         }
     }
+    pthread_attr_destroy(&thread_attr);
 
     /* Accept loop */
     while (g_running) {
