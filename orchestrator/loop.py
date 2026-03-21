@@ -778,19 +778,45 @@ def _extract_result_field(response: dict) -> str:
     Returns the result string (e.g. 'success', 'skipped', 'failure') or
     empty string if not found.
     
-    Uses a more robust regex that handles nested JSON structures by using
-    balanced brace matching.
+    Uses a robust balanced brace parser that handles nested JSON objects
+    by finding matching braces and checking each for the "result" field.
     """
     text = extract_text_from_response(response)
     try:
-        # Try to find JSON summary with "result" field
-        # This pattern handles nested braces by being greedy and finding
-        # the first '{' followed by '"result"' somewhere inside
-        json_match = re.search(r'\{[\s\S]*?"result"[\s\S]*?\}', text)
-        if json_match:
-            summary = json.loads(json_match.group())
-            return summary.get("result", "").lower()
-    except (json.JSONDecodeError, AttributeError):
+        import json
+        
+        def find_json_with_result(s):
+            """Find JSON object containing 'result' field using balanced brace matching."""
+            i = 0
+            while i < len(s):
+                if s[i] == '{':
+                    # Found opening brace, find matching closing brace
+                    depth = 1
+                    start = i
+                    i += 1
+                    while i < len(s) and depth > 0:
+                        if s[i] == '{':
+                            depth += 1
+                        elif s[i] == '}':
+                            depth -= 1
+                        i += 1
+                    
+                    if depth == 0:
+                        candidate = s[start:i]
+                        try:
+                            obj = json.loads(candidate)
+                            if "result" in obj:
+                                return obj
+                        except json.JSONDecodeError:
+                            pass
+                else:
+                    i += 1
+            return None
+        
+        result_obj = find_json_with_result(text)
+        if result_obj:
+            return str(result_obj.get("result", "")).lower()
+    except (json.JSONDecodeError, AttributeError, TypeError):
         pass
     return ""
 
