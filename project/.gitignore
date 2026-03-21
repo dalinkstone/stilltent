@@ -1,0 +1,15 @@
+# Agent iteration clutter — do not commit
+ITERATION_*.md
+iteration_*.md
+iteration_*.json
+ARCHITECTURE.md
+ARCHITECTURE_TODO.md
+coverage.html
+coverage.out
+memory/
+docs/iterations/
+docs/memory/
+
+# Build artifacts
+tent
+*.exe
