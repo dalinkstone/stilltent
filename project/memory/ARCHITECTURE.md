@@ -1,1 +1,0 @@
-architectural_decision: decision CLI commands follow thin wrapper pattern, rationale Commands should be thin wrappers around VM manager methods - this keeps CLI code simple and testable, alternatives considered direct implementation in CLI (rejected - duplicates logic), process: all commands use same pattern - parse inputs -> validate -> create manager -> call method -> output
