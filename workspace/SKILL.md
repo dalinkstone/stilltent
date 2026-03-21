@@ -2,8 +2,10 @@
 
 ## Environment
 - **Repo:** `$TARGET_REPO` at `/workspace/repo/`, branch `main`, your prefix `agent/`
-- **Project spec:** `/workspace/repo/project/README.md` (fallback: root `README.md`)
-- Read spec on first iteration. All work traces back to it. Deliver production-quality code, one PR at a time.
+- **Project spec:** `/workspace/repo/project/README.md` — this is your ONLY source of truth for what to build.
+- **Working directory:** ALL implementation code, tests, and configs go inside `/workspace/repo/project/`. NEVER create or modify files outside this directory.
+- **Off-limits:** `orchestrator/`, `workspace/`, `scripts/`, `config/`, `dockerfiles/`, `embed-service/`, `mnemo-server/`, `docs/`, `Makefile`, `docker-compose.yml`, `.env*`, root `README.md`. These are infrastructure that runs you — do NOT touch them.
+- Read the project spec (`/workspace/repo/project/README.md`) on your FIRST iteration. All work traces back to it. Deliver production-quality code inside `/workspace/repo/project/`, one PR at a time.
 
 ## Tools
 Use all available tools. Never work around them. Fix broken tools.
@@ -38,9 +40,10 @@ No memories on first iteration = skip to Phase 2.
 ```bash
 cd /workspace/repo && git checkout main && git pull origin main
 git log --oneline -10
-find . -type f -not -path './.git/*' | head -80
+find project/ -type f | head -80
+cat project/README.md
 gh pr list --state open --limit 10 && gh issue list --state open --limit 10 && gh run list --limit 5
-# Run tests (pytest/go test/npm test/cargo test) | tail -30
+# Run tests from project/ (e.g., cd project && go test ./... OR pytest OR npm test) | tail -30
 ```
 Answer: (1) External PRs to review? (2) Failing tests? (3) In-progress plan? (4) Project maturity? (5) Highest-value next action?
 
@@ -91,14 +94,14 @@ Store in memory (compact key-value):
 
 Consolidate every 50 iterations: summarize logs into `consolidated_learnings`, dedupe, update `repo_state`.
 
-## Bootstrap (empty/README-only repo)
-1. Read project spec — follow exactly
-2. Scaffold per spec (Go: `go mod init`; Python: `pyproject.toml`; Node: `npm init`)
-3. First PR: minimal test framework
+## Bootstrap (empty/README-only project)
+1. Read project spec at `/workspace/repo/project/README.md` — follow exactly
+2. Scaffold inside `/workspace/repo/project/` per spec (Go: `cd /workspace/repo/project && go mod init`; Python: `pyproject.toml`; Node: `npm init`)
+3. First PR: minimal test framework inside `/workspace/repo/project/`
 4. Store spec summary + architectural decisions in memory
-5. Set up CI (`.github/workflows/ci.yml`)
+5. Set up CI (`.github/workflows/ci.yml`) that runs tests from the `project/` directory
 
-First 5-10 iterations: scaffolding + test infra only. Then implement spec systematically.
+First 5-10 iterations: scaffolding + test infra only. Then implement spec systematically. ALL code goes in `/workspace/repo/project/`.
 
 ## Emergency
 - **Loop (3+ same error):** Stop. Search `failed_approach`. Pick different task. All fail = store `emergency` memory, check `/workspace/PAUSE`.

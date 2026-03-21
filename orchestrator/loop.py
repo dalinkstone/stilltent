@@ -556,6 +556,15 @@ def build_prompt(iteration: int) -> str:
     return (
         f"Read and follow /workspace/SKILL.md. "
         f"This is iteration {iteration}. "
+        f"\n\n"
+        f"CRITICAL: Your project spec is at /workspace/repo/project/README.md. "
+        f"Read it FIRST. ALL your implementation work (code, tests, configs) MUST "
+        f"go inside /workspace/repo/project/. You are building the project described "
+        f"in that README — you are NOT improving the orchestrator, scripts, or any "
+        f"files outside /workspace/repo/project/. Files outside that directory "
+        f"(orchestrator/, workspace/, scripts/, config/, Makefile, docker-compose.yml) "
+        f"are infrastructure that runs you — do NOT touch them."
+        f"\n\n"
         f"Execute the complete iteration protocol (Phase 1 through Phase 7). "
         f"When finished, respond with a JSON summary:\n"
         "{\n"
@@ -685,158 +694,195 @@ def extract_text_from_response(response: dict) -> str:
     """
     try:
         content = response["choices"][0]["message"]["content"]
-        # Handle empty or whitespace-only responses
         if content is None or content.strip() == "":
-            log(
-                "Agent returned empty/whitespace-only response",
-                logging.WARNING,
-            )
             return ""
         return content
     except (KeyError, IndexError, TypeError):
-        # Fallback: stringify the whole thing so regex can still search it
         return json.dumps(response)
 
 
+def _find_json_objects(text: str) -> list[dict]:
+    """Extract all valid JSON objects from text using balanced brace matching.
+
+    Handles nested braces, markdown code blocks, and mixed text/JSON.
+    Returns a list of parsed dicts, largest (outermost) objects first.
+    """
+    results = []
+    i = 0
+    while i < len(text):
+        if text[i] == '{':
+            depth = 1
+            start = i
+            i += 1
+            while i < len(text) and depth > 0:
+                if text[i] == '{':
+                    depth += 1
+                elif text[i] == '}':
+                    depth -= 1
+                i += 1
+            if depth == 0:
+                candidate = text[start:i]
+                try:
+                    results.append(json.loads(candidate))
+                except json.JSONDecodeError:
+                    pass
+        else:
+            i += 1
+    return results
+
+
+def _search_nested(obj, key: str):
+    """Recursively search for a key in nested dicts/lists. Returns first match or None."""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for value in obj.values():
+            found = _search_nested(value, key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _search_nested(item, key)
+            if found is not None:
+                return found
+    return None
+
+
+def extract_summary(response: dict) -> dict:
+    """Extract the agent's iteration summary from the response.
+
+    Searches all JSON objects in the response text for one containing
+    a "result" field. Returns the summary dict, or {} if not found.
+    """
+    text = extract_text_from_response(response)
+    for obj in _find_json_objects(text):
+        result = _search_nested(obj, "result")
+        if result is not None:
+            # If the result field is inside a nested object, pull out
+            # the top-level fields we care about
+            summary = {}
+            for field in ("iteration", "action_type", "summary", "result",
+                          "pr_number", "merged", "confidence", "error"):
+                val = _search_nested(obj, field)
+                if val is not None:
+                    summary[field] = val
+            return summary
+    return {}
+
+
+def _has_tool_calls(response: dict) -> int:
+    """Return the number of tool_calls in the response, or 0."""
+    try:
+        tool_calls = response["choices"][0]["message"].get("tool_calls", [])
+        return len(tool_calls) if tool_calls else 0
+    except (KeyError, IndexError, TypeError):
+        return 0
+
+
+def classify_iteration(response: dict) -> str:
+    """Classify an iteration outcome into one of three categories.
+
+    Returns:
+        "success"  — Agent did work (PR created, code written, tests run, etc.)
+        "failure"  — Agent explicitly reported failure (tests failed, reverted).
+                     This is the system working correctly — not an infra problem.
+        "error"    — Infrastructure problem: empty response, no content, unparseable.
+                     Only this category should trigger backoff/circuit breaker.
+
+    The key insight: an agent saying "result: failure" (tests didn't pass,
+    I reverted) is NOT an infrastructure error. The agent ran, did work, and
+    reported an outcome. Only truly empty/broken responses are errors.
+    """
+    text = extract_text_from_response(response)
+    summary = extract_summary(response)
+    tool_call_count = _has_tool_calls(response)
+
+    # 1. If we got a structured summary with a result field, trust it
+    if summary:
+        result = str(summary.get("result", "")).lower()
+        if result in ("success", "partial", "skipped"):
+            return "success"
+        if result == "failure":
+            # Agent explicitly reported failure — it ran and decided the work
+            # didn't succeed. This is the system working, not an infra error.
+            return "failure"
+        # Unknown result value — agent responded, treat as success
+        log(f"  Unknown result value {result!r} in summary — treating as success")
+        return "success"
+
+    # 2. Tool calls = the agent definitely did work
+    if tool_call_count > 0:
+        log(f"  No JSON summary but {tool_call_count} tool_call(s) — success")
+        return "success"
+
+    # 3. Work indicators in text = agent did work but didn't produce JSON
+    if text:
+        for pattern in _WORK_PATTERNS:
+            if pattern.search(text):
+                log(f"  No JSON summary but work pattern found — success")
+                return "success"
+
+    # 4. Non-trivial text response = agent ran but didn't format JSON
+    #    This is not an infrastructure error — the agent engaged with the task.
+    if text and len(text.strip()) > 50:
+        log(f"  No JSON summary but substantial text response ({len(text)} chars) — success")
+        return "success"
+
+    # 5. Truly empty or trivial response = infrastructure error
+    if not text or len(text.strip()) < 10:
+        log(
+            "  Empty or near-empty response — infrastructure error",
+            logging.WARNING,
+        )
+        return "error"
+
+    # 6. Short text, no work indicators, no summary — ambiguous, be generous
+    log(f"  Short response without summary ({len(text.strip())} chars) — treating as success")
+    return "success"
+
+
+def _save_iteration_log(iteration: int, response: dict, classification: str):
+    """Save a per-iteration log file for debugging when things go wrong.
+
+    Writes to workspace/iterations/iteration-NNNN.log with the classification,
+    summary (if found), and a truncated snippet of the response text.
+    """
+    iter_dir = WORKSPACE_DIR / "iterations"
+    try:
+        iter_dir.mkdir(parents=True, exist_ok=True)
+        text = extract_text_from_response(response)
+        summary = extract_summary(response)
+        snippet = text[:2000] if text else "(empty)"
+
+        log_path = iter_dir / f"iteration-{iteration:04d}.log"
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"classification: {classification}\n")
+            if summary:
+                f.write(f"summary: {json.dumps(summary)}\n")
+            else:
+                f.write("summary: (none found)\n")
+            f.write(f"text_length: {len(text)}\n")
+            f.write(f"tool_calls: {_has_tool_calls(response)}\n")
+            f.write(f"---\n{snippet}\n")
+    except OSError:
+        pass  # non-critical — don't fail the iteration over logging
+
+
+# Keep these for backwards compatibility with existing callers
 def response_indicates_success(response: dict) -> bool:
     """Check if the agent's response indicates a successful iteration.
 
-    Only counts as success if the agent explicitly includes a JSON summary
-    with "result" set to "success", "partial", or "skipped".  Missing or
-    unparseable summaries are treated as failures to prevent silent failures
-    from being counted as successes.
-    
-    Additional heuristics for success:
-      - If the agent sends any tools (tool_calls), count as success
-      - If response text is non-empty but no JSON summary found, count as partial success
+    Uses classify_iteration() — only "error" is treated as failure.
+    Agent-reported failures ("result": "failure") are NOT infrastructure
+    errors and do NOT count against the consecutive failure counter.
     """
-    text = extract_text_from_response(response)
-    usage = response.get("usage", {})
-    
-    # Check for tool calls - this is strong evidence the agent did work
-    choices = response.get("choices", [])
-    if choices:
-        message = choices[0].get("message", {})
-        tool_calls = message.get("tool_calls", [])
-        if tool_calls and len(tool_calls) > 0:
-            log(
-                f"Agent executed {len(tool_calls)} tool_call(s) — counting as success",
-                logging.INFO,
-            )
-            return True
-    
-    # If usage shows tokens were processed, that's a strong indicator of work done
-    prompt_tokens = usage.get("prompt_tokens", 0)
-    completion_tokens = usage.get("completion_tokens", 0)
-    has_tokens = prompt_tokens > 0 or completion_tokens > 0
-    
-    # Try to find the structured JSON summary in the response
-    # Use a more robust regex that handles nested JSON structures
-    try:
-        json_match = re.search(r'\{[\s\S]*?"result"[\s\S]*?\}', text)
-        if json_match:
-            summary = json.loads(json_match.group())
-            result = summary.get("result", "").lower()
-            if result in ("success", "partial", "skipped"):
-                return True
-            log(
-                f"Agent reported result={result!r} — counting as failure",
-                logging.WARNING,
-            )
-            return False
-    except (json.JSONDecodeError, AttributeError):
-        pass
-
-    # No valid JSON summary found — do NOT assume success
-    # UNLESS we have evidence of actual work (tokens processed, tool calls, or text content)
-    if has_tokens:
-        log(
-            "No JSON summary but tokens were processed — counting as partial success",
-            logging.INFO,
-        )
-        return True
-    
-    # Check if agent sent non-empty text response
-    if text and len(text.strip()) > 0:
-        log(
-            "No JSON summary but non-empty text response received — counting as partial success",
-            logging.INFO,
-        )
-        return True
-    
-    log(
-        "No JSON summary with 'result' field found in agent response, "
-        "no token usage, and no text content — counting as failure to prevent silent failures",
-        logging.WARNING,
-    )
-    return False
+    return classify_iteration(response) != "error"
 
 
 def _extract_result_field(response: dict) -> str:
-    """Extract the 'result' field from the agent's JSON summary.
-
-    Returns the result string (e.g. 'success', 'skipped', 'failure') or
-    empty string if not found.
-    
-    Uses a robust balanced brace parser that handles nested JSON objects
-    by finding matching braces and checking each for the "result" field
-    (recursively searching nested objects).
-    """
-    text = extract_text_from_response(response)
-    try:
-        import json
-        
-        def _search_nested_result(obj):
-            """Recursively search for 'result' field in nested objects or arrays."""
-            if isinstance(obj, dict):
-                if "result" in obj:
-                    return obj["result"]
-                for value in obj.values():
-                    found = _search_nested_result(value)
-                    if found is not None:
-                        return found
-            elif isinstance(obj, list):
-                for item in obj:
-                    found = _search_nested_result(item)
-                    if found is not None:
-                        return found
-            return None
-        
-        def find_json_with_result(s):
-            """Find JSON object containing 'result' field using balanced brace matching."""
-            i = 0
-            while i < len(s):
-                if s[i] == '{':
-                    # Found opening brace, find matching closing brace
-                    depth = 1
-                    start = i
-                    i += 1
-                    while i < len(s) and depth > 0:
-                        if s[i] == '{':
-                            depth += 1
-                        elif s[i] == '}':
-                            depth -= 1
-                        i += 1
-                    
-                    if depth == 0:
-                        candidate = s[start:i]
-                        try:
-                            parsed_obj = json.loads(candidate)
-                            found = _search_nested_result(parsed_obj)
-                            if found is not None:
-                                return {"result": found}
-                        except json.JSONDecodeError:
-                            pass
-                else:
-                    i += 1
-            return None
-        
-        result_obj = find_json_with_result(text)
-        if result_obj:
-            return str(result_obj.get("result", "")).lower()
-    except (json.JSONDecodeError, AttributeError, TypeError):
-        pass
-    return ""
+    """Extract the 'result' field from the agent's JSON summary."""
+    summary = extract_summary(response)
+    return str(summary.get("result", "")).lower() if summary else ""
 
 
 # =============================================================================
@@ -1169,22 +1215,6 @@ def main():
 
                 # Track token usage from response
                 prompt_tokens, completion_tokens = _extract_token_usage(response)
-                
-                # Handle the case where token usage is 0 but response was valid
-                # This can happen with some API implementations
-                if prompt_tokens == 0 and completion_tokens == 0:
-                    # Try to detect if the agent actually responded
-                    if response.get("choices") and len(response.get("choices", [])) > 0:
-                        content = response["choices"][0].get("message", {}).get("content", "")
-                        if content and len(content.strip()) > 10:
-                            log(
-                                "  Token usage shows 0 tokens but agent responded — "
-                                "considering this a valid iteration",
-                                logging.INFO,
-                            )
-                            # Count as a successful iteration with minimal token usage
-                            prompt_tokens = 1
-                            completion_tokens = 1
 
                 # Per-iteration cost tracking
                 iter_cost = _calculate_iteration_cost(prompt_tokens, completion_tokens)
@@ -1193,23 +1223,39 @@ def main():
                     f"(prompt={prompt_tokens}, completion={completion_tokens}) "
                     f"| Cumulative: ${_metrics['cumulative_spend']:.4f}")
 
-                if response_indicates_success(response):
+                # 3-way classification: success / failure / error
+                classification = classify_iteration(response)
+                result = _extract_result_field(response)
+                _save_iteration_log(iteration, response, classification)
+
+                if classification == "success":
                     consecutive_failures = 0
                     _metrics["successful_iterations"] += 1
                     _circuit_breaker.record_success()
-
-                    result = _extract_result_field(response)
                     if result == "skipped":
                         _metrics["skipped_iterations"] += 1
                     log(f"Iteration {iteration} completed successfully "
                         f"(result={result!r})")
-                else:
+
+                elif classification == "failure":
+                    # Agent reported failure — system is working correctly.
+                    # Don't increment consecutive_failures or trigger circuit
+                    # breaker, because this isn't an infra problem.
+                    _metrics["failed_iterations"] += 1
+                    _circuit_breaker.record_success()  # agent was reachable
+                    summary = extract_summary(response)
+                    error_msg = summary.get("error", "unknown")
+                    log(f"Iteration {iteration}: agent reported failure "
+                        f"(error={error_msg!r}) — system OK, no backoff")
+
+                else:  # "error" — infrastructure problem
                     consecutive_failures += 1
                     _metrics["failed_iterations"] += 1
                     _circuit_breaker.record_failure()
                     log(
-                        f"Iteration {iteration} failed "
-                        f"(consecutive: {consecutive_failures})"
+                        f"Iteration {iteration} infrastructure error "
+                        f"(consecutive: {consecutive_failures})",
+                        logging.WARNING,
                     )
 
             except (TimeoutError, urllib.error.URLError) as exc:

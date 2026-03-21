@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from orchestrator.loop import (
     CircuitBreaker,
+    classify_iteration,
+    extract_summary,
     response_indicates_success,
     _response_indicates_idle,
     _extract_result_field,
@@ -245,6 +247,140 @@ class TestCostCalculation(unittest.TestCase):
         # $0.12/M input, $0.75/M output
         cost = _calculate_iteration_cost(1000000, 1000000)
         self.assertAlmostEqual(cost, 0.87)  # 0.12 + 0.75
+
+
+class TestClassifyIteration(unittest.TestCase):
+    """Test the 3-way classify_iteration function."""
+
+    def test_success_from_json_summary(self):
+        """Agent JSON summary with result=success."""
+        response = {
+            "choices": [{"message": {"content":
+                '{"iteration": 5, "result": "success", "summary": "Added tests"}'
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "success")
+
+    def test_failure_from_json_summary(self):
+        """Agent JSON summary with result=failure is 'failure', not 'error'."""
+        response = {
+            "choices": [{"message": {"content":
+                '{"iteration": 5, "result": "failure", "error": "tests did not pass"}'
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "failure")
+
+    def test_error_on_empty_response(self):
+        """Empty response is infrastructure error."""
+        response = {
+            "choices": [{"message": {"content": ""}}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0}
+        }
+        self.assertEqual(classify_iteration(response), "error")
+
+    def test_success_with_tool_calls_no_json(self):
+        """Tool calls without JSON summary = success."""
+        response = {
+            "choices": [{"message": {
+                "content": "Working on it.",
+                "tool_calls": [{"id": "t1", "type": "function"}]
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "success")
+
+    def test_success_with_work_patterns_no_json(self):
+        """Work patterns (PR ref, git push) without JSON summary = success."""
+        response = {
+            "choices": [{"message": {
+                "content": "Created PR #42 and pushed branch agent/20260321120000-add-cli"
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "success")
+
+    def test_success_with_substantial_text(self):
+        """Long text without JSON or work patterns = success (agent engaged)."""
+        response = {
+            "choices": [{"message": {
+                "content": "I analyzed the codebase and found several areas for improvement. "
+                           "The test coverage is at 45% and needs work on the CLI module."
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "success")
+
+    def test_skipped_is_success(self):
+        """Skipped result counts as success (no backoff needed)."""
+        response = {
+            "choices": [{"message": {"content":
+                '{"iteration": 5, "result": "skipped", "summary": "No work available"}'
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "success")
+
+    def test_nested_json_summary(self):
+        """Result field inside nested JSON is found correctly."""
+        response = {
+            "choices": [{"message": {"content":
+                'Here is my report:\n```json\n{"data": {"iteration": 5, "result": "success"}}\n```'
+            }}]
+        }
+        self.assertEqual(classify_iteration(response), "success")
+
+
+class TestExtractSummary(unittest.TestCase):
+    """Test extract_summary with various response formats."""
+
+    def test_clean_json(self):
+        """Simple JSON summary."""
+        response = {
+            "choices": [{"message": {"content":
+                '{"iteration": 10, "result": "success", "pr_number": 42, "confidence": 0.9}'
+            }}]
+        }
+        summary = extract_summary(response)
+        self.assertEqual(summary["result"], "success")
+        self.assertEqual(summary["pr_number"], 42)
+        self.assertAlmostEqual(summary["confidence"], 0.9)
+
+    def test_json_embedded_in_markdown(self):
+        """JSON inside markdown code block."""
+        response = {
+            "choices": [{"message": {"content":
+                "Done! Here's the summary:\n\n```json\n"
+                '{"iteration": 10, "action_type": "feature", "result": "success"}\n'
+                "```\n"
+            }}]
+        }
+        summary = extract_summary(response)
+        self.assertEqual(summary["result"], "success")
+        self.assertEqual(summary["action_type"], "feature")
+
+    def test_no_json_returns_empty(self):
+        """No JSON in response returns empty dict."""
+        response = {
+            "choices": [{"message": {"content": "Just some plain text."}}]
+        }
+        summary = extract_summary(response)
+        self.assertEqual(summary, {})
+
+    def test_json_without_result_field_ignored(self):
+        """JSON without a 'result' field is not a summary."""
+        response = {
+            "choices": [{"message": {"content":
+                '{"name": "test", "count": 5}'
+            }}]
+        }
+        summary = extract_summary(response)
+        self.assertEqual(summary, {})
+
+    def test_multiple_json_objects(self):
+        """Multiple JSON objects — picks the one with 'result'."""
+        response = {
+            "choices": [{"message": {"content":
+                '{"test": "data"}\nSome text\n{"iteration": 5, "result": "partial"}'
+            }}]
+        }
+        summary = extract_summary(response)
+        self.assertEqual(summary["result"], "partial")
 
 
 if __name__ == "__main__":
