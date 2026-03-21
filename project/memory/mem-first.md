@@ -1,0 +1,1 @@
+first iteration bootstrap complete - scaffolding complete, tests passing, ready for implementation
