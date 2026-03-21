@@ -2,7 +2,7 @@
 -include .env
 export
 
-.PHONY: up down logs restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight monitor deploy cost ssh-tunnel
+.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all
 
 # Start all services
 up:
@@ -24,15 +24,32 @@ restart:
 status:
 	docker compose ps
 
-# Check OpenRouter API connectivity
+# Show clear per-service health status
 health:
-	@echo "Checking OpenRouter API connectivity..."
-	@curl -sf -H "Authorization: Bearer $$OPENROUTER_API_KEY" \
+	@echo "=== Service Health ==="
+	@svc_check() { \
+		SVC="$$1"; PORT="$$2"; LABEL="$$3"; \
+		printf "%-16s" "$$LABEL:"; \
+		STATE=$$(docker compose ps --format '{{.State}}' "$$SVC" 2>/dev/null || echo ""); \
+		HEALTH=$$(docker compose ps --format '{{.Health}}' "$$SVC" 2>/dev/null || echo ""); \
+		if [ "$$HEALTH" = "healthy" ]; then \
+			echo "healthy (port $$PORT)"; \
+		elif [ "$$STATE" = "running" ]; then \
+			echo "running (port $$PORT)"; \
+		else \
+			echo "down"; \
+		fi; \
+	}; \
+	svc_check tidb            4000  "tidb"; \
+	svc_check embed-service   8090  "embed-service"; \
+	svc_check mnemo-server    8082  "mnemo-server"; \
+	svc_check openclaw-gateway 18789 "openclaw"; \
+	svc_check orchestrator    -     "orchestrator"; \
+	echo "=== OpenRouter API ==="; \
+	curl -sf -H "Authorization: Bearer $$OPENROUTER_API_KEY" \
 		https://openrouter.ai/api/v1/models | head -c 200 > /dev/null \
 		&& echo "OpenRouter API: OK" \
 		|| echo "OpenRouter API: UNREACHABLE (check OPENROUTER_API_KEY)"
-	@echo "Checking running containers..."
-	@docker compose ps
 
 # First-time setup: clone repo, initialize mem9 tenant, send first prompt
 bootstrap:
@@ -88,6 +105,19 @@ scan-secrets:
 # Requires: brew install mysql-client@8.4
 MYSQL_BIN ?= /opt/homebrew/opt/mysql-client@8.4/bin/mysql
 init-db:
+	@echo "Waiting for TiDB to be healthy..."
+	@for i in $$(seq 1 30); do \
+		if $(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root -e "SELECT 1" >/dev/null 2>&1; then \
+			echo "TiDB is ready."; \
+			break; \
+		fi; \
+		if [ $$i -eq 30 ]; then \
+			echo "ERROR: TiDB did not become healthy after 30 attempts."; \
+			exit 1; \
+		fi; \
+		echo "  Attempt $$i/30 — TiDB not ready, waiting 2s..."; \
+		sleep 2; \
+	done
 	@echo "Initializing TiDB databases..."
 	$(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql
 	@echo "Done. Databases and tables created."
@@ -97,8 +127,30 @@ validate-workspace:
 	@bash scripts/validate-workspace.sh
 
 # Final pre-flight check: start stack, run all checks, stop orchestrator
-preflight:
+preflight-stack:
 	@bash scripts/preflight.sh
+
+# Pre-flight validation: ensure all prerequisites are met before starting
+preflight:
+	@echo "=== Preflight Checks ==="
+	@FAIL=0; \
+	echo -n "Docker daemon:    "; \
+	if docker info >/dev/null 2>&1; then echo "OK"; else echo "FAIL — Docker is not running"; FAIL=1; fi; \
+	echo -n ".env file:        "; \
+	if [ -f .env ]; then echo "OK"; else echo "FAIL — .env not found (cp .env.example .env)"; FAIL=1; fi; \
+	echo -n "OPENROUTER_API_KEY: "; \
+	if [ -n "$${OPENROUTER_API_KEY:-}" ]; then echo "OK (set)"; else echo "FAIL — not set in .env"; FAIL=1; fi; \
+	echo -n "GITHUB_TOKEN:     "; \
+	if [ -n "$${GITHUB_TOKEN:-}" ]; then echo "OK (set)"; else echo "FAIL — not set in .env"; FAIL=1; fi; \
+	echo -n "TARGET_REPO:      "; \
+	if [ -n "$${TARGET_REPO:-}" ]; then echo "OK ($$TARGET_REPO)"; else echo "FAIL — not set in .env"; FAIL=1; fi; \
+	echo -n "Port 4000 (TiDB): "; \
+	if ! lsof -iTCP:4000 -sTCP:LISTEN >/dev/null 2>&1; then echo "OK (free)"; else echo "WARN — already in use"; fi; \
+	echo -n "Port 8090 (embed): "; \
+	if ! lsof -iTCP:8090 -sTCP:LISTEN >/dev/null 2>&1; then echo "OK (free)"; else echo "WARN — already in use"; fi; \
+	echo "==="; \
+	if [ $$FAIL -ne 0 ]; then echo "Preflight FAILED — fix the above issues before running 'make up'."; exit 1; \
+	else echo "All preflight checks passed."; fi
 
 # Run the monitoring dashboard
 monitor:
@@ -142,3 +194,21 @@ cost:
 # Print SSH command to connect to VPS
 ssh-tunnel:
 	@echo "ssh root@$$DROPLET_IP"
+
+# Follow logs with tail context (last 50 lines per service)
+logs-follow:
+	docker compose logs -f --tail=50
+
+# Force rebuild all images with no cache (use after code changes)
+rebuild:
+	docker compose build --no-cache
+
+# Build all images in parallel
+build-all:
+	docker compose build --parallel
+
+# Reset metrics and unpause the agent
+reset-metrics:
+	@echo '{}' > workspace/metrics.json
+	@rm -f workspace/PAUSE
+	@echo "Metrics cleared and PAUSE removed."

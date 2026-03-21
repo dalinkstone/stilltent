@@ -79,7 +79,7 @@ trigger_agent() {
         ${auth_header:+-H "Authorization: Bearer ${OPENCLAW_GATEWAY_TOKEN}"} \
         --max-time "${ITERATION_TIMEOUT}" \
         -d "{
-            \"model\": \"ollama-local/qwen3:32b\",
+            \"model\": \"openclaw:main\",
             \"messages\": [{\"role\": \"user\", \"content\": $(printf '%s' "$message" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}]
         }" 2>/dev/null) || status="000"
 

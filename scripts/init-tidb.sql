@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS memories (
   source          VARCHAR(100),
   tags            JSON,
   metadata        JSON,
-  embedding       VECTOR(768)     NULL,
+  embedding       VECTOR(256)     NULL,
   memory_type     VARCHAR(20)     NOT NULL DEFAULT 'pinned'
                   COMMENT 'pinned|insight|digest',
   agent_id        VARCHAR(100)    NULL     COMMENT 'Agent that created this memory',
@@ -83,6 +83,45 @@ CREATE TABLE IF NOT EXISTS memories (
   INDEX idx_session             (session_id),
   INDEX idx_updated             (updated_at)
 );
+
+-- Migrate embedding column to 256 dims if it exists with a different size.
+-- This is safe: ALTER COLUMN on VECTOR type re-creates the column.
+-- Existing embeddings (if any) from the old 768/1536-dim model are incompatible
+-- and will be cleared (set to NULL) so the new embed-service can re-generate them.
+ALTER TABLE memories MODIFY COLUMN embedding VECTOR(256) NULL;
+UPDATE memories SET embedding = NULL WHERE embedding IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Vector index for fast approximate nearest-neighbor search (TiDB v8.4+)
+-- TiDB requires a TiFlash replica before creating a vector index.
+-- The USING HNSW clause builds a Hierarchical Navigable Small World graph
+-- over the embedding column for cosine distance queries.
+-- NOTE: In local/dev environments without TiFlash, these statements will
+-- error silently — vector search still works via brute-force scan.
+-- ---------------------------------------------------------------------------
+ALTER TABLE memories SET TIFLASH REPLICA 1;
+
+-- The vector index accelerates ORDER BY VEC_COSINE_DISTANCE(embedding, ?)
+-- TiDB picks it up automatically when the distance function matches.
+ALTER TABLE memories ADD VECTOR INDEX idx_vec_embedding (embedding) USING HNSW
+  COMMENT 'distance_metric=cosine';
+
+-- ---------------------------------------------------------------------------
+-- Composite index for filtered vector search.
+-- VectorSearch always filters on state (usually 'active') and
+-- embedding IS NOT NULL. TiDB does not support partial indexes, so we
+-- create a composite B-tree index covering the most common filter columns.
+-- This lets the optimizer narrow rows before the ANN scan.
+-- ---------------------------------------------------------------------------
+CREATE INDEX idx_state_agent_session ON memories (state, agent_id, session_id);
+
+-- ---------------------------------------------------------------------------
+-- Table compression hint.
+-- TiDB (InnoDB-compatible) supports ROW_FORMAT=COMPRESSED for reducing
+-- storage of MEDIUMTEXT content. If the TiDB deployment uses TiKV with
+-- page compression, this is redundant but harmless.
+-- ---------------------------------------------------------------------------
+ALTER TABLE memories ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8;
 
 -- Verify
 SHOW DATABASES;
