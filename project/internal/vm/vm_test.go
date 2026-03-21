@@ -77,10 +77,10 @@ func (m *mockStateManager) ListVMs() ([]*models.VMState, error) {
 }
 
 type mockHypervisorBackend struct {
-	ErrCreate error
-	ErrList   error
+	ErrCreate  error
+	ErrList    error
 	ErrDestroy error
-	CreatedVM *mockVMInstance
+	CreatedVM  *mockVMInstance
 }
 
 type mockVMInstance struct {
