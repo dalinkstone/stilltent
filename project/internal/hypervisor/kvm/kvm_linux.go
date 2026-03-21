@@ -1,8 +1,3 @@
-//go:build linux
-// +build linux
-
-// Package kvm provides a KVM backend implementation for Linux.
-// It uses the kernel's /dev/kvm interface via the hype library.
 package kvm
 
 import (

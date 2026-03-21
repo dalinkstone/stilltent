@@ -11,10 +11,10 @@ import (
 type Backend interface {
 	// CreateVM allocates VM resources and returns a VM handle
 	CreateVM(config *models.VMConfig) (VM, error)
-	
+
 	// ListVMs returns all active VMs on the system
 	ListVMs() ([]VM, error)
-	
+
 	// DestroyVM releases all resources associated with a VM
 	DestroyVM(vm VM) error
 }
@@ -23,51 +23,27 @@ type Backend interface {
 type VM interface {
 	// Start boots the VM
 	Start() error
-	
+
 	// Stop gracefully shuts down the VM
 	Stop() error
-	
+
 	// Kill forcefully terminates the VM
 	Kill() error
-	
+
 	// Status returns the current VM state
 	Status() (models.VMStatus, error)
-	
+
 	// GetConfig returns the VM's configuration
 	GetConfig() *models.VMConfig
-	
+
 	// GetIP returns the VM's network IP address
 	GetIP() string
-	
+
 	// GetPID returns the VM process ID (if applicable)
 	GetPID() int
-	
+
 	// Cleanup releases all VM resources
 	Cleanup() error
-}
-
-// BackendOption configures a Backend instance
-type BackendOption func(*backendConfig) error
-
-type backendConfig struct {
-	baseDir string
-}
-
-// WithBaseDir sets the base directory for VM storage
-func WithBaseDir(dir string) BackendOption {
-	return func(c *backendConfig) error {
-		c.baseDir = dir
-		return nil
-	}
-}
-
-// NewBackend creates a new hypervisor backend for the current platform.
-// On Linux, this uses KVM via /dev/kvm.
-// On macOS, this uses Hypervisor.framework or Virtualization.framework.
-func NewBackend(opts ...BackendOption) (Backend, error) {
-	// Auto-detect platform and return appropriate backend
-	// For now, return error to indicate platform-specific build tags should be used
-	return nil, ErrUnsupportedPlatform
 }
 
 // ErrUnsupportedPlatform indicates the current OS is not supported
