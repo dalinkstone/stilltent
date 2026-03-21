@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -222,7 +223,7 @@ func (m *VMManager) Stop(name string) error {
 		if vmState.PID > 0 {
 			proc, err := os.FindProcess(vmState.PID)
 			if err == nil {
-				proc.Signal(os.Signal(nil)) // placeholder - need proper signal
+				proc.Signal(os.Signal(syscall.SIGTERM))
 				// Give it a moment to shut down
 				time.Sleep(100 * time.Millisecond)
 				// If still running, kill it
