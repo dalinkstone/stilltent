@@ -644,3 +644,373 @@ func stringTrimSuffix(s, suffix string) string {
 	}
 	return s
 }
+
+// --- Tests for Command Handlers ---
+
+// TestCreateCommand_ValidArgs tests create command with valid arguments
+func TestCreateCommand_ValidArgs(t *testing.T) {
+	cmd := createCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestCreateCommand_InvalidArgs tests create command with invalid arguments
+func TestCreateCommand_InvalidArgs(t *testing.T) {
+	cmd := createCmd()
+	
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"no args", []string{}},
+		{"too many args", []string{"vm1", "vm2"}},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := cmd.ValidateArgs(tt.args)
+			if err == nil {
+				t.Error("Expected error for invalid args")
+			}
+		})
+	}
+}
+
+// TestCreateCommand_Flags tests create command flags
+func TestCreateCommand_Flags(t *testing.T) {
+	cmd := createCmd()
+	
+	// Test that --config flag exists
+	configFlag := cmd.Flags().Lookup("config")
+	if configFlag == nil {
+		t.Error("Expected --config flag to exist")
+	}
+	
+	// Test flag description
+	if configFlag.Usage == "" {
+		t.Error("Flag should have usage description")
+	}
+}
+
+// TestStartCommand_ValidArgs tests start command with valid arguments
+func TestStartCommand_ValidArgs(t *testing.T) {
+	cmd := startCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestStartCommand_InvalidArgs tests start command with invalid arguments
+func TestStartCommand_InvalidArgs(t *testing.T) {
+	cmd := startCmd()
+	
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"no args", []string{}},
+		{"too many args", []string{"vm1", "vm2"}},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := cmd.ValidateArgs(tt.args)
+			if err == nil {
+				t.Error("Expected error for invalid args")
+			}
+		})
+	}
+}
+
+// TestStopCommand_ValidArgs tests stop command with valid arguments
+func TestStopCommand_ValidArgs(t *testing.T) {
+	cmd := stopCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestStopCommand_InvalidArgs tests stop command with invalid arguments
+func TestStopCommand_InvalidArgs(t *testing.T) {
+	cmd := stopCmd()
+	
+	err := cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Expected error for missing VM name")
+	}
+}
+
+// TestDestroyCommand_ValidArgs tests destroy command with valid arguments
+func TestDestroyCommand_ValidArgs(t *testing.T) {
+	cmd := destroyCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestDestroyCommand_InvalidArgs tests destroy command with invalid arguments
+func TestDestroyCommand_InvalidArgs(t *testing.T) {
+	cmd := destroyCmd()
+	
+	err := cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Expected error for missing VM name")
+	}
+}
+
+// TestListCommand_NoArgs tests list command (should accept no args)
+func TestListCommand_NoArgs(t *testing.T) {
+	cmd := listCmd()
+	
+	err := cmd.ValidateArgs([]string{})
+	if err != nil {
+		t.Errorf("Expected no error for list command with no args, got: %v", err)
+	}
+}
+
+// TestStatusCommand_ValidArgs tests status command with valid arguments
+func TestStatusCommand_ValidArgs(t *testing.T) {
+	cmd := statusCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestStatusCommand_InvalidArgs tests status command with invalid arguments
+func TestStatusCommand_InvalidArgs(t *testing.T) {
+	cmd := statusCmd()
+	
+	err := cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Expected error for missing VM name")
+	}
+}
+
+// TestLogsCommand_ValidArgs tests logs command with valid arguments
+func TestLogsCommand_ValidArgs(t *testing.T) {
+	cmd := logsCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestLogsCommand_InvalidArgs tests logs command with invalid arguments
+func TestLogsCommand_InvalidArgs(t *testing.T) {
+	cmd := logsCmd()
+	
+	err := cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Expected error for missing VM name")
+	}
+}
+
+// TestSSHCommand_ValidArgs tests ssh command with valid arguments
+func TestSSHCommand_ValidArgs(t *testing.T) {
+	cmd := sshCmd()
+	
+	err := cmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestSSHCommand_InvalidArgs tests ssh command with invalid arguments
+func TestSSHCommand_InvalidArgs(t *testing.T) {
+	cmd := sshCmd()
+	
+	err := cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Expected error for missing VM name")
+	}
+}
+
+// TestSnapshotCreateCommand_ValidArgs tests snapshot create with valid arguments
+func TestSnapshotCreateCommand_ValidArgs(t *testing.T) {
+	cmd := snapshotCmd()
+	
+	// Get the create subcommand
+	createCmd := findSubcommand(cmd, "create")
+	if createCmd == nil {
+		t.Fatal("Create subcommand not found")
+	}
+	
+	err := createCmd.ValidateArgs([]string{"my-vm", "tag1"})
+	if err != nil {
+		t.Errorf("Expected no error for valid args, got: %v", err)
+	}
+}
+
+// TestSnapshotCreateCommand_InvalidArgs tests snapshot create with invalid arguments
+func TestSnapshotCreateCommand_InvalidArgs(t *testing.T) {
+	cmd := snapshotCmd()
+	
+	createCmd := findSubcommand(cmd, "create")
+	if createCmd == nil {
+		t.Fatal("Create subcommand not found")
+	}
+	
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"no args", []string{}},
+		{"one arg", []string{"vm"}},
+		{"too many args", []string{"vm", "tag", "extra"}},
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := createCmd.ValidateArgs(tt.args)
+			if err == nil {
+				t.Error("Expected error for invalid args")
+			}
+		})
+	}
+}
+
+// TestSnapshotRestoreCommand_ValidArgs tests snapshot restore with valid arguments
+func TestSnapshotRestoreCommand_ValidArgs(t *testing.T) {
+	cmd := snapshotCmd()
+	
+	restoreCmd := findSubcommand(cmd, "restore")
+	if restoreCmd == nil {
+		t.Fatal("Restore subcommand not found")
+	}
+	
+	err := restoreCmd.ValidateArgs([]string{"my-vm", "tag1"})
+	if err != nil {
+		t.Errorf("Expected no error for valid args, got: %v", err)
+	}
+}
+
+// TestSnapshotListCommand_ValidArgs tests snapshot list with valid arguments
+func TestSnapshotListCommand_ValidArgs(t *testing.T) {
+	cmd := snapshotCmd()
+	
+	listCmd := findSubcommand(cmd, "list")
+	if listCmd == nil {
+		t.Fatal("List subcommand not found")
+	}
+	
+	err := listCmd.ValidateArgs([]string{"my-vm"})
+	if err != nil {
+		t.Errorf("Expected no error for valid VM name, got: %v", err)
+	}
+}
+
+// TestNetworkListCommand tests network list command
+func TestNetworkListCommand(t *testing.T) {
+	cmd := networkCmd()
+	
+	listCmd := findSubcommand(cmd, "list")
+	if listCmd == nil {
+		t.Fatal("Network list subcommand not found")
+	}
+	
+	err := listCmd.ValidateArgs([]string{})
+	if err != nil {
+		t.Errorf("Expected no error for list command, got: %v", err)
+	}
+}
+
+// TestImageListCommand tests image list command
+func TestImageListCommand(t *testing.T) {
+	cmd := imageCmd()
+	
+	listCmd := findSubcommand(cmd, "list")
+	if listCmd == nil {
+		t.Fatal("Image list subcommand not found")
+	}
+	
+	err := listCmd.ValidateArgs([]string{})
+	if err != nil {
+		t.Errorf("Expected no error for list command, got: %v", err)
+	}
+}
+
+// TestImagePullCommand_ValidArgs tests image pull with valid arguments
+func TestImagePullCommand_ValidArgs(t *testing.T) {
+	cmd := imageCmd()
+	
+	pullCmd := findSubcommand(cmd, "pull")
+	if pullCmd == nil {
+		t.Fatal("Image pull subcommand not found")
+	}
+	
+	err := pullCmd.ValidateArgs([]string{"ubuntu-22.04"})
+	if err != nil {
+		t.Errorf("Expected no error for valid image name, got: %v", err)
+	}
+}
+
+// TestImagePullCommand_WithUrl tests image pull with URL
+func TestImagePullCommand_WithUrl(t *testing.T) {
+	cmd := imageCmd()
+	
+	pullCmd := findSubcommand(cmd, "pull")
+	if pullCmd == nil {
+		t.Fatal("Image pull subcommand not found")
+	}
+	
+	err := pullCmd.ValidateArgs([]string{"ubuntu-22.04", "https://example.com/image.img"})
+	if err != nil {
+		t.Errorf("Expected no error for image pull with URL, got: %v", err)
+	}
+}
+
+// findSubcommand finds a subcommand by name
+func findSubcommand(parent *cobra.Command, name string) *cobra.Command {
+	for _, cmd := range parent.Commands() {
+		if strings.HasPrefix(cmd.Use, name) {
+			return cmd
+		}
+	}
+	return nil
+}
+
+// TestLoadConfigFromFile tests loading config from a YAML file
+func TestLoadConfigFromFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		hasError bool
+	}{
+		{"valid config", "../../testdata/sample-config.yaml", false},
+		{"non-existent file", "/nonexistent/config.yaml", true},
+		{"empty path", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadConfigFromFile(tt.path)
+			if tt.hasError {
+				if err == nil {
+					t.Error("Expected error for invalid path")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if cfg == nil {
+					t.Error("Config should not be nil")
+				}
+				if cfg.Name != "test-vm" {
+					t.Errorf("Expected name 'test-vm', got '%s'", cfg.Name)
+				}
+			}
+		})
+	}
+}
