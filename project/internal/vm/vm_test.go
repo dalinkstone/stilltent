@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -959,5 +960,361 @@ func TestLoadConfigFromState_DefaultValues(t *testing.T) {
 	}
 	if config.MemoryMB != 1024 {
 		t.Errorf("expected default memory 1024, got %d", config.MemoryMB)
+	}
+}
+
+// TestSetup tests the Setup method
+func TestSetup(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{}
+	mockFC := &mockFirecrackerClient{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Setup()
+	if err != nil {
+		t.Fatalf("Setup failed: %v", err)
+	}
+}
+
+// TestLoadConfigFromState_InvalidYAML tests handling of invalid YAML in config file
+func TestLoadConfigFromState_InvalidYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	configDir := filepath.Join(tmpDir, "configs")
+	os.MkdirAll(configDir, 0755)
+
+	configPath := filepath.Join(configDir, "test-vm.yaml")
+	// Invalid YAML content
+	os.WriteFile(configPath, []byte("invalid: yaml: content: :::"), 0644)
+
+	manager, err := NewManager(tmpDir, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	vmState := &models.VMState{
+		Name: "test-vm",
+	}
+
+	config, err := manager.loadConfigFromState(vmState)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("config should not be nil")
+	}
+	// Should fall back to default values when YAML is invalid
+	if config.Name != "test-vm" {
+		t.Errorf("expected name 'test-vm', got '%s'", config.Name)
+	}
+}
+
+// TestLoadConfigFromState_EmptyFile tests handling of empty config file
+func TestLoadConfigFromState_EmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	configDir := filepath.Join(tmpDir, "configs")
+	os.MkdirAll(configDir, 0755)
+
+	configPath := filepath.Join(configDir, "test-vm.yaml")
+	// Empty file - YAML unmarshal succeeds but returns empty struct
+	os.WriteFile(configPath, []byte(""), 0644)
+
+	manager, err := NewManager(tmpDir, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	vmState := &models.VMState{
+		Name: "test-vm",
+	}
+
+	config, err := manager.loadConfigFromState(vmState)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("config should not be nil")
+	}
+	// Empty file returns empty config (no fallback to defaults)
+	// This is expected behavior - if config file exists but is empty, unmarshal succeeds with empty struct
+	if config.Name != "" {
+		t.Errorf("expected empty name from empty config file, got '%s'", config.Name)
+	}
+}
+
+// TestCreateVM_StateManagerError tests error handling when saving VM state fails
+func TestCreateVM_StateManagerError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		ErrStore: os.ErrPermission,
+	}
+	mockFC := &mockFirecrackerClient{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	config := &models.VMConfig{
+		Name:     "test-vm",
+		VCPUs:    2,
+		MemoryMB: 1024,
+		DiskGB:   10,
+	}
+
+	err = manager.Create("test-vm", config)
+	if err == nil {
+		t.Error("expected error when saving state fails")
+	}
+}
+
+// TestStartVM_FirecrackerConfigureError tests VM startup when Firecracker configure fails
+func TestStartVM_FirecrackerConfigureError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:       "test-vm",
+				Status:     models.VMStatusCreated,
+				SocketPath: filepath.Join(tmpDir, "test-vm.sock"),
+			},
+		},
+	}
+	mockFC := &mockFirecrackerClient{
+		ErrConfigure: fmt.Errorf("configure failed"),
+	}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	// Mock exec.Command to avoid spawning a real process
+	manager.execCommand = func(cmd string, args ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	err = manager.Start("test-vm")
+	if err == nil {
+		t.Error("expected error when Firecracker configure fails")
+	}
+
+	// Verify VM status was changed to stopped after configure failure
+	// (Stop is called on configure failure)
+	vm, err := mockState.GetVM("test-vm")
+	if err != nil {
+		t.Fatalf("VM should exist: %v", err)
+	}
+	// Status should be stopped (not created) after Stop is called on configure failure
+	if vm.Status != models.VMStatusStopped {
+		t.Errorf("expected status 'stopped' after configure failure, got '%s'", vm.Status)
+	}
+}
+
+// TestStopVM_NetworkCleanupError tests error handling when network cleanup fails
+func TestStopVM_NetworkCleanupError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:        "test-vm",
+				Status:      models.VMStatusRunning,
+				PID:         1234,
+				TAPDevice:   "tap0",
+			},
+		},
+	}
+	mockFC := &mockFirecrackerClient{}
+	mockNet := &mockNetworkManager{
+		ErrCleanup: os.ErrPermission,
+	}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Stop("test-vm")
+	if err == nil {
+		t.Error("expected error when network cleanup fails")
+	}
+}
+
+// TestDestroyVM_StorageCleanupError tests error handling when storage cleanup fails
+func TestDestroyVM_StorageCleanupError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {Name: "test-vm", Status: models.VMStatusStopped},
+		},
+	}
+	mockFC := &mockFirecrackerClient{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{
+		ErrDestroyVM: os.ErrPermission,
+	}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Destroy("test-vm")
+	if err == nil {
+		t.Error("expected error when storage cleanup fails")
+	}
+}
+
+// TestStatusVM_ProcessNotRunning tests Status when process is not running
+func TestStatusVM_ProcessNotRunning(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 99999}, // Non-existent PID
+		},
+	}
+	mockFC := &mockFirecrackerClient{}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	vmState, err := manager.Status("test-vm")
+	if err != nil {
+		t.Fatalf("failed to get status: %v", err)
+	}
+
+	// Status should detect the process is not running and update state
+	if vmState.Status != models.VMStatusStopped {
+		t.Errorf("expected status 'stopped' for non-existent process, got '%s'", vmState.Status)
+	}
+}
+
+// TestStartVM_FirecrackerStartError tests VM startup when Firecracker start fails
+func TestStartVM_FirecrackerStartError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:       "test-vm",
+				Status:     models.VMStatusCreated,
+				SocketPath: filepath.Join(tmpDir, "test-vm.sock"),
+			},
+		},
+	}
+	mockFC := &mockFirecrackerClient{
+		ErrStart: fmt.Errorf("start failed"),
+	}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	// Mock exec.Command to avoid spawning a real process
+	manager.execCommand = func(cmd string, args ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	err = manager.Start("test-vm")
+	if err == nil {
+		t.Error("expected error when Firecracker start fails")
+	}
+}
+
+// TestDestroyVM_FailedStop tests destroy when stop fails
+func TestDestroyVM_FailedStop(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {
+				Name:        "test-vm",
+				Status:      models.VMStatusRunning,
+				PID:         1234,
+				TAPDevice:   "tap0",
+			},
+		},
+	}
+	mockFC := &mockFirecrackerClient{}
+	mockNet := &mockNetworkManager{
+		ErrCleanup: fmt.Errorf("network cleanup failed"),
+	}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	err = manager.Destroy("test-vm")
+	if err == nil {
+		t.Error("expected error when destroy fails (stop component)")
+	}
+}
+
+// TestStopVM_FirecrackerShutdownError tests stop when Firecracker shutdown fails but process kill succeeds
+func TestStopVM_FirecrackerShutdownError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	mockState := &mockStateManager{
+		vms: map[string]*models.VMState{
+			"test-vm": {Name: "test-vm", Status: models.VMStatusRunning, PID: 1234},
+		},
+	}
+	mockFC := &mockFirecrackerClient{
+		ErrShutdown: fmt.Errorf("shutdown failed"),
+	}
+	mockNet := &mockNetworkManager{}
+	mockStorage := &mockStorageManager{}
+
+	manager, err := NewManager(tmpDir, mockState, mockFC, mockNet, mockStorage)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	// Mock the process to allow kill to succeed
+	manager.execCommand = func(cmd string, args ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	err = manager.Stop("test-vm")
+	if err != nil {
+		t.Fatalf("Stop should succeed even with Firecracker shutdown error: %v", err)
+	}
+
+	// Verify VM status changed to stopped
+	vm, err := mockState.GetVM("test-vm")
+	if err != nil {
+		t.Fatalf("VM should exist: %v", err)
+	}
+	if vm.Status != models.VMStatusStopped {
+		t.Errorf("expected status 'stopped', got '%s'", vm.Status)
 	}
 }
