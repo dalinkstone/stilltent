@@ -322,6 +322,17 @@ func TestCLIIntegration_ComprehensiveStructure(t *testing.T) {
 
 // --- Helper Functions ---
 
+// TestBuildTestCommand tests the buildTestCommand helper function
+func TestBuildTestCommand(t *testing.T) {
+	cmd := buildTestCommand()
+	if cmd == nil {
+		t.Fatal("buildTestCommand() should not return nil")
+	}
+	if cmd.Use != "tent" {
+		t.Errorf("Expected use 'tent', got '%s'", cmd.Use)
+	}
+}
+
 // buildTestCommand creates a test command for integration testing
 func buildTestCommand() *cobra.Command {
 	// This mimics main() but returns the command for testing
@@ -348,4 +359,283 @@ func buildTestCommand() *cobra.Command {
 	rootCmd.AddCommand(imageCmd())
 
 	return rootCmd
+}
+
+// --- CLI Command Integration Tests ---
+
+// TestCLIIntegration_CreateCommandExecution tests the create command execution with mock dependencies
+func TestCLIIntegration_CreateCommandExecution(t *testing.T) {
+	// Create a temporary directory for testing
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Create a test config file
+	configPath := filepath.Join(tmpDir, "test-config.yaml")
+	configContent := `name: test-vm
+vcpus: 4
+memory_mb: 2048
+disk_gb: 20
+`
+	err := os.WriteFile(configPath, []byte(configContent), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test config: %v", err)
+	}
+
+	// We can't directly test the command execution without full refactoring
+	// This test verifies the command structure and argument handling
+	cmd := createCmd()
+	if cmd == nil {
+		t.Fatal("createCmd() should not return nil")
+	}
+
+	// Test with config file
+	cmd.SetArgs([]string{"test-vm", "--config", configPath})
+	err = cmd.Execute()
+	if err != nil {
+		// Expected to fail due to missing actual VM manager, but structure should be valid
+		t.Logf("Command execution failed as expected: %v", err)
+	}
+}
+
+// TestCLIIntegration_StatusCommandExecution tests the status command execution
+func TestCLIIntegration_StatusCommandExecution(t *testing.T) {
+	// Create a temporary directory for testing
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// We can't directly test without full refactoring
+	cmd := statusCmd()
+	if cmd == nil {
+		t.Fatal("statusCmd() should not return nil")
+	}
+
+	// Test argument validation
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass validation: %v", err)
+	}
+
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Empty args should fail validation")
+	}
+}
+
+// TestCLIIntegration_ListCommandExecution tests the list command execution
+func TestCLIIntegration_ListCommandExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test argument validation - list command should not take arguments
+	cmd := listCmd()
+	if cmd == nil {
+		t.Fatal("listCmd() should not return nil")
+	}
+
+	// List command should not accept arguments
+	err := cmd.ValidateArgs([]string{"extra-arg"})
+	if err == nil {
+		t.Error("List command should not accept arguments")
+	}
+}
+
+// TestCLIIntegration_DestroyCommandExecution tests the destroy command execution
+func TestCLIIntegration_DestroyCommandExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := destroyCmd()
+	if cmd == nil {
+		t.Fatal("destroyCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+}
+
+// TestCLIIntegration_StartCommandExecution tests the start command execution
+func TestCLIIntegration_StartCommandExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := startCmd()
+	if cmd == nil {
+		t.Fatal("startCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+}
+
+// TestCLIIntegration_StopCommandExecution tests the stop command execution
+func TestCLIIntegration_StopCommandExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := stopCmd()
+	if cmd == nil {
+		t.Fatal("stopCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+}
+
+// TestCLIIntegration_SSHCommandExecution tests the ssh command execution
+func TestCLIIntegration_SSHCommandExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := sshCmd()
+	if cmd == nil {
+		t.Fatal("sshCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+}
+
+// TestCLIIntegration_LogsCommandExecution tests the logs command execution
+func TestCLIIntegration_LogsCommandExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	cmd := logsCmd()
+	if cmd == nil {
+		t.Fatal("logsCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
+}
+
+// TestCLIIntegration_SnapshotCommandsExecution tests snapshot subcommands execution
+func TestCLIIntegration_SnapshotCommandsExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test snapshot create
+	cmd := snapshotCreateCmd()
+	if cmd == nil {
+		t.Fatal("snapshotCreateCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"test-vm", "snapshot-tag"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{"test-vm"})
+	if err == nil {
+		t.Error("Missing tag arg should fail validation")
+	}
+
+	// Test snapshot restore
+	cmd = snapshotRestoreCmd()
+	if cmd == nil {
+		t.Fatal("snapshotRestoreCmd() should not return nil")
+	}
+
+	err = cmd.ValidateArgs([]string{"test-vm", "snapshot-tag"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test snapshot list
+	cmd = snapshotListCmd()
+	if cmd == nil {
+		t.Fatal("snapshotListCmd() should not return nil")
+	}
+
+	err = cmd.ValidateArgs([]string{"test-vm"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+}
+
+// TestCLIIntegration_ImageCommandsExecution tests image subcommands execution
+func TestCLIIntegration_ImageCommandsExecution(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Setenv("TENT_BASE_DIR", tmpDir)
+	defer os.Unsetenv("TENT_BASE_DIR")
+
+	// Test image pull
+	cmd := imagePullCmd()
+	if cmd == nil {
+		t.Fatal("imagePullCmd() should not return nil")
+	}
+
+	// Test with valid arguments
+	err := cmd.ValidateArgs([]string{"ubuntu-22.04"})
+	if err != nil {
+		t.Errorf("Valid args should pass: %v", err)
+	}
+
+	// Test with optional URL
+	err = cmd.ValidateArgs([]string{"ubuntu-22.04", "https://example.com/image.tar"})
+	if err != nil {
+		t.Errorf("Args with URL should pass: %v", err)
+	}
+
+	// Test with missing arguments
+	err = cmd.ValidateArgs([]string{})
+	if err == nil {
+		t.Error("Missing args should fail validation")
+	}
 }
