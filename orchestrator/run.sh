@@ -50,7 +50,8 @@ sync_repo() {
         }
     else
         log "Cloning ${TARGET_REPO} into ${REPO_DIR}..."
-        mkdir -p "${WORKSPACE}"
+        mkdir -p "${REPO_DIR}"
+        chmod 777 "${WORKSPACE}" 2>/dev/null || true
         git clone "https://github.com/${TARGET_REPO}.git" "${REPO_DIR}"
     fi
 }

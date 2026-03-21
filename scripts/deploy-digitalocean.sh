@@ -212,6 +212,10 @@ make health
 # 13. Bootstrap — clone target repo and start first iteration
 # -------------------------------------------------------------------
 echo ">>> Bootstrapping — cloning target repo and starting first iteration..."
+# Ensure workspace dir is writable by container users (node uid 1000, orchestrator)
+chmod 777 "${INSTALL_DIR}/workspace" 2>/dev/null || true
+mkdir -p "${INSTALL_DIR}/workspace/repo"
+chmod 777 "${INSTALL_DIR}/workspace/repo"
 make bootstrap
 
 # -------------------------------------------------------------------

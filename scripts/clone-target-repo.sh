@@ -8,6 +8,9 @@ REPO_DIR="/workspace/repo"
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
 TARGET_REPO="${TARGET_REPO:?TARGET_REPO must be set}"
 
+# Ensure the repo directory exists (may be needed if workspace is mounted read-only for non-owner)
+mkdir -p "$REPO_DIR" 2>/dev/null || true
+
 if [ -d "$REPO_DIR/.git" ]; then
     echo "Repository already cloned at $REPO_DIR"
     echo "Pulling latest changes..."

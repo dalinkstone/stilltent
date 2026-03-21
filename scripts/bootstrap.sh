@@ -24,11 +24,16 @@ read -p "All services healthy? Press Enter to continue, Ctrl+C to abort."
 # Step 2: Clone target repo
 echo ""
 echo "[2/6] Cloning target repository..."
-# scripts/ is not mounted into the container, so pipe clone-target-repo.sh in.
-docker compose exec -T openclaw-gateway bash -c '
+# Run as root (-u 0) so we can write to the /workspace volume mount.
+# After cloning, fix ownership so the node user (1000) can work with it.
+docker compose exec -T -u 0 openclaw-gateway bash -c '
     REPO_DIR="/workspace/repo"
     GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN must be set}"
     TARGET_REPO="${TARGET_REPO:?TARGET_REPO must be set}"
+
+    # Ensure workspace is writable by node (uid 1000)
+    chmod 777 /workspace
+    mkdir -p "$REPO_DIR"
 
     if [ -d "$REPO_DIR/.git" ]; then
         echo "Repository already cloned at $REPO_DIR"
@@ -46,6 +51,9 @@ docker compose exec -T openclaw-gateway bash -c '
 
     cd "$REPO_DIR"
     git remote set-url origin "https://${GITHUB_TOKEN}@github.com/${TARGET_REPO}.git"
+
+    # Make repo writable by node user (uid 1000) for future operations
+    chown -R 1000:1000 "$REPO_DIR"
     echo "Target repository ready."
 '
 echo "Repository ready."
