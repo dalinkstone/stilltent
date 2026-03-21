@@ -34,9 +34,9 @@ improvement_queue:
     description: Implement kernel/initrd extraction from rootfs images for actual VM booting
     priority: high
     added_iteration: 24
-    status: incomplete
-    completed_in_pr: 29
-    notes: ExtractKernel function implemented in storage package with fallback to host kernel. Full kernel extraction from rootfs images (qcow2, raw) still requires additional dependencies (qemu-img, libguestfs). Kernel search now implemented in KVM backend - VMs can start if host kernel is available.
+    status: complete
+    completed_in_pr: 33
+    notes: ExtractKernel function integrated into KVM backend via storage manager. VMs now extract and load kernel/initrd from rootfs images, enabling actual booting without requiring host kernel to be present at startup.
   - id: IQ-007
     area: internal/hypervisor/hvf
     type: feature-gap
