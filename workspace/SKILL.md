@@ -30,7 +30,7 @@ Use all available tools. Never work around them. Fix broken tools.
 3. Write `digest` memory every 10 iterations. Consolidate into `state_of_the_project` every 25 (delete replaced digests).
 4. Read targeted line ranges, not whole files. Every token counts.
 5. Log failures to memory, retry next iteration. Pin persistent failures (3+) so future iterations route around.
-6. When idle (no failures/PRs/issues): work the **improvement queue** first (see LEARNING.md). Only if the queue is empty: add edge-case tests, improve errors, refactor, harden CI.
+6. When idle (no failures/PRs/issues): work the **improvement queue** first (see LEARNING.md). Only if the queue is empty: implement the next feature from the spec, improve errors, refactor. Do NOT spend idle time writing tests — focus on features.
 7. **Every 5th iteration:** Work one item from the improvement queue instead of new features. You are an engineer who revisits and improves past work — not a script that only moves forward.
 8. **Every 10th iteration:** Perform a self-reflection (see LEARNING.md). Evaluate your recent hypotheses, success rate, and process. Store as `self_reflection`.
 9. **Every 25th iteration:** Knowledge consolidation — synthesize technical, process, and architecture insights. Review the improvement queue. Store as `consolidated_learnings`. See LEARNING.md for full protocol.
@@ -59,7 +59,7 @@ gh pr list --state open --limit 10 && gh issue list --state open --limit 10 && g
 ```
 Answer: (1) External PRs to review? (2) Failing tests? (3) In-progress plan? (4) Project maturity? (5) Highest-value next action?
 
-**Priority:** Fix tests > Review PRs > Continue plan > Open issues > Test coverage > Features > Refactor > Docs
+**Priority:** Fix tests > Review PRs > Continue plan > Open issues > Features > Refactor > Docs > Test coverage
 
 ## Phase 3: PLAN
 ```
@@ -117,7 +117,7 @@ Store in memory (compact key-value):
 5. **`experiment_result`:** Compare your Phase 3 prediction to actual outcome. Was your hypothesis confirmed, partially confirmed, refuted, or inconclusive? Be honest.
 6. **`insight`** (on confirmed hypothesis): What worked, why, and how to apply it again.
 7. **`improvement_queue`:** After every PR, ask: "What could be better about what I just built?" Add items with priority, area, and rationale.
-8. **`quality_metrics`** (every 5 iter): tests_total, tests_passing, build_clean, lint_clean, features_complete, features_remaining, known_bugs, code_health (1-5).
+8. **`quality_metrics`** (every 5 iter): build_clean, lint_clean, features_complete, features_remaining, known_bugs, code_health (1-5). Do NOT track test count as a quality metric — it incentivizes writing tests instead of features.
 
 **Quality ratchet:** Before storing `quality_metrics`, compare to the previous entry. If any metric regressed, note WHY and add a high-priority item to the improvement queue to fix it.
 
@@ -132,7 +132,7 @@ Consolidate every 25 iterations: summarize logs into `consolidated_learnings`, d
 4. Store spec summary + architectural decisions in memory
 5. Set up CI (`.github/workflows/ci.yml`) that runs tests from the `project/` directory
 
-First 5-10 iterations: scaffolding + test infra only. Then implement spec systematically. ALL code goes in `/workspace/repo/project/`.
+First 2-3 iterations: minimal scaffolding (module init, basic project structure, CI). Then immediately start implementing features from the spec. Do NOT spend iterations on test infrastructure alone — write tests only as lightweight validation alongside features. ALL code goes in `/workspace/repo/project/`.
 
 ## Emergency
 - **Loop (3+ same error):** Stop. Search `failed_approach`. Follow creative escalation from LEARNING.md (reframe → decompose → invert → research → pivot). All approaches exhausted = store `emergency` memory, check `/workspace/PAUSE`.
