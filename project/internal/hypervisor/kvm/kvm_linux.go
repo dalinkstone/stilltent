@@ -109,23 +109,41 @@ func (v *VM) Start() error {
 	cfg.Devices = append(cfg.Devices, &virtio.ConsoleDevice{})
 
 	// Set up kernel loader
-	rootfsPath := filepath.Join(v.backend.baseDir, "storage", "images", v.config.RootFS+".img")
-	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
-		return fmt.Errorf("rootfs not found: %s", rootfsPath)
-	}
-
 	// For now, we'll use a placeholder kernel path
 	// In production, this would extract the kernel from the rootfs image
-	kernelPath := "/boot/vmlinuz"
-	if _, err := os.Stat(kernelPath); os.IsNotExist(err) {
-		// Try alternative paths
-		kernelPath = "/vmlinuz"
+	rootfsPath := filepath.Join(v.backend.baseDir, "storage", "images", v.config.RootFS+".img")
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		// Try alternative path
+		rootfsPath = filepath.Join(v.backend.baseDir, "storage", "rootfs", v.config.Name, "rootfs.img")
+	}
+
+	// Find a kernel to use
+	// Try multiple common kernel paths
+	kernelPaths := []string{
+		"/vmlinuz",
+		"/boot/vmlinuz",
+		"/boot/vmlinuz-linux",
+	}
+
+	var kernelFound bool
+	for _, kp := range kernelPaths {
+		// Expand any variables in the path
+		expandedPath := os.ExpandEnv(kp)
+		if _, err := os.Stat(expandedPath); err == nil {
+			kernelFound = true
+			break
+		}
+	}
+
+	// If no kernel found, return an error
+	if !kernelFound {
+		return fmt.Errorf("no kernel found in any of the expected locations. Please install a kernel or specify a custom kernel path")
 	}
 
 	// Create a loader with the kernel
 	loader := &linux.Loader{
-		Kernel:  []byte{}, // Empty - would need actual kernel image
-		Initrd:  []byte{}, // Empty - would need actual initrd
+		Kernel:  []byte{},
+		Initrd:  []byte{},
 		Cmdline: fmt.Sprintf("root=/dev/vda console=hvc0 rw ip=dhcp init=/sbin/init"),
 	}
 
