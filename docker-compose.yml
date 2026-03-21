@@ -91,6 +91,8 @@ services:
       EMBED_DIMS: "256"
       # Reduced from 8 to 2 — matches 2 Intel vCPU droplet
       EMBED_THREADS: "2"
+    ports:
+      - "8090:8090"
     networks:
       stilltent-net:
         aliases:
@@ -139,6 +141,8 @@ services:
       MNEMO_DSN: "${TIDB_USER:-root}:${TIDB_PASSWORD:-}@tcp(${TIDB_HOST:-tidb}:${TIDB_PORT:-4000})/${TIDB_DATABASE:-mnemos}?parseTime=true"
 
       # --- Embedding provider (local C service, OpenAI-compatible API) ---
+      # "ollama" is the mnemo-server code path for local/OpenAI-compatible embeds.
+      # This does NOT require actual Ollama — it uses the embed-service container.
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
       MNEMO_EMBED_BASE_URL: http://embed-service:8090/v1
       MNEMO_EMBED_API_KEY: local
@@ -152,6 +156,8 @@ services:
 
       # --- Server port inside the container ---
       MNEMO_PORT: 8082
+    ports:
+      - "8082:8082"
     networks:
       - stilltent-net
     healthcheck:
@@ -200,6 +206,8 @@ services:
         condition: service_healthy
       tidb:
         condition: service_healthy
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
     volumes:
       # OpenClaw reads config from ~/.openclaw inside the container.
       # The container runs as user "node" (uid 1000), so HOME=/home/node.

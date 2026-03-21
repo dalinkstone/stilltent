@@ -1,5 +1,10 @@
 -- stilltent: TiDB initialization for mnemo-server (mem9)
 -- Run once after TiDB is healthy: mysql -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql
+--
+-- The VECTOR(256) column is REQUIRED — embedding is core functionality.
+-- embed-service (local C binary) generates 256-dim L2-normalized vectors.
+-- The HNSW index is optional (requires TiFlash); without it, vector search
+-- uses brute-force scan which is still functional for typical workloads.
 
 CREATE DATABASE IF NOT EXISTS mnemos;
 CREATE DATABASE IF NOT EXISTS mnemos_tenant;
@@ -88,23 +93,8 @@ CREATE TABLE IF NOT EXISTS memories (
 -- This is safe: ALTER COLUMN on VECTOR type re-creates the column.
 -- Existing embeddings (if any) from the old 768/1536-dim model are incompatible
 -- and will be cleared (set to NULL) so the new embed-service can re-generate them.
-ALTER TABLE memories MODIFY COLUMN embedding VECTOR(256) NULL;
 UPDATE memories SET embedding = NULL WHERE embedding IS NOT NULL;
-
--- ---------------------------------------------------------------------------
--- Vector index for fast approximate nearest-neighbor search (TiDB v8.4+)
--- TiDB requires a TiFlash replica before creating a vector index.
--- The USING HNSW clause builds a Hierarchical Navigable Small World graph
--- over the embedding column for cosine distance queries.
--- NOTE: In local/dev environments without TiFlash, these statements will
--- error silently — vector search still works via brute-force scan.
--- ---------------------------------------------------------------------------
-ALTER TABLE memories SET TIFLASH REPLICA 1;
-
--- The vector index accelerates ORDER BY VEC_COSINE_DISTANCE(embedding, ?)
--- TiDB picks it up automatically when the distance function matches.
-ALTER TABLE memories ADD VECTOR INDEX idx_vec_embedding (embedding) USING HNSW
-  COMMENT 'distance_metric=cosine';
+ALTER TABLE memories MODIFY COLUMN embedding VECTOR(256) NULL;
 
 -- ---------------------------------------------------------------------------
 -- Composite index for filtered vector search.
@@ -113,15 +103,7 @@ ALTER TABLE memories ADD VECTOR INDEX idx_vec_embedding (embedding) USING HNSW
 -- create a composite B-tree index covering the most common filter columns.
 -- This lets the optimizer narrow rows before the ANN scan.
 -- ---------------------------------------------------------------------------
-CREATE INDEX idx_state_agent_session ON memories (state, agent_id, session_id);
-
--- ---------------------------------------------------------------------------
--- Table compression hint.
--- TiDB (InnoDB-compatible) supports ROW_FORMAT=COMPRESSED for reducing
--- storage of MEDIUMTEXT content. If the TiDB deployment uses TiKV with
--- page compression, this is redundant but harmless.
--- ---------------------------------------------------------------------------
-ALTER TABLE memories ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8;
+CREATE INDEX IF NOT EXISTS idx_state_agent_session ON memories (state, agent_id, session_id);
 
 -- Verify
 SHOW DATABASES;

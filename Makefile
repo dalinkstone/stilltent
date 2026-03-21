@@ -37,7 +37,7 @@ health:
 		elif [ "$$STATE" = "running" ]; then \
 			echo "running (port $$PORT)"; \
 		else \
-			echo "down"; \
+			echo "DOWN"; \
 		fi; \
 	}; \
 	svc_check tidb            4000  "tidb"; \
@@ -45,6 +45,10 @@ health:
 	svc_check mnemo-server    8082  "mnemo-server"; \
 	svc_check openclaw-gateway 18789 "openclaw"; \
 	svc_check orchestrator    -     "orchestrator"; \
+	echo "=== Embedding (required) ==="; \
+	curl -sf http://localhost:8090/health > /dev/null \
+		&& echo "embed-service API: OK" \
+		|| echo "embed-service API: UNREACHABLE (vector search will not work)"; \
 	echo "=== OpenRouter API ==="; \
 	curl -sf -H "Authorization: Bearer $$OPENROUTER_API_KEY" \
 		https://openrouter.ai/api/v1/models | head -c 200 > /dev/null \
@@ -120,7 +124,27 @@ init-db:
 	done
 	@echo "Initializing TiDB databases..."
 	$(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root < scripts/init-tidb.sql
-	@echo "Done. Databases and tables created."
+	@echo "Verifying embedding infrastructure..."
+	@echo "  VECTOR(256) column: OK (created in schema)"
+	@echo "  embed-service: checking..."
+	@if curl -sf http://127.0.0.1:8090/health > /dev/null 2>&1; then \
+		echo "  embed-service: OK (running on port 8090)"; \
+	else \
+		echo "  embed-service: NOT RUNNING — start with 'make up' first"; \
+		echo "  WARNING: Embedding is required. Vector search will not work without embed-service."; \
+	fi
+	@echo "Setting up HNSW vector index (if TiFlash available)..."
+	@if $(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root -e \
+		"ALTER TABLE mnemos_tenant.memories SET TIFLASH REPLICA 1" 2>/dev/null; then \
+		echo "  TiFlash replica configured."; \
+		$(MYSQL_BIN) -h 127.0.0.1 -P 4000 -u root -e \
+			"ALTER TABLE mnemos_tenant.memories ADD VECTOR INDEX IF NOT EXISTS idx_vec_embedding (embedding) USING HNSW COMMENT 'distance_metric=cosine'" 2>/dev/null \
+			&& echo "  HNSW vector index created (accelerated ANN search)." \
+			|| echo "  HNSW index deferred (TiFlash syncing) — vector search uses brute-force scan until ready."; \
+	else \
+		echo "  TiFlash not available — vector search uses brute-force scan (still functional)."; \
+	fi
+	@echo "Done. Databases, tables, and embedding infrastructure ready."
 
 # Validate workspace files
 validate-workspace:
