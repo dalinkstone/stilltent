@@ -35,10 +35,12 @@ services:
     container_name: stilltent-tidb
     volumes:
       - tidb-data:/tmp/tidb
+    ports:
+      - "4000:4000"
     networks:
       - stilltent-net
     healthcheck:
-      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/4000'"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:10080/status"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -146,6 +148,8 @@ services:
         mkdir -p /tmp/openclaw-home/.openclaw
         sed "s/__OPENROUTER_API_KEY__/$${OPENROUTER_API_KEY}/g" \
           /home/node/.openclaw/openclaw.json > /tmp/openclaw-home/.openclaw/openclaw.json
+        # Link extensions directory so plugins are discoverable at runtime HOME
+        ln -sfn /home/node/.openclaw/extensions /tmp/openclaw-home/.openclaw/extensions
         # Carry over git identity from the image
         cp /home/node/.gitconfig /tmp/openclaw-home/.gitconfig 2>/dev/null || true
         export HOME=/tmp/openclaw-home
