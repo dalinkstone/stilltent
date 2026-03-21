@@ -24,17 +24,13 @@ Use all available tools. Never work around them. Fix broken tools.
 - Compact key-value format, not prose. Store file paths/line refs, not raw code. Tag consistently. 5 well-tagged memories > 50 unstructured.
 - **Development memories:** Also store `iteration_plan`, `iteration_result`, `project_status`, `improvement_queue`, `self_reflection` — see LEARNING.md for full details.
 
-## Long-Duration Rules
+## Long-Duration Rules — DEADLINE MODE
 1. Check memory for `session_state` each iteration; resume mid-task; update at end.
-2. ONE thing per iteration. Confidence >= 0.6 to proceed, else skip. Small correct > ambitious.
-3. Write `digest` memory every 10 iterations. Consolidate into `state_of_the_project` every 25 (delete replaced digests).
-4. Read targeted line ranges, not whole files. Every token counts.
-5. Log failures to memory, retry next iteration. Pin persistent failures (3+) so future iterations route around.
-6. When idle (no failures/PRs/issues): **build the next feature from the SOUL.md roadmap.** If the roadmap is complete, work the improvement queue. Do NOT write standalone tests, docs, or refactors when idle. Build features.
-7. **Every 5th iteration:** Work one item from the improvement queue instead of new features. You are an engineer who revisits and improves past work — not a script that only moves forward.
-8. **Every 10th iteration:** Perform a self-reflection (see LEARNING.md). Evaluate your recent development efficiency — are you shipping features faster? Store as `self_reflection`.
-9. **Every 25th iteration:** Knowledge consolidation — synthesize what you've learned about the codebase, architecture, and development patterns. Review the improvement queue. Store as `consolidated_learnings`. See LEARNING.md.
-10. **Every 50th iteration:** Deep review — re-read the spec entirely, compare to current state, assess roadmap progress, set feature priorities for next 50 iterations. See LEARNING.md.
+2. ONE feature per iteration. Confidence >= 0.6 to proceed, else skip. Small correct > ambitious.
+3. Read targeted line ranges, not whole files. Every token counts.
+4. Log failures to memory, retry next iteration. Pin persistent failures (3+) so future iterations route around.
+5. **Every iteration: build the next feature from the SOUL.md roadmap.** No exceptions. No improvement queue work, no reflections, no consolidation, no iteration summaries, no docs. Just features.
+6. **Do NOT create any markdown files** in the project directory (no ITERATION_XX.md, no ARCHITECTURE.md, no daily logs, no summary JSONs). These waste time and money.
 
 ## Phase 1: RECALL
 Search memory (use default `memory_search` settings, never `memory_type: "session"`):
@@ -113,22 +109,14 @@ For each: `gh pr checkout <N>`, build the code, `gh pr diff <N>`.
 - Build passes = approve + merge. Build fails = request changes. Misaligned with spec = comment + close. Uncertain = comment + skip.
 - Store decision (tag: `pr_review`). Return to `main`.
 
-## Phase 7: LEARN
-Store in memory (compact key-value):
-1. **`iteration_result`:** iteration N, what you built, result, PR#, merged?, roadmap item advanced, lessons, duration
-2. **`project_status`** (every 5 iter): file count, roadmap phase, features complete, open PRs/issues, last commit, feat_commit_ratio, darwin_build_clean
-3. **`failed_approach`** (on failure): what, why, lesson, do-not-retry flag
-4. **`architectural_decision`** (when applicable): decision, rationale, alternatives, affected files
+## Phase 7: LEARN (MINIMAL — DEADLINE MODE)
+Store in memory (compact, one line):
+1. **`iteration_result`:** iteration N, what you built, PR#, merged?, roadmap item advanced
+2. **`failed_approach`** (on failure only): what, why, do-not-retry flag
 
-**Review what you shipped (from LEARNING.md):**
-5. **`insight`** (when an approach worked well): What worked, why, and how to reuse it.
-6. **`improvement_queue`:** After every PR, ask: "What could be built better?" Add items with priority, area, and rationale.
+**That's it. No improvement queue updates. No self-reflection. No consolidation. No iteration summary files. No daily logs. No architecture docs. Just record what you shipped and move to the next feature.**
 
-**Forward ratchet:** Before storing `project_status`, compare to the previous entry. Roadmap progress must always advance. Build must stay clean. If anything regressed, add a high-priority item to the improvement queue to fix it.
-
-**Self-reflection** (every 10th iteration): See LEARNING.md for the full protocol. Store as `self_reflection`.
-
-Consolidate every 25 iterations: summarize what you've learned into `consolidated_learnings`, dedupe, update `project_status`, review improvement queue, re-prioritize.
+**Do NOT create any files in the project directory** that are not Go source code, go.mod, go.sum, Makefile, or YAML configs. No markdown files. No JSON summary files.
 
 ## Bootstrap (empty/README-only project)
 1. Read project spec at `/workspace/repo/project/README.md` — follow exactly
