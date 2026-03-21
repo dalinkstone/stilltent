@@ -1,8 +1,8 @@
-//go:build darwin
-// +build darwin
+//go:build darwin && !cgo
+// +build darwin,!cgo
 
-// Package hvf provides a Hypervisor.framework backend implementation for macOS.
-// It uses Apple's Hypervisor.framework for VM management.
+// Package hvf provides a stub Hypervisor.framework backend for macOS.
+// When CGO is not available, this stub allows compilation but fails at runtime.
 package hvf
 
 import (
@@ -17,16 +17,13 @@ type Backend struct {
 	baseDir string
 }
 
-// VM represents a Hypervisor.framework virtual machine
+// VM represents a Hypervisor.framework virtual machine (stub)
 type VM struct {
 	config *models.VMConfig
 }
 
 // NewBackend creates a new Hypervisor.framework backend
 func NewBackend(baseDir string) (*Backend, error) {
-	// Check if Hypervisor.framework is available
-	// This would require CGO to check at runtime
-	
 	return &Backend{
 		baseDir: baseDir,
 	}, nil
@@ -34,13 +31,12 @@ func NewBackend(baseDir string) (*Backend, error) {
 
 // CreateVM creates a new Hypervisor.framework virtual machine
 func (b *Backend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
-	// TODO: Implement Hypervisor.framework VM creation
-	return nil, fmt.Errorf("CreateVM not implemented for Hypervisor.framework backend")
+	return nil, fmt.Errorf("Hypervisor.framework backend requires CGO and macOS C compiler (clang)")
 }
 
-// ListVMs returns all active VMs (not implemented)
+// ListVMs returns all active VMs
 func (b *Backend) ListVMs() ([]hypervisor.VM, error) {
-	return nil, fmt.Errorf("ListVMs not implemented for Hypervisor.framework backend")
+	return nil, nil
 }
 
 // DestroyVM releases all resources for a VM
@@ -50,22 +46,22 @@ func (b *Backend) DestroyVM(vm hypervisor.VM) error {
 
 // Start boots the VM
 func (v *VM) Start() error {
-	return fmt.Errorf("Start not implemented for Hypervisor.framework backend")
+	return fmt.Errorf("Hypervisor.framework backend requires CGO and macOS C compiler (clang)")
 }
 
 // Stop gracefully shuts down the VM
 func (v *VM) Stop() error {
-	return fmt.Errorf("Stop not implemented for Hypervisor.framework backend")
+	return nil
 }
 
 // Kill forcefully terminates the VM
 func (v *VM) Kill() error {
-	return fmt.Errorf("Kill not implemented for Hypervisor.framework backend")
+	return nil
 }
 
 // Status returns the current VM state
 func (v *VM) Status() (models.VMStatus, error) {
-	return models.VMStatusUnknown, fmt.Errorf("Status not implemented for Hypervisor.framework backend")
+	return models.VMStatusUnknown, fmt.Errorf("Hypervisor.framework backend requires CGO and macOS C compiler (clang)")
 }
 
 // GetConfig returns the VM's configuration
