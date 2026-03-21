@@ -138,153 +138,42 @@ gh pr create --base main --head "$BRANCH_NAME" \
 
 ### Phase 6b: REVIEW EXTERNAL PRs
 
-If Phase 2 identified open external PRs, review them now.
+For each external PR: `gh pr checkout <N>`, run tests, `gh pr diff <N>`.
 
-For each external PR:
-```bash
-# Checkout the PR
-gh pr checkout <PR_NUMBER>
+**Criteria:** Tests pass, code quality OK, aligns with project direction, reasonable scope.
 
-# Run the full test suite
-<test command>
-
-# Review the diff
-gh pr diff <PR_NUMBER>
-```
-
-**Review criteria:**
-
-1. Do all tests pass with the changes applied?
-2. Is the code quality acceptable (no obvious bugs, reasonable naming, no security issues)?
-3. Does the change align with the project's direction (check memory for architectural decisions)?
-4. Is the change scope reasonable (not too large, not touching unrelated code)?
-
-**Actions:**
-
-- If all criteria pass → Approve and merge:
-```bash
-gh pr review <PR_NUMBER> --approve --body "LGTM — tests pass, change aligns with project direction."
-gh pr merge <PR_NUMBER> --merge --delete-branch
-```
-- If tests fail → Request changes:
-```bash
-gh pr review <PR_NUMBER> --request-changes --body "Tests are failing: <details>. Please fix and re-push."
-```
-- If misaligned with project direction → Comment and close:
-```bash
-gh pr comment <PR_NUMBER> --body "Thank you for the contribution. This change doesn't align with the current project direction because <reason>. See <memory reference> for the architectural context."
-gh pr close <PR_NUMBER>
-```
-- If uncertain → Comment and skip:
-```bash
-gh pr comment <PR_NUMBER> --body "I'm reviewing this but need more context. Leaving this for the next iteration."
-```
-
-Store the review decision in memory with category "pr_review".
-
-Return to `main` after reviewing:
-```bash
-git checkout main
-```
+**Actions:** All pass = approve + merge. Tests fail = request changes. Misaligned = comment + close. Uncertain = comment + skip. Store decision in memory (tag: `pr_review`). Return to `main`.
 
 ---
 
 ### Phase 7: LEARN
 
-Record what happened this iteration in memory.
+Store in memory (use compact key-value format):
 
-**Always store these memories:**
+1. **`iteration_log`:** Iteration N, action, result, PR#, merged?, test delta, lessons, duration
+2. **`repo_state`** (every 5 iterations): file count, test count/pass rate, open PRs/issues, last commit
+3. **`failed_approach`** (on failure): what, why, lesson, do-not-retry flag
+4. **`architectural_decision`** (when applicable): decision, rationale, alternatives, affected files
 
-1. **Iteration log** (category: "iteration_log"):
-```
-Iteration: <number>
-Action: <what you did>
-Result: <success/failure/partial>
-PR: <PR number or "none">
-Merged: <yes/no/pending>
-Test delta: <+N new tests, -N removed, N total passing>
-Lessons: <what you learned>
-Duration: <approximate time spent>
-```
-
-2. **Repository state snapshot** (category: "repo_state", update every 5 iterations):
-```
-Total files: <count>
-Test count: <count>
-Test pass rate: <percentage>
-Open PRs: <count>
-Open issues: <count>
-Last commit: <hash and message>
-```
-
-3. **If something failed** (category: "failed_approach"):
-```
-What I tried: <description>
-Why it failed: <specific error or reason>
-What I should do differently: <lesson>
-Do NOT retry this approach: <true/false>
-```
-
-4. **If I made an architectural decision** (category: "architectural_decision"):
-```
-Decision: <what was decided>
-Rationale: <why>
-Alternatives considered: <what else could have been done>
-Files affected: <list>
-```
-
----
-
-## Memory Consolidation (every 50 iterations)
-
-Every 50 iterations, spend one iteration on memory maintenance instead of code changes:
-
-1. Search for all "iteration_log" memories from the last 50 iterations
-2. Summarize patterns: what kinds of changes succeeded, what failed, what the codebase needs
-3. Store a consolidated summary (category: "consolidated_learnings")
-4. Search for and remove duplicate or superseded memories
-5. Update the "repo_state" snapshot
+**Memory consolidation (every 50 iterations):** Summarize last 50 iteration logs into `consolidated_learnings`. Remove duplicates. Update `repo_state`.
 
 ---
 
 ## First Iteration Bootstrap
 
-If this is the very first iteration (the repository has only a README or is empty):
+If repo is empty/README-only:
+1. Read project spec (`project/README.md` or root `README.md`) — follow its guidance exactly
+2. Scaffold: language/build system per spec (Go: `go mod init`; Python: `pyproject.toml`; Node: `npm init`)
+3. First PR: minimal test framework
+4. Store project spec summary and architectural decisions in memory
+5. Set up CI (`.github/workflows/ci.yml`)
 
-1. **Read the project specification** — check `project/README.md` first, then the root `README.md`. This document tells you what to build. If it describes goals, a language, a tech stack, or specific features, follow its guidance exactly.
-2. **Choose a language and build system** based on what the project specification describes, or default to:
-   - Go project → `go mod init`, create `main.go`, create `Makefile`
-   - Python project → create `pyproject.toml`, `src/`, `tests/`
-   - Node.js project → `npm init`, create `src/`, `tests/`
-3. **Create a minimal test framework** — this is your first PR
-4. **Store initial architectural decisions** in memory, including a summary of the project specification so future iterations can reference it
-5. **Set up CI** — create `.github/workflows/ci.yml` for test and lint
-
-The first 5-10 iterations should focus exclusively on project scaffolding and test infrastructure. After that, systematically implement every goal described in the project specification, one PR at a time. You are building this project from nothing into a complete, working codebase. That is your purpose. Keep going. Make hundreds of PRs. Never stop improving.
+First 5-10 iterations: scaffolding + test infrastructure only. Then: implement spec systematically, one PR at a time.
 
 ---
 
 ## Emergency Procedures
 
-### Stuck in a loop (same error 3+ consecutive iterations)
-
-1. Stop trying the current approach
-2. Search memory for "failed_approach" entries
-3. Choose a completely different task from the priority list
-4. If ALL tasks are failing, store a memory with category "emergency" describing the situation
-5. Check for the PAUSE file (`/workspace/PAUSE`). If a human created it, wait.
-
-### Repository is in a broken state
-
-1. `git checkout main && git pull origin main`
-2. Run tests. If main itself is broken, this is an emergency.
-3. Store a memory describing the broken state
-4. Attempt to fix — this becomes the highest priority task
-5. If you can't fix it within 3 iterations, create a PAUSE file and stop
-
-### Out of context / confused
-
-1. Re-read SKILL.md (this file)
-2. Re-read AGENTS.md
-3. Search memory broadly for recent context
-4. If still confused, do a safe, small task (add a test, improve a docstring)
+- **Stuck in loop (3+ same error):** Stop. Search `failed_approach` memories. Pick different task. If all tasks fail, store `emergency` memory. Check `/workspace/PAUSE`.
+- **Broken repo:** `git checkout main && git pull`. If main is broken, fix it (highest priority). 3 failed iterations = create PAUSE file.
+- **Lost context:** Re-read SKILL.md, search memory broadly, do a safe small task (add test, fix docstring).

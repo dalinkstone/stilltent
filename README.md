@@ -39,7 +39,7 @@ Five Docker Compose services on an internal bridge network:
 - **OpenClaw** — Agent runtime with LLM routing, tool execution, and memory plugins
 - **Orchestrator** — Python loop driver that triggers the agent on a schedule
 
-LLM inference via [OpenRouter](https://openrouter.ai) (Qwen3 Coder 30B). No GPU required. Embeddings are fully local via embed-service.
+LLM inference via [OpenRouter](https://openrouter.ai) (Qwen3 Coder Next). No GPU required. Embeddings are fully local via embed-service.
 
 ## Configuration
 

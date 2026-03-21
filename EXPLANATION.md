@@ -95,7 +95,7 @@ The system is composed of five services running inside Docker Compose, with LLM 
 │  └──────────────────────────────────────────────┼──────────┘ │
 │                                                  │            │
 │                                    HTTPS to OpenRouter.ai     │
-│                                    (Qwen3 Coder 30B)          │
+│                                    (Qwen3 Coder Next)         │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -324,7 +324,7 @@ The OpenClaw gateway is configured via a JSON file that specifies:
 
 1. The orchestrator sends an HTTP POST to `/v1/chat/completions` with a message like "Read and follow /workspace/SKILL.md. This is iteration 42. Execute the complete iteration protocol."
 2. OpenClaw receives the message and creates (or resumes) a session
-3. The message is sent to the LLM provider (OpenRouter → Qwen3 Coder 30B)
+3. The message is sent to the LLM provider (OpenRouter → Qwen3 Coder Next)
 4. The LLM generates a response that may include tool calls (read file, execute shell command, search memory, etc.)
 5. OpenClaw executes the tool calls and sends the results back to the LLM
 6. The LLM continues generating, potentially making more tool calls
@@ -1034,7 +1034,7 @@ stilltent uses a hybrid approach: cloud API for LLM inference (OpenRouter), loca
 
 **LLM via OpenRouter:**
 - No GPU required — runs on a $24/month DigitalOcean droplet
-- Access to code-specialized models (Qwen3 Coder 30B at $0.07/M input, $0.27/M output)
+- Access to code-specialized models (Qwen3 Coder Next at $0.12/M input, $0.75/M output)
 - Can switch models by changing a single environment variable
 - Tradeoff: network dependency and per-token API costs
 
@@ -1126,7 +1126,7 @@ It sends this as an HTTP POST to `http://openclaw-gateway:18789/v1/chat/completi
 
 ### 3. OpenClaw Receives the Message
 
-OpenClaw receives the chat completion request. It creates (or resumes) a session and sends the message to the configured LLM (Qwen3 Coder 30B via OpenRouter).
+OpenClaw receives the chat completion request. It creates (or resumes) a session and sends the message to the configured LLM (Qwen3 Coder Next via OpenRouter).
 
 ### 4. LLM Reads SKILL.md
 
@@ -1264,21 +1264,21 @@ The system includes a VPS hardening script (`scripts/harden-vps.sh`) for product
 
 ## Cost Estimation
 
-All LLM costs go through OpenRouter. The agent runs on Qwen3 Coder 30B by default. Embeddings are free (local embed-service):
+All LLM costs go through OpenRouter. The agent runs on Qwen3 Coder Next by default. Embeddings are free (local embed-service):
 
 | Cost Type | Rate |
 |-----------|------|
-| Input tokens | $0.07 per million |
-| Output tokens | $0.27 per million |
+| Input tokens | $0.12 per million |
+| Output tokens | $0.75 per million |
 | Embeddings | **$0** (local embed-service) |
 
 Rough estimates for a 5-day run (assuming ~1440 iterations/day, ~10K tokens per iteration):
-- Input: 72M tokens × $0.07/M = **$5.04**
-- Output: 36M tokens × $0.27/M = **$9.72**
+- Input: 72M tokens × $0.12/M = **$8.64**
+- Output: 36M tokens × $0.75/M = **$27.00**
 - Embeddings: **$0**
-- **Total: ~$15 for 5 days of autonomous operation** (or ~$1.64/day)
+- **Total: ~$36 for 5 days of autonomous operation** (or ~$5.50/day estimated, ~$7.13/day worst-case)
 
-At $3/day all-in (including VPS), the agent can make hundreds of commits for less than the price of a coffee.
+At $7/day all-in (including VPS), the agent can make hundreds of commits for less than the price of two coffees.
 
 `make cost` provides real-time spend estimates from the metrics data.
 
@@ -1451,7 +1451,7 @@ The agent is not replacing senior engineers who design architectures and make st
 
 ## Summary
 
-stilltent is a system for autonomous software development. It takes a project description, builds the project one pull request at a time, and continuously improves it over days of unattended operation. The system combines five services (database, local embedding server, memory API, agent runtime, loop driver) with a protocol-driven agent that remembers what it learned across hundreds of iterations. Embeddings are generated locally by a custom C service at zero API cost. LLM inference runs through OpenRouter on a code-specialized model (Qwen3 Coder 30B) for ~$1.64/day. The architecture is modular, the behavior is transparent (defined by markdown files, not code), and the safety mechanisms prevent the most common failure modes. The agent is explicitly instructed to use its tools — memory, testing, GitHub CLI, shell — and to fix them if they're holding it back.
+stilltent is a system for autonomous software development. It takes a project description, builds the project one pull request at a time, and continuously improves it over days of unattended operation. The system combines five services (database, local embedding server, memory API, agent runtime, loop driver) with a protocol-driven agent that remembers what it learned across hundreds of iterations. Embeddings are generated locally by a custom C service at zero API cost. LLM inference runs through OpenRouter on a code-specialized model (Qwen3 Coder Next) for ~$5.50/day. The architecture is modular, the behavior is transparent (defined by markdown files, not code), and the safety mechanisms prevent the most common failure modes. The agent is explicitly instructed to use its tools — memory, testing, GitHub CLI, shell — and to fix them if they're holding it back.
 
 The most important thing about stilltent is not the technology — it's the idea. Software development is fundamentally iterative: assess, plan, implement, test, review, merge, repeat. stilltent automates this loop. Not perfectly, not yet. But well enough that a paragraph of project description can become a working codebase with hundreds of tested, reviewed commits.
 
