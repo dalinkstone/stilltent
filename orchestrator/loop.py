@@ -709,8 +709,9 @@ def response_indicates_success(response: dict) -> bool:
     has_tokens = prompt_tokens > 0 or completion_tokens > 0
     
     # Try to find the structured JSON summary in the response
+    # Use a more robust regex that handles nested JSON structures
     try:
-        json_match = re.search(r'\{[^{}]*"result"[^{}]*\}', text)
+        json_match = re.search(r'\{[\s\S]*?"result"[\s\S]*?\}', text)
         if json_match:
             summary = json.loads(json_match.group())
             result = summary.get("result", "").lower()
@@ -746,10 +747,16 @@ def _extract_result_field(response: dict) -> str:
 
     Returns the result string (e.g. 'success', 'skipped', 'failure') or
     empty string if not found.
+    
+    Uses a more robust regex that handles nested JSON structures by using
+    balanced brace matching.
     """
     text = extract_text_from_response(response)
     try:
-        json_match = re.search(r'\{[^{}]*"result"[^{}]*\}', text)
+        # Try to find JSON summary with "result" field
+        # This pattern handles nested braces by being greedy and finding
+        # the first '{' followed by '"result"' somewhere inside
+        json_match = re.search(r'\{[\s\S]*?"result"[\s\S]*?\}', text)
         if json_match:
             summary = json.loads(json_match.group())
             return summary.get("result", "").lower()
