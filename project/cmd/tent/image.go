@@ -31,6 +31,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imagePushCmd())
 	cmd.AddCommand(imageSaveCmd())
 	cmd.AddCommand(imageLoadCmd())
+	cmd.AddCommand(imageCacheCmd())
 
 	return cmd
 }
@@ -677,4 +678,241 @@ Examples:
 
 	cmd.Flags().StringVar(&name, "name", "", "Override the image name (default: use name from tarball)")
 	return cmd
+}
+
+func imageCacheCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "cache",
+		Short: "Manage the layer cache for OCI image pulls",
+		Long: `View and manage the content-addressable layer cache. Downloaded OCI layers
+are cached by digest so subsequent pulls of images sharing layers skip
+re-downloading them.
+
+Examples:
+  tent image cache list
+  tent image cache stats
+  tent image cache prune --older-than 7d
+  tent image cache prune --max-size 1GB
+  tent image cache clear`,
+	}
+
+	cmd.AddCommand(imageCacheListCmd())
+	cmd.AddCommand(imageCacheStatsCmd())
+	cmd.AddCommand(imageCachePruneCmd())
+	cmd.AddCommand(imageCacheClearCmd())
+	return cmd
+}
+
+func imageCacheListCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List cached image layers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+			mgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return err
+			}
+			cache := mgr.GetLayerCache()
+			if cache == nil {
+				return fmt.Errorf("layer cache not available")
+			}
+
+			layers := cache.List()
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(layers)
+			}
+
+			if len(layers) == 0 {
+				fmt.Println("No cached layers.")
+				return nil
+			}
+
+			fmt.Printf("%-72s  %10s  %s\n", "DIGEST", "SIZE", "LAST USED")
+			for _, l := range layers {
+				digest := l.Digest
+				if len(digest) > 72 {
+					digest = digest[:72]
+				}
+				sizeMB := float64(l.Size) / (1024 * 1024)
+				fmt.Printf("%-72s  %8.1f MB  %s\n", digest, sizeMB, l.LastUsed)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func imageCacheStatsCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "stats",
+		Short: "Show layer cache statistics",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+			mgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return err
+			}
+			cache := mgr.GetLayerCache()
+			if cache == nil {
+				return fmt.Errorf("layer cache not available")
+			}
+
+			stats := cache.Stats()
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(stats)
+			}
+
+			sizeMB := float64(stats.TotalSizeBytes) / (1024 * 1024)
+			fmt.Printf("Cached layers:  %d\n", stats.TotalLayers)
+			fmt.Printf("Total size:     %.1f MB\n", sizeMB)
+			fmt.Printf("Cache hits:     %d\n", stats.TotalHits)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func imageCachePruneCmd() *cobra.Command {
+	var (
+		olderThan string
+		maxSize   string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Remove old or excess cached layers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+			mgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return err
+			}
+			cache := mgr.GetLayerCache()
+			if cache == nil {
+				return fmt.Errorf("layer cache not available")
+			}
+
+			if maxSize != "" {
+				maxBytes, err := parseByteSize(maxSize)
+				if err != nil {
+					return fmt.Errorf("invalid --max-size: %w", err)
+				}
+				removed, freed, err := cache.PruneToSize(maxBytes)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Removed %d layers, freed %.1f MB\n", removed, float64(freed)/(1024*1024))
+				return nil
+			}
+
+			if olderThan != "" {
+				dur, err := parseCacheDuration(olderThan)
+				if err != nil {
+					return fmt.Errorf("invalid --older-than: %w", err)
+				}
+				cutoff := time.Now().Add(-dur)
+				removed, freed, err := cache.Prune(cutoff)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("Removed %d layers, freed %.1f MB\n", removed, float64(freed)/(1024*1024))
+				return nil
+			}
+
+			// Default: prune layers older than 30 days
+			cutoff := time.Now().AddDate(0, 0, -30)
+			removed, freed, err := cache.Prune(cutoff)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Removed %d layers older than 30 days, freed %.1f MB\n", removed, float64(freed)/(1024*1024))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&olderThan, "older-than", "", "Remove layers not used since duration (e.g., 7d, 24h)")
+	cmd.Flags().StringVar(&maxSize, "max-size", "", "Shrink cache to this maximum size (e.g., 1GB, 500MB)")
+	return cmd
+}
+
+func imageCacheClearCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "clear",
+		Short: "Remove all cached layers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+			mgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return err
+			}
+			cache := mgr.GetLayerCache()
+			if cache == nil {
+				return fmt.Errorf("layer cache not available")
+			}
+
+			layers := cache.List()
+			var totalFreed int64
+			for _, l := range layers {
+				totalFreed += l.Size
+				_ = cache.Remove(l.Digest)
+			}
+			fmt.Printf("Cleared %d cached layers, freed %.1f MB\n", len(layers), float64(totalFreed)/(1024*1024))
+			return nil
+		},
+	}
+}
+
+// parseByteSize parses human-readable byte sizes like "1GB", "500MB", "100KB".
+func parseByteSize(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	multiplier := int64(1)
+	switch {
+	case strings.HasSuffix(s, "GB"):
+		multiplier = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "GB")
+	case strings.HasSuffix(s, "MB"):
+		multiplier = 1024 * 1024
+		s = strings.TrimSuffix(s, "MB")
+	case strings.HasSuffix(s, "KB"):
+		multiplier = 1024
+		s = strings.TrimSuffix(s, "KB")
+	case strings.HasSuffix(s, "B"):
+		s = strings.TrimSuffix(s, "B")
+	}
+
+	var val float64
+	if _, err := fmt.Sscanf(s, "%f", &val); err != nil {
+		return 0, fmt.Errorf("cannot parse %q as byte size", s)
+	}
+	return int64(val * float64(multiplier)), nil
+}
+
+// parseCacheDuration parses durations with day support (e.g., "7d", "24h", "30m").
+func parseCacheDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if strings.HasSuffix(s, "d") {
+		var days float64
+		if _, err := fmt.Sscanf(strings.TrimSuffix(s, "d"), "%f", &days); err != nil {
+			return 0, fmt.Errorf("cannot parse %q", s)
+		}
+		return time.Duration(days * 24 * float64(time.Hour)), nil
+	}
+	return time.ParseDuration(s)
 }

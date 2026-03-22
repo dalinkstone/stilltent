@@ -25,6 +25,7 @@ import (
 type Manager struct {
 	baseDir        string
 	progressNotify func(bytes int64, total int64)
+	layerCache     *LayerCache
 }
 
 // NewManager creates a new image manager
@@ -36,12 +37,18 @@ func NewManager(baseDir string, opts ...func(*Manager)) (*Manager, error) {
 	m := &Manager{
 		baseDir: filepath.Join(baseDir, "images"),
 	}
-	
+
 	// Apply options
 	for _, opt := range opts {
 		opt(m)
 	}
-	
+
+	// Initialize layer cache
+	cache, err := NewLayerCache(m.baseDir)
+	if err == nil {
+		m.layerCache = cache
+	}
+
 	return m, nil
 }
 
@@ -396,19 +403,50 @@ func (m *Manager) extractLayers(layers []LayerInfo, tmpDir, rootfsPath string, p
 	}
 
 	var downloaded int64
-	for i, layer := range layers {
-		_ = i
-		// Download layer
-		reader, err := client.DownloadLayer(registry, repo, layer)
-		if err != nil {
-			return fmt.Errorf("failed to download layer %s: %w", layer.Digest, err)
+	for _, layer := range layers {
+		var layerReader io.Reader
+		var layerCloser io.Closer
+
+		// Check layer cache first
+		if m.layerCache != nil && m.layerCache.Has(layer.Digest) {
+			cached, _, err := m.layerCache.Get(layer.Digest)
+			if err == nil {
+				layerReader = cached
+				layerCloser = cached
+			}
+		}
+
+		// Download if not cached
+		if layerReader == nil {
+			reader, err := client.DownloadLayer(registry, repo, layer)
+			if err != nil {
+				return fmt.Errorf("failed to download layer %s: %w", layer.Digest, err)
+			}
+
+			// Tee into cache while extracting
+			if m.layerCache != nil {
+				pr, pw := io.Pipe()
+				tee := io.TeeReader(reader, pw)
+
+				// Cache in background
+				cacheDone := make(chan error, 1)
+				go func() {
+					_, err := m.layerCache.Put(layer.Digest, layer.Size, layer.MediaType, pr)
+					cacheDone <- err
+				}()
+
+				layerReader = tee
+				layerCloser = &multiCloser{closers: []io.Closer{reader, pw}, cacheDone: cacheDone}
+			} else {
+				layerReader = reader
+				layerCloser = reader
+			}
 		}
 
 		// Wrap with progress tracking
-		var layerReader io.Reader = reader
 		if progress != nil {
 			layerReader = &progressLayerReader{
-				reader:     reader,
+				reader:     layerReader,
 				tracker:    progress,
 				baseOffset: downloaded,
 			}
@@ -416,10 +454,10 @@ func (m *Manager) extractLayers(layers []LayerInfo, tmpDir, rootfsPath string, p
 
 		// Extract tar to rootfs directory
 		if err := extractTar(layerReader, rootfsDir); err != nil {
-			reader.Close()
+			layerCloser.Close()
 			return fmt.Errorf("failed to extract layer %s: %w", layer.Digest, err)
 		}
-		reader.Close()
+		layerCloser.Close()
 
 		downloaded += layer.Size
 		if progress != nil {
@@ -561,6 +599,31 @@ func (p *progressLayerReader) Read(buf []byte) (int, error) {
 		p.tracker.UpdateProgress(p.baseOffset + p.read)
 	}
 	return n, err
+}
+
+// multiCloser closes multiple closers and waits for background cache writes.
+type multiCloser struct {
+	closers   []io.Closer
+	cacheDone chan error
+}
+
+func (mc *multiCloser) Close() error {
+	var firstErr error
+	for _, c := range mc.closers {
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	// Wait for cache write to complete (ignore cache errors)
+	if mc.cacheDone != nil {
+		<-mc.cacheDone
+	}
+	return firstErr
+}
+
+// GetLayerCache returns the manager's layer cache, or nil if not initialized.
+func (m *Manager) GetLayerCache() *LayerCache {
+	return m.layerCache
 }
 
 // createMinimalRootfs creates a minimal ext4 image with basic directory structure
