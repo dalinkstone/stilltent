@@ -2,7 +2,7 @@
 -include .env
 export
 
-.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once
+.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once dev-loop-opus dev-loop-sonnet dev-logs dev-stats dev-clean-branches
 
 # Start all services (initializes DB on first run if needed)
 up:
@@ -262,14 +262,41 @@ reset-metrics:
 	@rm -f workspace/PAUSE
 	@echo "Metrics cleared and PAUSE removed."
 
-# Install Claude Code on the VPS (run on VPS)
+# ── Claude Code Agent (alternative to OpenClaw) ──────────────────────
+
+# Install Claude Code + dependencies on the VPS
 setup-claude:
 	@bash scripts/vps-install-claude.sh
 
-# Run Claude Code dev loop (forever)
+# Run Claude Code dev loop forever (use in tmux)
 dev-loop:
 	@bash scripts/dev-loop.sh
 
-# Run a single Claude Code iteration (for testing)
+# Run a single Claude Code iteration (test before going full loop)
 dev-loop-once:
 	@bash scripts/dev-loop.sh --once
+
+# Run dev loop with a specific model
+dev-loop-opus:
+	@bash scripts/dev-loop.sh --model opus
+
+dev-loop-sonnet:
+	@bash scripts/dev-loop.sh --model sonnet
+
+# View recent dev-loop logs
+dev-logs:
+	@ls -t scripts/loop-logs/*.log 2>/dev/null | head -5 | xargs -I{} sh -c 'echo "=== {} ===" && tail -20 "{}" && echo ""'
+
+# Show dev-loop stats
+dev-stats:
+	@echo "=== Dev Loop Stats ==="
+	@echo "Total iterations: $$(ls scripts/loop-logs/*.log 2>/dev/null | wc -l | tr -d ' ')"
+	@echo "Feat commits (all time): $$(git log --oneline --all | grep -c 'feat:' || echo 0)"
+	@echo "Last 10 commits:"
+	@git log --oneline -10
+
+# Clean up stale agent branches
+dev-clean-branches:
+	@echo "Deleting merged agent branches..."
+	@git branch -r | grep "origin/agent/" | sed 's|origin/||' | xargs -I{} git push origin --delete "{}" 2>/dev/null || true
+	@echo "Done."
