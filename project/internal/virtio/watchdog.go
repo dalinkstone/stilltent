@@ -204,9 +204,8 @@ func NewVirtioWatchdog(deviceID string, cfg VirtioWatchdogConfig) (*VirtioWatchd
 
 	// Create the virtqueue
 	vq, err := NewVirtqueue(VirtqueueConfig{
-		Index:     0,
-		Size:      uint16(cfg.QueueSize),
-		QueueType: "controlq",
+		Name: "controlq",
+		Num:  uint16(cfg.QueueSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("virtio-watchdog: failed to create virtqueue: %w", err)
@@ -400,9 +399,9 @@ func (wd *VirtioWatchdog) handleCommand(chain *DescriptorChain) {
 		return
 	}
 
-	// Parse the command code (first 4 bytes, little-endian)
-	cmdBytes := chain.Readable[0]
-	if len(cmdBytes) < 4 {
+	// Read command data from the chain
+	cmdBytes, err := wd.vq.ReadChainData(chain)
+	if err != nil || len(cmdBytes) < 4 {
 		_ = wd.vq.PushUsed(chain.HeadIndex, 0)
 		return
 	}
@@ -440,8 +439,10 @@ func (wd *VirtioWatchdog) handleCommand(chain *DescriptorChain) {
 
 	case WatchdogCmdGetStatus:
 		// Write status to writable descriptors if available
-		if len(chain.Writable) > 0 && len(chain.Writable[0]) >= 16 {
-			wd.writeStatus(chain.Writable[0])
+		if len(chain.Writable) > 0 && chain.TotalWrite >= 16 {
+			buf := make([]byte, 16)
+			wd.writeStatus(buf)
+			_, _ = wd.vq.WriteChainData(chain, buf)
 		}
 	}
 	wd.mu.Unlock()

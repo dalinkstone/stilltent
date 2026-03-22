@@ -77,6 +77,17 @@ func (m *mockStateManager) ListVMs() ([]*models.VMState, error) {
 	return result, nil
 }
 
+func (m *mockStateManager) RenameVM(oldName, newName string) error {
+	vm, exists := m.vms[oldName]
+	if !exists {
+		return os.ErrNotExist
+	}
+	delete(m.vms, oldName)
+	vm.Name = newName
+	m.vms[newName] = vm
+	return nil
+}
+
 type mockHypervisorBackend struct {
 	ErrCreate  error
 	ErrList    error
@@ -148,6 +159,17 @@ func (v *mockVMInstance) SetIP(ip string) {
 
 func (v *mockVMInstance) SetNetwork(tapDevice string, ip string) {
 	// Mock implementation
+}
+
+func (v *mockVMInstance) AddMounts(mounts []hypervisor.MountTag) {
+}
+
+func (v *mockVMInstance) Pause() error {
+	return nil
+}
+
+func (v *mockVMInstance) Unpause() error {
+	return nil
 }
 
 func (v *mockVMInstance) SetConsoleOutput(w io.Writer) {
@@ -257,6 +279,18 @@ func (m *mockStorageManager) ListSnapshots(name string) ([]*storage.SnapshotInfo
 		})
 	}
 	return result, nil
+}
+
+func (m *mockStorageManager) CloneRootFS(srcName string, dstName string) (string, error) {
+	return filepath.Join("/tmp", dstName+".img"), nil
+}
+
+func (m *mockStorageManager) DeleteSnapshot(vmName string, tag string) error {
+	return nil
+}
+
+func (m *mockStorageManager) DeleteAllSnapshots(vmName string) (int, error) {
+	return 0, nil
 }
 
 func TestNewManager(t *testing.T) {

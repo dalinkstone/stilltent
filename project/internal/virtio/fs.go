@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // DeviceTypeFS is the virtio device type for filesystem sharing
@@ -1455,7 +1454,7 @@ func decodeFuseInHeader(buf []byte) FuseInHeader {
 
 func encodeFuseOutHeader(buf []byte, hdr FuseOutHeader) {
 	binary.LittleEndian.PutUint32(buf[0:4], hdr.Len)
-	binary.LittleEndian.PutInt32(buf[4:8], hdr.Error)
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(hdr.Error))
 	binary.LittleEndian.PutUint64(buf[8:16], hdr.Unique)
 }
 

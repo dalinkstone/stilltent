@@ -187,18 +187,16 @@ func NewVirtioGPU(deviceID string, cfg VirtioGPUConfig) (*VirtioGPU, error) {
 	}
 
 	controlQ, err := NewVirtqueue(VirtqueueConfig{
-		Index:     gpuControlQ,
-		Size:      uint16(queueSize),
-		QueueType: "controlq",
+		Name: "controlq",
+		Num:  uint16(queueSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("virtio-gpu: failed to create control queue: %w", err)
 	}
 
 	cursorQ, err := NewVirtqueue(VirtqueueConfig{
-		Index:     gpuCursorQ,
-		Size:      uint16(queueSize),
-		QueueType: "cursorq",
+		Name: "cursorq",
+		Num:  uint16(queueSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("virtio-gpu: failed to create cursor queue: %w", err)
@@ -376,23 +374,19 @@ func (g *VirtioGPU) processControl() {
 		g.cmdCount.Add(1)
 
 		// Read all readable data.
-		var reqData []byte
-		for _, desc := range chain.Readable {
-			reqData = append(reqData, desc.Data...)
+		reqData, err := g.controlQ.ReadChainData(chain)
+		if err != nil {
+			if pushErr := g.controlQ.PushUsed(chain.HeadIndex, 0); pushErr != nil {
+				continue
+			}
+			continue
 		}
 
 		resp := g.handleCommand(reqData)
 
 		// Write response to writable descriptors.
-		if len(chain.Writable) > 0 && len(resp) > 0 {
-			written := 0
-			for _, desc := range chain.Writable {
-				n := copy(desc.Data, resp[written:])
-				written += n
-				if written >= len(resp) {
-					break
-				}
-			}
+		if len(resp) > 0 {
+			_, _ = g.controlQ.WriteChainData(chain, resp)
 		}
 
 		if err := g.controlQ.PushUsed(chain.HeadIndex, uint32(len(resp))); err != nil {
@@ -876,7 +870,7 @@ func buildMinimalEDID(width, height uint32) []byte {
 	for i := 0; i < 127; i++ {
 		sum += edid[i]
 	}
-	edid[127] = 256 - sum
+	edid[127] = byte(256 - int(sum))
 
 	return edid
 }

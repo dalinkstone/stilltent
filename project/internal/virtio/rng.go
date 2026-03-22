@@ -148,9 +148,8 @@ func NewVirtioRng(deviceID string, cfg VirtioRngConfig) (*VirtioRng, error) {
 
 	// Create the virtqueue
 	vq, err := NewVirtqueue(VirtqueueConfig{
-		Index:     0,
-		Size:      uint16(cfg.QueueSize),
-		QueueType: "requestq",
+		Name: "requestq",
+		Num:  uint16(cfg.QueueSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("virtio-rng: failed to create virtqueue: %w", err)

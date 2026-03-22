@@ -180,18 +180,16 @@ func NewVirtioBalloon(deviceID string, cfg VirtioBalloonConfig) (*VirtioBalloon,
 	}
 
 	inflateQ, err := NewVirtqueue(VirtqueueConfig{
-		Index:     balloonInflateQ,
-		Size:      uint16(queueSize),
-		QueueType: "inflateq",
+		Name: "inflateq",
+		Num:  uint16(queueSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("virtio-balloon: failed to create inflate queue: %w", err)
 	}
 
 	deflateQ, err := NewVirtqueue(VirtqueueConfig{
-		Index:     balloonDeflateQ,
-		Size:      uint16(queueSize),
-		QueueType: "deflateq",
+		Name: "deflateq",
+		Num:  uint16(queueSize),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("virtio-balloon: failed to create deflate queue: %w", err)
@@ -219,9 +217,8 @@ func NewVirtioBalloon(deviceID string, cfg VirtioBalloonConfig) (*VirtioBalloon,
 	if cfg.StatsEnabled {
 		dev.features |= VirtioBalloonFStatsVQ
 		statsQ, err := NewVirtqueue(VirtqueueConfig{
-			Index:     balloonStatsQ,
-			Size:      uint16(queueSize),
-			QueueType: "statsq",
+			Name: "statsq",
+			Num:  uint16(queueSize),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("virtio-balloon: failed to create stats queue: %w", err)
@@ -534,17 +531,16 @@ func (b *VirtioBalloon) processStats() {
 	}
 }
 
-// extractPFNs reads page frame numbers from a descriptor chain.
+// extractPFNs reads page frame numbers from a descriptor chain via the inflate queue.
 // Each PFN is a uint32 representing a 4KB-aligned guest page.
 func (b *VirtioBalloon) extractPFNs(chain *DescriptorChain) []uint32 {
 	if chain == nil {
 		return nil
 	}
 
-	// PFNs come from readable descriptors (guest -> host)
-	var allData []byte
-	for _, desc := range chain.Readable {
-		allData = append(allData, desc.Data...)
+	allData, err := b.inflateQ.ReadChainData(chain)
+	if err != nil || len(allData) == 0 {
+		return nil
 	}
 
 	// Each PFN is 4 bytes (uint32, little-endian)
@@ -565,13 +561,13 @@ func (b *VirtioBalloon) extractPFNs(chain *DescriptorChain) []uint32 {
 // parseStats reads BalloonStat entries from a descriptor chain.
 // Each entry is 10 bytes: u16 tag + u64 value.
 func (b *VirtioBalloon) parseStats(chain *DescriptorChain) []BalloonStat {
-	if chain == nil {
+	if chain == nil || b.statsQ == nil {
 		return nil
 	}
 
-	var allData []byte
-	for _, desc := range chain.Readable {
-		allData = append(allData, desc.Data...)
+	allData, err := b.statsQ.ReadChainData(chain)
+	if err != nil || len(allData) == 0 {
+		return nil
 	}
 
 	// Each stat is 10 bytes: 2 (tag) + 8 (value)

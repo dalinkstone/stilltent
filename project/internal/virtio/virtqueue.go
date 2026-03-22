@@ -424,3 +424,47 @@ func TotalVirtqueueSize(num uint16) int {
 	firstPartAligned := (firstPart + 4095) & ^4095
 	return firstPartAligned + used
 }
+
+// ReadChainData reads all readable buffer data from a descriptor chain
+// using the virtqueue's memory accessor. Returns concatenated bytes.
+func (vq *Virtqueue) ReadChainData(chain *DescriptorChain) ([]byte, error) {
+	if chain == nil || vq.memRead == nil {
+		return nil, nil
+	}
+	var allData []byte
+	for _, link := range chain.Readable {
+		if link.Len == 0 {
+			continue
+		}
+		data, err := vq.memRead(link.Addr, link.Len)
+		if err != nil {
+			return nil, fmt.Errorf("read chain data at GPA 0x%x: %w", link.Addr, err)
+		}
+		allData = append(allData, data...)
+	}
+	return allData, nil
+}
+
+// WriteChainData writes data to the writable buffers of a descriptor chain
+// using the virtqueue's memory accessor. Returns total bytes written.
+func (vq *Virtqueue) WriteChainData(chain *DescriptorChain, data []byte) (int, error) {
+	if chain == nil || vq.memWrite == nil || len(data) == 0 {
+		return 0, nil
+	}
+	written := 0
+	for _, link := range chain.Writable {
+		if written >= len(data) {
+			break
+		}
+		end := written + int(link.Len)
+		if end > len(data) {
+			end = len(data)
+		}
+		chunk := data[written:end]
+		if err := vq.memWrite(link.Addr, chunk); err != nil {
+			return written, fmt.Errorf("write chain data at GPA 0x%x: %w", link.Addr, err)
+		}
+		written += len(chunk)
+	}
+	return written, nil
+}
