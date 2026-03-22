@@ -20,9 +20,7 @@ func NewComposeManager(baseDir string, vmManager *vm.VMManager, stateManager Sta
 
 // ParseConfig parses a compose YAML file
 func (m *ComposeManager) ParseConfig(filePath string) (*ComposeConfig, error) {
-	// TODO: Implement YAML parsing using gopkg.in/yaml.v3
-	// This is a stub - actual parsing will be implemented in parser.go
-	return nil, fmt.Errorf("ParseConfig not implemented")
+	return ParseConfigFile(filePath)
 }
 
 // Up starts all sandboxes in a compose group
