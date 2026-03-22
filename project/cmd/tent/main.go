@@ -44,6 +44,7 @@ func main() {
 	rootCmd.AddCommand(waitCmd())
 	rootCmd.AddCommand(eventsCmd())
 	rootCmd.AddCommand(attachCmd())
+	rootCmd.AddCommand(runCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
