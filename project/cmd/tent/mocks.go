@@ -235,6 +235,13 @@ func (m *MockStorageManager) CreateRootFS(name string, config *models.VMConfig) 
 	return filepath.Join("/tmp", name+".img"), nil
 }
 
+func (m *MockStorageManager) CloneRootFS(srcName string, dstName string) (string, error) {
+	if m.ErrCreateRootFS != nil {
+		return "", m.ErrCreateRootFS
+	}
+	return filepath.Join("/tmp", dstName+".img"), nil
+}
+
 func (m *MockStorageManager) DestroyVMStorage(name string) error {
 	m.DestroyVMCalled = true
 	if m.ErrDestroyVM != nil {

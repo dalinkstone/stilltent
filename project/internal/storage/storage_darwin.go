@@ -36,6 +36,26 @@ func (m *Manager) CreateRootFS(vmName string, config *models.VMConfig) (string, 
 	return rootfsPath, nil
 }
 
+// CloneRootFS copies the rootfs from one VM to a new VM directory on macOS
+func (m *Manager) CloneRootFS(srcName string, dstName string) (string, error) {
+	srcPath := filepath.Join(m.baseDir, "rootfs", srcName, "rootfs.img")
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("rootfs not found for VM %s", srcName)
+	}
+
+	dstDir := filepath.Join(m.baseDir, "rootfs", dstName)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	dstPath := filepath.Join(dstDir, "rootfs.img")
+	if err := m.copyFile(srcPath, dstPath); err != nil {
+		return "", fmt.Errorf("failed to clone rootfs: %w", err)
+	}
+
+	return dstPath, nil
+}
+
 // DestroyVMStorage destroys storage resources for a VM on macOS
 func (m *Manager) DestroyVMStorage(vmName string) error {
 	rootfsDir := filepath.Join(m.baseDir, "rootfs", vmName)

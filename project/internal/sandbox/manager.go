@@ -52,6 +52,7 @@ type NetworkManager interface {
 // StorageManager defines the interface for storage operations
 type StorageManager interface {
 	CreateRootFS(name string, config *models.VMConfig) (string, error)
+	CloneRootFS(srcName string, dstName string) (string, error)
 	DestroyVMStorage(name string) error
 	CreateSnapshot(name string, tag string) (string, error)
 	RestoreSnapshot(name string, tag string) error
@@ -261,6 +262,118 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		"image": config.From,
 		"vcpus": fmt.Sprintf("%d", config.VCPUs),
 		"memory": fmt.Sprintf("%dMB", config.MemoryMB),
+	})
+
+	return nil
+}
+
+// Clone creates a new sandbox by cloning an existing one's rootfs and config.
+// The source sandbox must be stopped. The new sandbox inherits the source's
+// configuration but gets its own rootfs copy, network, and SSH keys.
+func (m *VMManager) Clone(srcName, dstName string) error {
+	// Verify source exists and is stopped
+	srcState, err := m.stateManager.GetVM(srcName)
+	if err != nil {
+		return fmt.Errorf("source VM not found: %w", err)
+	}
+	if srcState.Status == models.VMStatusRunning {
+		return fmt.Errorf("cannot clone running VM %q — stop it first", srcName)
+	}
+
+	// Verify destination doesn't already exist
+	if _, err := m.stateManager.GetVM(dstName); err == nil {
+		return fmt.Errorf("VM %q already exists", dstName)
+	}
+
+	// Load source config
+	srcConfig, err := m.LoadConfig(srcName)
+	if err != nil {
+		return fmt.Errorf("failed to load source config: %w", err)
+	}
+
+	// Clone the rootfs
+	rootfsPath, err := m.storageMgr.CloneRootFS(srcName, dstName)
+	if err != nil {
+		return fmt.Errorf("failed to clone rootfs: %w", err)
+	}
+
+	// Setup network for the new sandbox
+	dstConfig := *srcConfig
+	dstConfig.Name = dstName
+	dstConfig.RootFS = rootfsPath
+
+	tapDevice, err := m.networkMgr.SetupVMNetwork(dstName, &dstConfig)
+	if err != nil {
+		// Cleanup rootfs on failure
+		m.storageMgr.DestroyVMStorage(dstName)
+		return fmt.Errorf("failed to setup network: %w", err)
+	}
+
+	// Setup port forwarding if configured
+	if len(dstConfig.Network.Ports) > 0 {
+		if err := m.portForwarder.SetupForwards(dstName, dstConfig.Network.Ports); err != nil {
+			m.networkMgr.CleanupVMNetwork(dstName)
+			m.storageMgr.DestroyVMStorage(dstName)
+			return fmt.Errorf("failed to setup port forwarding: %w", err)
+		}
+	}
+
+	// Clone network policy from source
+	if srcPolicy, err := m.policyMgr.GetPolicy(srcName); err == nil {
+		policy, err := m.policyMgr.SetPolicy(dstName, srcPolicy.Allowed, srcPolicy.Denied)
+		if err == nil {
+			m.policyMgr.SavePolicy(policy)
+		}
+	} else {
+		policy, _ := m.policyMgr.EnsureDefaultPolicy(dstName)
+		if policy != nil {
+			m.policyMgr.SavePolicy(policy)
+		}
+	}
+
+	// Generate fresh SSH keys for the clone
+	keyPair, err := GenerateSSHKeys(m.baseDir, dstName)
+	if err != nil {
+		m.networkMgr.CleanupVMNetwork(dstName)
+		m.storageMgr.DestroyVMStorage(dstName)
+		return fmt.Errorf("failed to generate SSH keys: %w", err)
+	}
+
+	// Clone mounts if configured
+	if len(dstConfig.Mounts) > 0 {
+		shares, err := m.mountMgr.PrepareMounts(dstName, dstConfig.Mounts)
+		if err == nil {
+			m.mountMgr.SaveMounts(dstName, shares)
+		}
+	}
+
+	// Save config for the new sandbox
+	if err := m.saveConfig(&dstConfig); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	// Create state for the clone
+	vmState := &models.VMState{
+		Name:       dstName,
+		Status:     models.VMStatusCreated,
+		RootFSPath: rootfsPath,
+		TAPDevice:  tapDevice,
+		SSHKeyPath: keyPair.PrivateKeyPath,
+		ImageRef:   srcState.ImageRef,
+		VCPUs:      dstConfig.VCPUs,
+		MemoryMB:   dstConfig.MemoryMB,
+		DiskGB:     dstConfig.DiskGB,
+		CreatedAt:  time.Now().Unix(),
+		UpdatedAt:  time.Now().Unix(),
+	}
+
+	if err := m.stateManager.StoreVM(vmState); err != nil {
+		return fmt.Errorf("failed to save state: %w", err)
+	}
+
+	m.logEvent(EventClone, dstName, map[string]string{
+		"source": srcName,
+		"image":  srcState.ImageRef,
 	})
 
 	return nil
