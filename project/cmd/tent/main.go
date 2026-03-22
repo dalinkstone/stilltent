@@ -75,6 +75,7 @@ func main() {
 	rootCmd.AddCommand(quotaCmd())
 	rootCmd.AddCommand(auditCmd())
 	rootCmd.AddCommand(pluginCmd())
+	rootCmd.AddCommand(benchCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
