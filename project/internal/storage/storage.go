@@ -38,28 +38,26 @@ func (m *Manager) ImageManager() (*image.Manager, error) {
 	return image.NewManager(m.baseDir)
 }
 
-// createRootfsImage creates a rootfs image file using pure Go code
+// createRootfsImage creates a rootfs image file with a valid ext4 filesystem
+// using a pure-Go formatter. No mkfs.ext4 or root access required.
 func (m *Manager) createRootfsImage(path string, sizeGB int) error {
-	// Calculate size in bytes
-	sizeBytes := sizeGB * 1024 * 1024 * 1024
+	sizeBytes := int64(sizeGB) * 1024 * 1024 * 1024
 
 	// Create empty file with specified size
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create image file: %w", err)
 	}
-	defer file.Close()
 
-	// Truncate to size
-	if err := file.Truncate(int64(sizeBytes)); err != nil {
+	if err := file.Truncate(sizeBytes); err != nil {
+		file.Close()
 		return fmt.Errorf("failed to truncate file: %w", err)
 	}
+	file.Close()
 
-	// Write ext4 magic number at offset 1024 to mark as ext4 filesystem
-	// This is a simplified approach - in production, you'd use a proper ext4 library
-	ext4Magic := []byte{0x53, 0xEF} // ext2/3/4 magic
-	if _, err := file.WriteAt(ext4Magic, 1024+56); err != nil {
-		return fmt.Errorf("failed to write ext4 magic: %w", err)
+	// Format with a valid ext4 filesystem
+	if err := FormatExt4(path, &Ext4FormatConfig{Label: "tent-rootfs"}); err != nil {
+		return fmt.Errorf("failed to format ext4: %w", err)
 	}
 
 	return nil
