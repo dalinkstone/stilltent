@@ -882,6 +882,80 @@ func (m *VMManager) scpBaseArgs(vmName string) []string {
 	return args
 }
 
+// GetStats returns resource statistics for a specific sandbox
+func (m *VMManager) GetStats(name string) (*models.ResourceStats, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox '%s' not found: %w", name, err)
+	}
+
+	stats := &models.ResourceStats{
+		Name:     vmState.Name,
+		Status:   string(vmState.Status),
+		VCPUs:    vmState.VCPUs,
+		MemoryMB: vmState.MemoryMB,
+		DiskGB:   vmState.DiskGB,
+		IP:       vmState.IP,
+		ImageRef: vmState.ImageRef,
+		PID:      vmState.PID,
+	}
+
+	// Calculate uptime for running sandboxes
+	if vmState.Status == models.VMStatusRunning && vmState.UpdatedAt > 0 {
+		stats.UptimeSeconds = time.Now().Unix() - vmState.UpdatedAt
+	}
+
+	// Get disk usage from rootfs
+	if vmState.RootFSPath != "" {
+		if fi, err := os.Stat(vmState.RootFSPath); err == nil {
+			stats.RootFSSizeMB = fi.Size() / (1024 * 1024)
+		}
+	}
+
+	// Calculate total disk used in the sandbox directory
+	sandboxDir := filepath.Join(m.baseDir, "rootfs", name)
+	stats.DiskUsedMB = dirSizeMB(sandboxDir)
+
+	// Count snapshots
+	snapshotDir := filepath.Join(m.baseDir, "snapshots", name)
+	if entries, err := os.ReadDir(snapshotDir); err == nil {
+		stats.SnapshotCount = len(entries)
+	}
+
+	return stats, nil
+}
+
+// GetAllStats returns resource statistics for all sandboxes
+func (m *VMManager) GetAllStats() ([]*models.ResourceStats, error) {
+	vms, err := m.stateManager.ListVMs()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list VMs: %w", err)
+	}
+
+	var allStats []*models.ResourceStats
+	for _, vmState := range vms {
+		stats, err := m.GetStats(vmState.Name)
+		if err != nil {
+			continue
+		}
+		allStats = append(allStats, stats)
+	}
+	return allStats, nil
+}
+
+// dirSizeMB returns total size of files in a directory in MB
+func dirSizeMB(path string) int64 {
+	var total int64
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total / (1024 * 1024)
+}
+
 // loadConfigFromState loads the VM config from the state file
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
 	// Load config from state file if present

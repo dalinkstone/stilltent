@@ -164,6 +164,22 @@ type BridgeInfo struct {
 	TAPDevices []string `json:"tap_devices"`
 }
 
+// ResourceStats represents runtime resource statistics for a sandbox
+type ResourceStats struct {
+	Name          string  `json:"name"`
+	Status        string  `json:"status"`
+	VCPUs         int     `json:"vcpus"`
+	MemoryMB      int     `json:"memory_mb"`
+	DiskGB        int     `json:"disk_gb"`
+	DiskUsedMB    int64   `json:"disk_used_mb"`
+	RootFSSizeMB  int64   `json:"rootfs_size_mb"`
+	UptimeSeconds int64   `json:"uptime_seconds,omitempty"`
+	IP            string  `json:"ip,omitempty"`
+	ImageRef      string  `json:"image_ref,omitempty"`
+	PID           int     `json:"pid,omitempty"`
+	SnapshotCount int     `json:"snapshot_count"`
+}
+
 // ValidateVMConfig validates a VM configuration
 func ValidateVMConfig(cfg *VMConfig) error {
 	if cfg == nil {
