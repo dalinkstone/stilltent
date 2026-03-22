@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dalinkstone/tent/internal/image"
+	"github.com/dalinkstone/tent/internal/network"
 	vm "github.com/dalinkstone/tent/internal/sandbox"
 	"github.com/dalinkstone/tent/pkg/models"
 )
@@ -164,6 +165,12 @@ func (s *apiServer) routes() *http.ServeMux {
 	// Images
 	mux.HandleFunc("/v1/images", s.handleImages)
 
+	// Network policy
+	mux.HandleFunc("/v1/network/", s.handleNetwork)
+
+	// Labels
+	mux.HandleFunc("/v1/labels/", s.handleLabels)
+
 	// Events
 	mux.HandleFunc("/v1/events", s.handleEvents)
 
@@ -289,6 +296,24 @@ func (s *apiServer) handleSandbox(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.createSnapshot(w, r, name)
+	case action == "snapshots/restore" && r.Method == http.MethodPost:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		s.restoreSnapshot(w, r, name)
+	case action == "snapshots/delete" && r.Method == http.MethodPost:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		s.deleteSnapshot(w, r, name)
+	case action == "clone" && r.Method == http.MethodPost:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		s.cloneSandbox(w, r, name)
 	default:
 		s.writeError(w, http.StatusNotFound, fmt.Sprintf("unknown endpoint: %s %s", r.Method, r.URL.Path))
 	}
@@ -600,6 +625,270 @@ func (s *apiServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: events})
+}
+
+// restoreSnapshotRequest is the JSON body for restoring a snapshot
+type restoreSnapshotRequest struct {
+	Tag string `json:"tag"`
+}
+
+func (s *apiServer) restoreSnapshot(w http.ResponseWriter, r *http.Request, name string) {
+	var req restoreSnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Tag == "" {
+		s.writeError(w, http.StatusBadRequest, "tag is required")
+		return
+	}
+	if err := s.manager.RestoreSnapshot(name, req.Tag); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, apiResponse{
+		OK:      true,
+		Message: fmt.Sprintf("snapshot %q restored for sandbox %q", req.Tag, name),
+	})
+}
+
+// deleteSnapshotRequest is the JSON body for deleting a snapshot
+type deleteSnapshotRequest struct {
+	Tag string `json:"tag"`
+}
+
+func (s *apiServer) deleteSnapshot(w http.ResponseWriter, r *http.Request, name string) {
+	var req deleteSnapshotRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Tag == "" {
+		s.writeError(w, http.StatusBadRequest, "tag is required")
+		return
+	}
+	if err := s.manager.DeleteSnapshot(name, req.Tag); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, apiResponse{
+		OK:      true,
+		Message: fmt.Sprintf("snapshot %q deleted from sandbox %q", req.Tag, name),
+	})
+}
+
+// cloneSandboxRequest is the JSON body for cloning a sandbox
+type cloneSandboxRequest struct {
+	NewName string `json:"new_name"`
+}
+
+func (s *apiServer) cloneSandbox(w http.ResponseWriter, r *http.Request, name string) {
+	var req cloneSandboxRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.NewName == "" {
+		s.writeError(w, http.StatusBadRequest, "new_name is required")
+		return
+	}
+	if err := s.manager.Clone(name, req.NewName); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	state, _ := s.manager.Status(req.NewName)
+	s.writeJSON(w, http.StatusCreated, apiResponse{
+		OK:      true,
+		Data:    state,
+		Message: fmt.Sprintf("sandbox %q cloned to %q", name, req.NewName),
+	})
+}
+
+// handleNetwork handles network policy API endpoints
+// GET  /v1/network/{name}         - get network policy
+// POST /v1/network/{name}/allow   - allow an endpoint
+// POST /v1/network/{name}/deny    - deny an endpoint
+func (s *apiServer) handleNetwork(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/network/")
+	parts := strings.SplitN(path, "/", 2)
+
+	if len(parts) == 0 || parts[0] == "" {
+		s.writeError(w, http.StatusBadRequest, "sandbox name required")
+		return
+	}
+
+	name := parts[0]
+	action := ""
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+
+	pm, err := network.NewPolicyManager(s.baseDir)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("policy manager: %v", err))
+		return
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		s.getNetworkPolicy(w, pm, name)
+	case action == "allow" && r.Method == http.MethodPost:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		s.allowEndpoint(w, r, pm, name)
+	case action == "deny" && r.Method == http.MethodPost:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		s.denyEndpoint(w, r, pm, name)
+	case action == "check" && r.Method == http.MethodGet:
+		endpoint := r.URL.Query().Get("endpoint")
+		if endpoint == "" {
+			s.writeError(w, http.StatusBadRequest, "endpoint query parameter required")
+			return
+		}
+		s.checkEndpoint(w, pm, name, endpoint)
+	default:
+		s.writeError(w, http.StatusNotFound, fmt.Sprintf("unknown network endpoint: %s %s", r.Method, r.URL.Path))
+	}
+}
+
+func (s *apiServer) getNetworkPolicy(w http.ResponseWriter, pm *network.PolicyManager, name string) {
+	policy, err := pm.GetPolicy(name)
+	if err != nil {
+		// Return default empty policy if none exists
+		policy, err = pm.EnsureDefaultPolicy(name)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: policy})
+}
+
+type endpointRequest struct {
+	Endpoint string `json:"endpoint"`
+}
+
+func (s *apiServer) allowEndpoint(w http.ResponseWriter, r *http.Request, pm *network.PolicyManager, name string) {
+	var req endpointRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Endpoint == "" {
+		s.writeError(w, http.StatusBadRequest, "endpoint is required")
+		return
+	}
+	if err := pm.AddAllowedEndpoint(name, req.Endpoint); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, apiResponse{
+		OK:      true,
+		Message: fmt.Sprintf("endpoint %q allowed for sandbox %q", req.Endpoint, name),
+	})
+}
+
+func (s *apiServer) denyEndpoint(w http.ResponseWriter, r *http.Request, pm *network.PolicyManager, name string) {
+	var req endpointRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+		return
+	}
+	if req.Endpoint == "" {
+		s.writeError(w, http.StatusBadRequest, "endpoint is required")
+		return
+	}
+	if err := pm.AddDeniedEndpoint(name, req.Endpoint); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, apiResponse{
+		OK:      true,
+		Message: fmt.Sprintf("endpoint %q denied for sandbox %q", req.Endpoint, name),
+	})
+}
+
+func (s *apiServer) checkEndpoint(w http.ResponseWriter, pm *network.PolicyManager, name, endpoint string) {
+	allowed, err := pm.IsEndpointAllowed(name, endpoint)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, http.StatusOK, apiResponse{
+		OK: true,
+		Data: map[string]interface{}{
+			"endpoint": endpoint,
+			"allowed":  allowed,
+		},
+	})
+}
+
+// handleLabels handles label management API endpoints
+// GET    /v1/labels/{name}  - get labels
+// PUT    /v1/labels/{name}  - set labels
+// DELETE /v1/labels/{name}  - remove labels
+func (s *apiServer) handleLabels(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/v1/labels/")
+	if name == "" {
+		s.writeError(w, http.StatusBadRequest, "sandbox name required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		labels, err := s.manager.GetLabels(name)
+		if err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusOK, apiResponse{OK: true, Data: labels})
+
+	case http.MethodPut:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		var labels map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&labels); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+			return
+		}
+		if err := s.manager.SetLabels(name, labels); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusOK, apiResponse{
+			OK:      true,
+			Message: fmt.Sprintf("labels updated for sandbox %q", name),
+		})
+
+	case http.MethodDelete:
+		if s.readonly {
+			s.readonlyError(w)
+			return
+		}
+		var keys []string
+		if err := json.NewDecoder(r.Body).Decode(&keys); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid JSON: %v", err))
+			return
+		}
+		if err := s.manager.RemoveLabels(name, keys); err != nil {
+			s.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.writeJSON(w, http.StatusOK, apiResponse{
+			OK:      true,
+			Message: fmt.Sprintf("labels removed from sandbox %q", name),
+		})
+
+	default:
+		s.methodNotAllowed(w)
+	}
 }
 
 // Helper methods
