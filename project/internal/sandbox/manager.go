@@ -1033,6 +1033,134 @@ func (m *VMManager) DeleteAllSnapshots(name string) (int, error) {
 	return m.storageMgr.DeleteAllSnapshots(name)
 }
 
+// CreateCheckpoint saves a full VM checkpoint (memory + CPU + disk state).
+func (m *VMManager) CreateCheckpoint(name, tag, description string, includeDisk bool) (*models.CheckpointInfo, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+
+	config, err := m.LoadConfig(name)
+	if err != nil {
+		// Fallback to state-derived config
+		config = &models.VMConfig{
+			Name:     vmState.Name,
+			VCPUs:    vmState.VCPUs,
+			MemoryMB: vmState.MemoryMB,
+			DiskGB:   vmState.DiskGB,
+		}
+	}
+
+	cpMgr := NewCheckpointManager(m.baseDir)
+	info, err := cpMgr.CreateCheckpoint(name, tag, description, includeDisk, vmState, config)
+	if err != nil {
+		return nil, err
+	}
+
+	m.logEvent(EventCheckpointCreate, name, map[string]string{
+		"tag":          tag,
+		"disk_included": fmt.Sprintf("%v", includeDisk),
+	})
+
+	return info, nil
+}
+
+// RestoreCheckpoint restores a VM from a full checkpoint.
+func (m *VMManager) RestoreCheckpoint(name, tag string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status == models.VMStatusRunning {
+		return fmt.Errorf("VM %s must be stopped before restoring a checkpoint", name)
+	}
+
+	cpMgr := NewCheckpointManager(m.baseDir)
+	meta, err := cpMgr.RestoreCheckpoint(name, tag)
+	if err != nil {
+		return err
+	}
+
+	// If the checkpoint includes a disk image, restore it
+	if meta.DiskIncluded {
+		diskPath, err := cpMgr.GetCheckpointDiskPath(name, tag)
+		if err != nil {
+			return fmt.Errorf("failed to get checkpoint disk: %w", err)
+		}
+
+		if vmState.RootFSPath != "" {
+			srcFile, err := os.Open(diskPath)
+			if err != nil {
+				return fmt.Errorf("failed to open checkpoint disk: %w", err)
+			}
+			defer srcFile.Close()
+
+			dstFile, err := os.Create(vmState.RootFSPath)
+			if err != nil {
+				return fmt.Errorf("failed to open VM disk for restore: %w", err)
+			}
+			defer dstFile.Close()
+
+			if _, err := io.Copy(dstFile, srcFile); err != nil {
+				return fmt.Errorf("failed to restore disk image: %w", err)
+			}
+		}
+	}
+
+	// Update VM config if checkpoint has config
+	if meta.VMConfig != nil {
+		_ = m.UpdateConfig(name, meta.VMConfig)
+	}
+
+	m.logEvent(EventCheckpointRestore, name, map[string]string{
+		"tag": tag,
+	})
+
+	return nil
+}
+
+// ListCheckpoints returns all checkpoints for a VM.
+func (m *VMManager) ListCheckpoints(name string) ([]*models.CheckpointInfo, error) {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+
+	cpMgr := NewCheckpointManager(m.baseDir)
+	return cpMgr.ListCheckpoints(name)
+}
+
+// DeleteCheckpoint removes a specific checkpoint.
+func (m *VMManager) DeleteCheckpoint(name, tag string) error {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	cpMgr := NewCheckpointManager(m.baseDir)
+	if err := cpMgr.DeleteCheckpoint(name, tag); err != nil {
+		return err
+	}
+
+	m.logEvent(EventCheckpointDelete, name, map[string]string{
+		"tag": tag,
+	})
+
+	return nil
+}
+
+// DeleteAllCheckpoints removes all checkpoints for a VM.
+func (m *VMManager) DeleteAllCheckpoints(name string) (int, error) {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return 0, fmt.Errorf("VM not found: %w", err)
+	}
+
+	cpMgr := NewCheckpointManager(m.baseDir)
+	return cpMgr.DeleteAllCheckpoints(name)
+}
+
 // Exec executes a command inside a running microVM
 func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 	// Check if VM exists

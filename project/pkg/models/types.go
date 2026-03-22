@@ -241,6 +241,18 @@ type Snapshot struct {
 	SizeMB    int    `json:"size_mb"`
 }
 
+// CheckpointInfo represents a full VM checkpoint (memory + CPU + disk state)
+type CheckpointInfo struct {
+	Tag          string `json:"tag"`
+	Timestamp    string `json:"timestamp"`
+	SizeMB       int64  `json:"size_mb"`
+	MemoryMB     int    `json:"memory_mb"`
+	VCPUs        int    `json:"vcpus"`
+	VMStatus     string `json:"vm_status"`
+	DiskIncluded bool   `json:"disk_included"`
+	Description  string `json:"description,omitempty"`
+}
+
 // ImageInfo represents a base image
 type ImageInfo struct {
 	Name      string `json:"name"`
