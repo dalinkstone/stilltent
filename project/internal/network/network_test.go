@@ -11,6 +11,158 @@ import (
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
+// NetworkResource tests (platform-independent)
+
+func TestNetworkResource_Init(t *testing.T) {
+	resource := &NetworkResource{
+		Name:       "test-interface",
+		Type:       "tap",
+		IP:         "172.16.0.10",
+		Interfaces: []string{"vmnet0"},
+	}
+
+	if resource.Name != "test-interface" {
+		t.Errorf("expected Name 'test-interface', got '%s'", resource.Name)
+	}
+
+	if resource.Type != "tap" {
+		t.Errorf("expected Type 'tap', got '%s'", resource.Type)
+	}
+
+	if resource.IP != "172.16.0.10" {
+		t.Errorf("expected IP '172.16.0.10', got '%s'", resource.IP)
+	}
+
+	if len(resource.Interfaces) != 1 {
+		t.Errorf("expected 1 interface, got %d", len(resource.Interfaces))
+	}
+}
+
+func TestNetworkResource_Empty(t *testing.T) {
+	resource := &NetworkResource{}
+
+	if resource.Name != "" {
+		t.Errorf("expected empty Name, got '%s'", resource.Name)
+	}
+
+	if resource.Type != "" {
+		t.Errorf("expected empty Type, got '%s'", resource.Type)
+	}
+
+	if resource.IP != "" {
+		t.Errorf("expected empty IP, got '%s'", resource.IP)
+	}
+
+	// Interfaces can be nil or empty slice - both are acceptable
+	_ = resource.Interfaces
+}
+
+func TestNetworkResource_AllFields(t *testing.T) {
+	interfaces := []string{"tap0", "tap1", "vmnet0"}
+	resource := &NetworkResource{
+		Name:       "bridge0",
+		Type:       "bridge",
+		IP:         "172.16.0.1/24",
+		Interfaces: interfaces,
+	}
+
+	if len(resource.Interfaces) != 3 {
+		t.Errorf("expected 3 interfaces, got %d", len(resource.Interfaces))
+	}
+
+	if resource.Interfaces[0] != "tap0" {
+		t.Errorf("expected first interface 'tap0', got '%s'", resource.Interfaces[0])
+	}
+
+	if resource.Interfaces[1] != "tap1" {
+		t.Errorf("expected second interface 'tap1', got '%s'", resource.Interfaces[1])
+	}
+
+	if resource.Interfaces[2] != "vmnet0" {
+		t.Errorf("expected third interface 'vmnet0', got '%s'", resource.Interfaces[2])
+	}
+}
+
+func TestNetworkResource_InterfacesEmpty(t *testing.T) {
+	resource := &NetworkResource{
+		Name: "test",
+		Type: "tap",
+		IP:   "192.168.1.1",
+	}
+
+	// Interfaces can be nil or empty - both are acceptable
+	_ = resource.Interfaces
+}
+
+func TestNetworkResource_SetIP(t *testing.T) {
+	resource := &NetworkResource{
+		Name: "test",
+		Type: "tap",
+	}
+
+	resource.IP = "172.16.0.50"
+
+	if resource.IP != "172.16.0.50" {
+		t.Errorf("expected IP '172.16.0.50', got '%s'", resource.IP)
+	}
+}
+
+func TestNetworkResource_SetName(t *testing.T) {
+	resource := &NetworkResource{
+		Type: "bridge",
+	}
+
+	resource.Name = "new-bridge"
+
+	if resource.Name != "new-bridge" {
+		t.Errorf("expected Name 'new-bridge', got '%s'", resource.Name)
+	}
+}
+
+func TestNetworkResource_SetType(t *testing.T) {
+	resource := &NetworkResource{
+		Name: "test",
+	}
+
+	resource.Type = "vmnet"
+
+	if resource.Type != "vmnet" {
+		t.Errorf("expected Type 'vmnet', got '%s'", resource.Type)
+	}
+}
+
+func TestNetworkResource_AddInterface(t *testing.T) {
+	resource := &NetworkResource{
+		Name: "bridge0",
+		Type: "bridge",
+		IP:   "172.16.0.1",
+	}
+
+	resource.Interfaces = append(resource.Interfaces, "tap0", "tap1")
+
+	if len(resource.Interfaces) != 2 {
+		t.Errorf("expected 2 interfaces, got %d", len(resource.Interfaces))
+	}
+}
+
+func TestNetworkResource_NilInterfaces(t *testing.T) {
+	// Test that we can handle nil Interfaces slice gracefully
+	resource := &NetworkResource{
+		Name: "test",
+		Type: "tap",
+	}
+	// Don't initialize Interfaces
+
+	// Should be able to call append without panic
+	resource.Interfaces = append(resource.Interfaces, "tap0")
+
+	if len(resource.Interfaces) != 1 {
+		t.Errorf("expected 1 interface after append, got %d", len(resource.Interfaces))
+	}
+}
+
+// Linux-specific tests below (keep existing tests)
+
 func TestNewManager(t *testing.T) {
 	m, err := NewDefaultManager()
 	if err != nil {
