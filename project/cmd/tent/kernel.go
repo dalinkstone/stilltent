@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ func kernelCmd() *cobra.Command {
 	cmd.AddCommand(kernelSetDefaultCmd())
 	cmd.AddCommand(kernelScanCmd())
 	cmd.AddCommand(kernelGetCmd())
+	cmd.AddCommand(initrdCmd())
 
 	return cmd
 }
@@ -344,6 +346,161 @@ func kernelGetCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
+}
+
+func initrdCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "initrd",
+		Short: "Build and inspect initramfs images for microVM boot",
+	}
+
+	cmd.AddCommand(initrdBuildCmd())
+	cmd.AddCommand(initrdInspectCmd())
+
+	return cmd
+}
+
+func initrdBuildCmd() *cobra.Command {
+	var (
+		output     string
+		rootFSType string
+		rootDevice string
+		rootFlags  string
+		hostname   string
+		modules    []string
+		compress   bool
+		extraFiles []string
+		extraDirs  []string
+		jsonOutput bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "build",
+		Short: "Build a minimal initramfs for microVM boot",
+		Long: `Build a minimal initramfs (initrd) image containing just enough to boot a microVM.
+The generated initramfs mounts essential filesystems, loads virtio modules,
+mounts the root filesystem, and pivots into it.
+
+Examples:
+  tent kernel initrd build -o initrd.img
+  tent kernel initrd build -o initrd.img.gz --compress
+  tent kernel initrd build -o initrd.img --rootfs-type 9p --root-device rootfs
+  tent kernel initrd build -o initrd.img --hostname myvm --module overlay --module 9p`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output == "" {
+				return fmt.Errorf("--output (-o) is required")
+			}
+
+			cfg := &boot.InitrdConfig{
+				RootFSType:       rootFSType,
+				RootDevice:       rootDevice,
+				RootFlags:        rootFlags,
+				Hostname:         hostname,
+				ExtraModules:     modules,
+				Compress:         compress,
+				ExtraDirectories: extraDirs,
+				ExtraFiles:       make(map[string]string),
+			}
+
+			for _, spec := range extraFiles {
+				parts := splitFileSpec(spec)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid file spec %q: expected guest:host format", spec)
+				}
+				cfg.ExtraFiles[parts[0]] = parts[1]
+			}
+
+			data, err := boot.BuildMicroVMInitrd(cfg)
+			if err != nil {
+				return fmt.Errorf("build initrd: %w", err)
+			}
+
+			if err := os.MkdirAll(filepath.Dir(output), 0755); err != nil {
+				return fmt.Errorf("create output directory: %w", err)
+			}
+
+			if err := os.WriteFile(output, data, 0644); err != nil {
+				return fmt.Errorf("write initrd: %w", err)
+			}
+
+			info := boot.InitrdInfo{
+				Path:       output,
+				Size:       int64(len(data)),
+				Compressed: compress,
+				RootFSType: cfg.RootFSType,
+				RootDevice: cfg.RootDevice,
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(info)
+			}
+
+			fmt.Printf("Built initramfs: %s\n", output)
+			fmt.Printf("  Size:       %s\n", formatBytes(info.Size))
+			fmt.Printf("  Compressed: %v\n", info.Compressed)
+			fmt.Printf("  Root FS:    %s on %s\n", info.RootFSType, info.RootDevice)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output path for the initrd image (required)")
+	cmd.Flags().StringVar(&rootFSType, "rootfs-type", "ext4", "Root filesystem type (ext4, 9p, virtiofs)")
+	cmd.Flags().StringVar(&rootDevice, "root-device", "/dev/vda", "Root device path")
+	cmd.Flags().StringVar(&rootFlags, "root-flags", "", "Mount flags for root filesystem")
+	cmd.Flags().StringVar(&hostname, "hostname", "tent", "Hostname for the initramfs")
+	cmd.Flags().StringSliceVar(&modules, "module", nil, "Extra kernel modules to load")
+	cmd.Flags().BoolVar(&compress, "compress", false, "Gzip compress the output")
+	cmd.Flags().StringSliceVar(&extraFiles, "file", nil, "Extra files in guest:host format")
+	cmd.Flags().StringSliceVar(&extraDirs, "dir", nil, "Extra directories to create")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func initrdInspectCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "inspect <initrd-path>",
+		Short: "Inspect an initrd image and show metadata",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			info, err := boot.InspectInitrd(args[0])
+			if err != nil {
+				return fmt.Errorf("inspect initrd: %w", err)
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(info)
+			}
+
+			fmt.Printf("Path:       %s\n", info.Path)
+			fmt.Printf("Size:       %s (%d bytes)\n", formatBytes(info.Size), info.Size)
+			fmt.Printf("Compressed: %v\n", info.Compressed)
+			fmt.Printf("Entries:    %d\n", info.EntryCount)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func splitFileSpec(spec string) []string {
+	// Split on first colon that is not part of a Windows drive letter
+	for i := 1; i < len(spec); i++ {
+		if spec[i] == ':' {
+			return []string{spec[:i], spec[i+1:]}
+		}
+	}
+	return []string{spec}
 }
 
 func parseLabel(s string) (string, string) {
