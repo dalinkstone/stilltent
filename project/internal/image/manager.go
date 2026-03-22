@@ -1243,6 +1243,94 @@ func (m *Manager) LoadImage(archivePath string, newName string) (string, error) 
 	return finalName, nil
 }
 
+// VerifyResult holds the result of an image integrity verification.
+type VerifyResult struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Algorithm  string `json:"algorithm"`
+	Digest     string `json:"digest"`
+	Expected   string `json:"expected,omitempty"`
+	Match      bool   `json:"match"`
+	DigestFile string `json:"digest_file,omitempty"`
+	SizeBytes  int64  `json:"size_bytes"`
+}
+
+// VerifyImage computes the SHA-256 digest of an image and optionally checks it
+// against an expected value. If expectedDigest is empty, the method looks for a
+// sidecar <image>.sha256 file. When no expected digest is available, the result
+// contains the computed digest with Match set to true (self-consistent).
+func (m *Manager) VerifyImage(name string, expectedDigest string) (*VerifyResult, error) {
+	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
+	info, err := os.Stat(imagePath)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("image not found: %s", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat image: %w", err)
+	}
+
+	// Compute SHA-256 digest
+	f, err := os.Open(imagePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open image: %w", err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, fmt.Errorf("failed to hash image: %w", err)
+	}
+	digest := fmt.Sprintf("sha256:%x", h.Sum(nil))
+
+	result := &VerifyResult{
+		Name:      name,
+		Path:      imagePath,
+		Algorithm: "sha256",
+		Digest:    digest,
+		SizeBytes: info.Size(),
+		Match:     true,
+	}
+
+	// Resolve expected digest
+	if expectedDigest != "" {
+		result.Expected = expectedDigest
+	} else {
+		// Look for sidecar .sha256 file
+		sidecar := imagePath + ".sha256"
+		if data, err := os.ReadFile(sidecar); err == nil {
+			expected := strings.TrimSpace(string(data))
+			// Handle both "sha256:abc..." and bare hex forms
+			if !strings.Contains(expected, ":") {
+				expected = "sha256:" + expected
+			}
+			result.Expected = expected
+			result.DigestFile = sidecar
+		}
+	}
+
+	if result.Expected != "" {
+		result.Match = (digest == result.Expected)
+	}
+
+	return result, nil
+}
+
+// StoreDigest writes the SHA-256 digest of an image to a sidecar .sha256 file
+// so that future VerifyImage calls can check integrity without an explicit digest.
+func (m *Manager) StoreDigest(name string) (string, error) {
+	res, err := m.VerifyImage(name, "")
+	if err != nil {
+		return "", err
+	}
+	sidecar := res.Path + ".sha256"
+	// Write bare hex (strip "sha256:" prefix) for compatibility with sha256sum
+	hex := strings.TrimPrefix(res.Digest, "sha256:")
+	if err := os.WriteFile(sidecar, []byte(hex+"\n"), 0644); err != nil {
+		return "", fmt.Errorf("failed to write digest file: %w", err)
+	}
+	return res.Digest, nil
+}
+
 // NewProgressReader creates a progress-reporting reader
 func NewProgressReader(r io.Reader, tracker *ProgressTracker) io.Reader {
 	return &progressReader{Reader: r, tracker: tracker}

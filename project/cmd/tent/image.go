@@ -32,6 +32,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageSaveCmd())
 	cmd.AddCommand(imageLoadCmd())
 	cmd.AddCommand(imageCacheCmd())
+	cmd.AddCommand(imageVerifyCmd())
 
 	return cmd
 }
@@ -877,6 +878,98 @@ func imageCacheClearCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func imageVerifyCmd() *cobra.Command {
+	var (
+		expectedDigest string
+		storeDigest    bool
+		jsonOutput     bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "verify <name>",
+		Short: "Verify image integrity via SHA-256 digest",
+		Long: `Compute the SHA-256 digest of an image and verify it against an expected value.
+
+If --digest is provided, the image digest is compared against that value.
+Otherwise, a sidecar .sha256 file is checked automatically. If neither exists,
+the computed digest is printed (useful for initial recording).
+
+Use --store to write the computed digest to a sidecar file so future verify
+calls can check integrity without passing --digest explicitly.
+
+Examples:
+  tent image verify ubuntu-22.04
+  tent image verify ubuntu-22.04 --digest sha256:abc123...
+  tent image verify ubuntu-22.04 --store
+  tent image verify ubuntu-22.04 --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+			mgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			if storeDigest {
+				digest, err := mgr.StoreDigest(name)
+				if err != nil {
+					return err
+				}
+				if jsonOutput {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(map[string]string{
+						"name":   name,
+						"digest": digest,
+						"stored": "true",
+					})
+				}
+				fmt.Printf("Stored digest for %s: %s\n", name, digest)
+				return nil
+			}
+
+			result, err := mgr.VerifyImage(name, expectedDigest)
+			if err != nil {
+				return err
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+
+			fmt.Printf("Image:     %s\n", result.Name)
+			fmt.Printf("Digest:    %s\n", result.Digest)
+			fmt.Printf("Size:      %.1f MB\n", float64(result.SizeBytes)/(1024*1024))
+
+			if result.Expected != "" {
+				fmt.Printf("Expected:  %s\n", result.Expected)
+				if result.DigestFile != "" {
+					fmt.Printf("Source:    %s\n", result.DigestFile)
+				}
+				if result.Match {
+					fmt.Println("Status:    OK — digest matches")
+				} else {
+					fmt.Println("Status:    FAILED — digest mismatch")
+					return fmt.Errorf("image verification failed: digest mismatch")
+				}
+			} else {
+				fmt.Println("Status:    computed (no expected digest to compare)")
+				fmt.Println("Hint:      use --store to save this digest for future verification")
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&expectedDigest, "digest", "", "Expected digest to verify against (sha256:...)")
+	cmd.Flags().BoolVar(&storeDigest, "store", false, "Compute and store digest in a sidecar .sha256 file")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
 }
 
 // parseByteSize parses human-readable byte sizes like "1GB", "500MB", "100KB".
