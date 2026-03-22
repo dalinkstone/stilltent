@@ -255,6 +255,14 @@ func (m *MockStorageManager) ListSnapshots(name string) ([]*storage.SnapshotInfo
 	return result, nil
 }
 
+func (m *MockStorageManager) DeleteSnapshot(vmName string, tag string) error {
+	return nil
+}
+
+func (m *MockStorageManager) DeleteAllSnapshots(vmName string) (int, error) {
+	return len(m.Snapshots), nil
+}
+
 // MockVMManager is a mock VM manager for testing CLI commands
 type MockVMManager struct {
 	SetupCalled        bool

@@ -18,6 +18,7 @@ func snapshotCmd() *cobra.Command {
 	cmd.AddCommand(snapshotCreateCmd())
 	cmd.AddCommand(snapshotRestoreCmd())
 	cmd.AddCommand(snapshotListCmd())
+	cmd.AddCommand(snapshotDeleteCmd())
 
 	return cmd
 }
@@ -143,4 +144,63 @@ func snapshotListCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func snapshotDeleteCmd() *cobra.Command {
+	var all bool
+
+	cmd := &cobra.Command{
+		Use:   "delete <name> [tag]",
+		Short: "Delete a snapshot or all snapshots for a VM",
+		Long:  `Delete a specific snapshot by tag, or use --all to delete all snapshots for a VM.`,
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			// Create VM manager
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := vm.NewManager(baseDir, nil, nil, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+
+			if err := manager.Setup(); err != nil {
+				return fmt.Errorf("failed to setup VM manager: %w", err)
+			}
+
+			if all {
+				count, err := manager.DeleteAllSnapshots(name)
+				if err != nil {
+					return fmt.Errorf("failed to delete snapshots: %w", err)
+				}
+				if count == 0 {
+					fmt.Printf("No snapshots found for VM %s\n", name)
+				} else {
+					fmt.Printf("Deleted %d snapshot(s) for VM %s\n", count, name)
+				}
+				return nil
+			}
+
+			if len(args) < 2 {
+				return fmt.Errorf("tag argument required (or use --all to delete all snapshots)")
+			}
+
+			tag := args[1]
+			if err := manager.DeleteSnapshot(name, tag); err != nil {
+				return fmt.Errorf("failed to delete snapshot: %w", err)
+			}
+
+			fmt.Printf("Deleted snapshot '%s' for VM %s\n", tag, name)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&all, "all", false, "Delete all snapshots for the VM")
+
+	return cmd
 }

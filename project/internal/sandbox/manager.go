@@ -52,6 +52,8 @@ type StorageManager interface {
 	CreateSnapshot(name string, tag string) (string, error)
 	RestoreSnapshot(name string, tag string) error
 	ListSnapshots(name string) ([]*storage.SnapshotInfo, error)
+	DeleteSnapshot(vmName string, tag string) error
+	DeleteAllSnapshots(vmName string) (int, error)
 }
 
 // PortForwarder defines the interface for port forwarding operations
@@ -658,6 +660,28 @@ func (m *VMManager) ListSnapshots(name string) ([]*models.Snapshot, error) {
 	}
 
 	return result, nil
+}
+
+// DeleteSnapshot deletes a specific snapshot of a VM's rootfs
+func (m *VMManager) DeleteSnapshot(name string, tag string) error {
+	// Check if VM exists
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	return m.storageMgr.DeleteSnapshot(name, tag)
+}
+
+// DeleteAllSnapshots deletes all snapshots for a VM
+func (m *VMManager) DeleteAllSnapshots(name string) (int, error) {
+	// Check if VM exists
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return 0, fmt.Errorf("VM not found: %w", err)
+	}
+
+	return m.storageMgr.DeleteAllSnapshots(name)
 }
 
 // Exec executes a command inside a running microVM

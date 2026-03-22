@@ -174,6 +174,59 @@ type SnapshotInfo struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// DeleteSnapshot deletes a specific snapshot for a VM
+func (m *Manager) DeleteSnapshot(vmName string, tag string) error {
+	snapshotPath := filepath.Join(m.baseDir, "snapshots", vmName, fmt.Sprintf("%s.img", tag))
+	if _, err := os.Stat(snapshotPath); os.IsNotExist(err) {
+		return fmt.Errorf("snapshot '%s' not found for VM %s", tag, vmName)
+	}
+
+	if err := os.Remove(snapshotPath); err != nil {
+		return fmt.Errorf("failed to delete snapshot: %w", err)
+	}
+
+	// Clean up empty snapshot directory
+	snapshotDir := filepath.Join(m.baseDir, "snapshots", vmName)
+	entries, err := os.ReadDir(snapshotDir)
+	if err == nil && len(entries) == 0 {
+		os.Remove(snapshotDir)
+	}
+
+	return nil
+}
+
+// DeleteAllSnapshots deletes all snapshots for a VM
+func (m *Manager) DeleteAllSnapshots(vmName string) (int, error) {
+	snapshotDir := filepath.Join(m.baseDir, "snapshots", vmName)
+	if _, err := os.Stat(snapshotDir); os.IsNotExist(err) {
+		return 0, nil
+	}
+
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read snapshot directory: %w", err)
+	}
+
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".img") {
+			path := filepath.Join(snapshotDir, entry.Name())
+			if err := os.Remove(path); err != nil {
+				return count, fmt.Errorf("failed to delete snapshot %s: %w", entry.Name(), err)
+			}
+			count++
+		}
+	}
+
+	// Clean up empty directory
+	entries, err = os.ReadDir(snapshotDir)
+	if err == nil && len(entries) == 0 {
+		os.Remove(snapshotDir)
+	}
+
+	return count, nil
+}
+
 // PullImage downloads a base image from a URL to the storage directory
 func (m *Manager) PullImage(name string, url string) (string, error) {
 	// Create base image directory
