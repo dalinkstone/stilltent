@@ -11,6 +11,77 @@ type ComposeConfig struct {
 	Volumes   map[string]*VolumeConfig  `yaml:"volumes,omitempty"`
 }
 
+// FilterByProfiles returns a new ComposeConfig containing only sandboxes that
+// match the given active profiles. A sandbox with no profiles is always included.
+// A sandbox with profiles is included only if at least one of its profiles is active.
+// If no active profiles are specified, only sandboxes with no profiles are included.
+func (c *ComposeConfig) FilterByProfiles(activeProfiles []string) *ComposeConfig {
+	if len(activeProfiles) == 0 {
+		// No profiles active: include only sandboxes with no profiles set
+		filtered := &ComposeConfig{
+			Sandboxes: make(map[string]*SandboxConfig),
+			Volumes:   c.Volumes,
+		}
+		for name, sb := range c.Sandboxes {
+			if len(sb.Profiles) == 0 {
+				filtered.Sandboxes[name] = sb
+			}
+		}
+		return filtered
+	}
+
+	activeSet := make(map[string]bool, len(activeProfiles))
+	for _, p := range activeProfiles {
+		activeSet[p] = true
+	}
+
+	filtered := &ComposeConfig{
+		Sandboxes: make(map[string]*SandboxConfig),
+		Volumes:   c.Volumes,
+	}
+	for name, sb := range c.Sandboxes {
+		// No profiles means always included
+		if len(sb.Profiles) == 0 {
+			filtered.Sandboxes[name] = sb
+			continue
+		}
+		// Include if any of the sandbox's profiles are active
+		for _, p := range sb.Profiles {
+			if activeSet[p] {
+				filtered.Sandboxes[name] = sb
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+// ListProfiles returns all unique profile names referenced by sandboxes in the config.
+func (c *ComposeConfig) ListProfiles() []string {
+	seen := make(map[string]bool)
+	for _, sb := range c.Sandboxes {
+		for _, p := range sb.Profiles {
+			seen[p] = true
+		}
+	}
+	profiles := make([]string, 0, len(seen))
+	for p := range seen {
+		profiles = append(profiles, p)
+	}
+	// Sort for deterministic output
+	sortStrings(profiles)
+	return profiles
+}
+
+// sortStrings sorts a slice of strings in place.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
 // VolumeConfig defines a named volume in a compose file
 type VolumeConfig struct {
 	Driver string            `yaml:"driver,omitempty"` // "local" (default)
@@ -30,6 +101,7 @@ type SandboxConfig struct {
 	Volumes       []VolumeMount     `yaml:"volumes,omitempty"`
 	Env           map[string]string `yaml:"env,omitempty"`
 	DependsOn     []string          `yaml:"depends_on,omitempty"`
+	Profiles      []string          `yaml:"profiles,omitempty"`
 	HealthCheck   *HealthCheckConf  `yaml:"health_check,omitempty"`
 	RestartPolicy string            `yaml:"restart,omitempty"` // "no", "on-failure", "always"
 	Hooks         *LifecycleHooks   `yaml:"hooks,omitempty"`

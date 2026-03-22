@@ -43,6 +43,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeVolumeCmd())
 	cmd.AddCommand(composeHealthCmd())
 	cmd.AddCommand(composeHooksCmd())
+	cmd.AddCommand(composeProfilesCmd())
 
 	return cmd
 }
@@ -76,10 +77,21 @@ func newComposeManager() (*compose.ComposeManager, error) {
 }
 
 func composeUpCmd() *cobra.Command {
-	return &cobra.Command{
+	var profiles []string
+
+	cmd := &cobra.Command{
 		Use:   "up <file>",
 		Short: "Start all sandboxes in a compose file",
-		Args:  cobra.ExactArgs(1),
+		Long: `Start sandboxes defined in a compose file. Use --profile to selectively
+start only sandboxes assigned to specific profiles. Sandboxes with no profiles
+are always started. Sandboxes with profiles are only started when at least one
+of their profiles is active.
+
+Examples:
+  tent compose up compose.yaml
+  tent compose up compose.yaml --profile dev
+  tent compose up compose.yaml --profile dev --profile debug`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			filePath := args[0]
 
@@ -94,13 +106,26 @@ func composeUpCmd() *cobra.Command {
 				return fmt.Errorf("failed to parse compose file: %w", err)
 			}
 
+			// Apply profile filtering
+			if len(profiles) > 0 {
+				config = config.FilterByProfiles(profiles)
+				if len(config.Sandboxes) == 0 {
+					return fmt.Errorf("no sandboxes match the active profiles: %s", strings.Join(profiles, ", "))
+				}
+			}
+
 			manager, err := newComposeManager()
 			if err != nil {
 				return err
 			}
 
 			groupName := composeGroupName(filePath)
-			fmt.Printf("Starting compose group '%s' from %s...\n", groupName, filePath)
+			if len(profiles) > 0 {
+				fmt.Printf("Starting compose group '%s' (profiles: %s) from %s...\n",
+					groupName, strings.Join(profiles, ", "), filePath)
+			} else {
+				fmt.Printf("Starting compose group '%s' from %s...\n", groupName, filePath)
+			}
 
 			status, err := manager.Up(groupName, config)
 			if err != nil {
@@ -115,6 +140,9 @@ func composeUpCmd() *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringSliceVar(&profiles, "profile", nil, "Activate profiles to select which sandboxes to start")
+	return cmd
 }
 
 func composeDownCmd() *cobra.Command {
@@ -1573,4 +1601,98 @@ func printHookList(label string, commands []string) {
 	for _, cmd := range commands {
 		fmt.Printf("    - %s\n", cmd)
 	}
+}
+
+func composeProfilesCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "profiles <file>",
+		Short: "List available profiles in a compose file",
+		Long: `List all profiles defined across sandboxes in a compose file, along with
+which sandboxes belong to each profile.
+
+Examples:
+  tent compose profiles compose.yaml
+  tent compose profiles compose.yaml --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			profiles := config.ListProfiles()
+
+			if outputJSON {
+				// Build profile -> services mapping
+				profileMap := make(map[string][]string)
+				for _, p := range profiles {
+					profileMap[p] = []string{}
+				}
+				for name, sb := range config.Sandboxes {
+					for _, p := range sb.Profiles {
+						profileMap[p] = append(profileMap[p], name)
+					}
+				}
+				// Sort service lists
+				for _, svcs := range profileMap {
+					sort.Strings(svcs)
+				}
+
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(profileMap)
+			}
+
+			if len(profiles) == 0 {
+				fmt.Println("No profiles defined in compose file.")
+				return nil
+			}
+
+			// Build profile -> services mapping for display
+			profileServices := make(map[string][]string)
+			for name, sb := range config.Sandboxes {
+				for _, p := range sb.Profiles {
+					profileServices[p] = append(profileServices[p], name)
+				}
+			}
+			for _, svcs := range profileServices {
+				sort.Strings(svcs)
+			}
+
+			// Count sandboxes with no profiles (always started)
+			alwaysCount := 0
+			for _, sb := range config.Sandboxes {
+				if len(sb.Profiles) == 0 {
+					alwaysCount++
+				}
+			}
+
+			fmt.Printf("Profiles in compose file (%d total):\n\n", len(profiles))
+			for _, p := range profiles {
+				svcs := profileServices[p]
+				fmt.Printf("  %s (%d sandboxes)\n", p, len(svcs))
+				for _, svc := range svcs {
+					fmt.Printf("    - %s\n", svc)
+				}
+			}
+
+			if alwaysCount > 0 {
+				fmt.Printf("\n  (always) %d sandbox(es) with no profile (always started)\n", alwaysCount)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	return cmd
 }
