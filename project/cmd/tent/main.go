@@ -62,6 +62,7 @@ func main() {
 	rootCmd.AddCommand(mountCmd())
 	rootCmd.AddCommand(diffCmd())
 	rootCmd.AddCommand(checkpointCmd())
+	rootCmd.AddCommand(secretCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
