@@ -166,12 +166,13 @@ func (v *VM) Start() error {
 	}
 
 	// Map memory to VM
+	// Note: hv_vm_map signature is (uva, gpa, size, flags) - no vmRef parameter
+	// The VM is implicitly associated with the current task after hv_vm_create
 	ret = C.hv_vm_map(
-		v.vmRef,
-		C.hv_gpa_t(0),
-		C.hv_ra_t(unsafe.Pointer(memoryPtr)),
-		memorySize,
-		C.HV_MEMORY_NON_SECURE,
+		C.hv_uvaddr_t(unsafe.Pointer(memoryPtr)),
+		C.hv_gpaddr_t(0),
+		C.size_t(memorySize),
+		C.HV_MEMORY_READ|C.HV_MEMORY_WRITE|C.HV_MEMORY_EXEC,
 	)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
