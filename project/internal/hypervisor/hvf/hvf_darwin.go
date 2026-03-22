@@ -260,6 +260,26 @@ func (v *VM) Start() error {
 	v.memoryPtr = memoryPtr
 	v.memorySize = memorySize
 
+	// Set up vmnet networking before loading kernel
+	// This creates the vmnet interface that the VM will use for networking
+	networkMgr, err := network.NewManager()
+	if err != nil {
+		C.munmap(memoryPtr, C.size_t(memorySize))
+		v.memoryPtr = nil
+		v.memorySize = 0
+		return fmt.Errorf("failed to create network manager: %w", err)
+	}
+
+	// Setup VM network - this creates the vmnet interface
+	tapDevice, err := networkMgr.SetupVMNetwork(v.config.Name, v.config)
+	if err != nil {
+		C.munmap(memoryPtr, C.size_t(memorySize))
+		v.memoryPtr = nil
+		v.memorySize = 0
+		return fmt.Errorf("failed to setup network: %w", err)
+	}
+	v.tapDevice = tapDevice
+
 	// Load kernel into guest memory
 	loader, err := v.loadKernelIntoMemory(memoryPtr, memorySize)
 	if err != nil {
@@ -523,6 +543,14 @@ func (v *VM) Cleanup() error {
 	if ret != C.HV_SUCCESS {
 		// Log but don't fail - cleanup should be best-effort
 		fmt.Printf("Warning: failed to destroy VM: %s\n", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	// Cleanup network resources
+	if v.tapDevice != "" {
+		if networkMgr, err := network.NewManager(); err == nil {
+			_ = networkMgr.CleanupVMNetwork(v.config.Name)
+		}
+		v.tapDevice = ""
 	}
 
 	v.running = false
