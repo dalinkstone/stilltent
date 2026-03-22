@@ -184,6 +184,87 @@ func (pf *PortForwarder) ListAllForwards() []ForwardStatus {
 	return all
 }
 
+// AddForward adds a single port forwarding rule to a running VM.
+// If the VM already has active listeners, the new forward is activated immediately.
+func (pf *PortForwarder) AddForward(vmName string, hostPort, guestPort int, guestIP string) error {
+	if hostPort <= 0 || hostPort > 65535 {
+		return fmt.Errorf("invalid host port %d", hostPort)
+	}
+	if guestPort <= 0 || guestPort > 65535 {
+		return fmt.Errorf("invalid guest port %d", guestPort)
+	}
+
+	pf.mu.Lock()
+	defer pf.mu.Unlock()
+
+	if err := pf.checkPortConflict(vmName, hostPort); err != nil {
+		return err
+	}
+
+	// Check for duplicate within same VM
+	for _, r := range pf.rules[vmName] {
+		if r.HostPort == hostPort {
+			return fmt.Errorf("host port %d already forwarded for VM %s", hostPort, vmName)
+		}
+	}
+
+	rule := &forwardRule{
+		HostPort:  hostPort,
+		GuestPort: guestPort,
+		GuestIP:   guestIP,
+		VMName:    vmName,
+	}
+	pf.rules[vmName] = append(pf.rules[vmName], rule)
+
+	// If VM already has active listeners (i.e., it's running), activate this forward too
+	if guestIP != "" {
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", hostPort))
+		if err != nil {
+			// Remove the rule we just added
+			rules := pf.rules[vmName]
+			pf.rules[vmName] = rules[:len(rules)-1]
+			return fmt.Errorf("failed to listen on host port %d: %w", hostPort, err)
+		}
+		pf.listeners[vmName] = append(pf.listeners[vmName], ln)
+		go pf.acceptLoop(ln, rule)
+	}
+
+	return nil
+}
+
+// RemoveForward removes a single port forwarding rule by host port.
+func (pf *PortForwarder) RemoveForward(vmName string, hostPort int) error {
+	pf.mu.Lock()
+	defer pf.mu.Unlock()
+
+	rules, ok := pf.rules[vmName]
+	if !ok {
+		return fmt.Errorf("no port forwards configured for VM %s", vmName)
+	}
+
+	idx := -1
+	for i, r := range rules {
+		if r.HostPort == hostPort {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("no forward found for host port %d on VM %s", hostPort, vmName)
+	}
+
+	// Close the matching listener if active
+	if listeners, hasListeners := pf.listeners[vmName]; hasListeners && idx < len(listeners) {
+		listeners[idx].Close()
+		pf.listeners[vmName] = append(listeners[:idx], listeners[idx+1:]...)
+	}
+
+	// Remove the rule
+	pf.rules[vmName] = append(rules[:idx], rules[idx+1:]...)
+
+	return nil
+}
+
 // checkPortConflict checks if a host port is already in use by another VM's forwarding
 func (pf *PortForwarder) checkPortConflict(vmName string, hostPort int) error {
 	for name, rules := range pf.rules {

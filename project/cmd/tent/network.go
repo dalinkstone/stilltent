@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +24,8 @@ func networkCmd() *cobra.Command {
 	cmd.AddCommand(networkDenyCmd())
 	cmd.AddCommand(networkStatusCmd())
 	cmd.AddCommand(networkPortsCmd())
+	cmd.AddCommand(networkPortAddCmd())
+	cmd.AddCommand(networkPortRemoveCmd())
 
 	return cmd
 }
@@ -256,6 +260,98 @@ func networkPortsCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func networkPortAddCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "port-add <sandbox> <host-port>:<guest-port>",
+		Short: "Add a port forwarding rule to a running sandbox",
+		Long: `Dynamically add a TCP port forwarding rule to a running sandbox.
+
+Examples:
+  tent network port-add mybox 8080:80
+  tent network port-add mybox 3000:3000`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+			hostPort, guestPort, err := parsePortMapping(args[1])
+			if err != nil {
+				return err
+			}
+
+			baseDir := getBaseDir()
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+
+			manager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+
+			if err := manager.AddPortForward(sandboxName, hostPort, guestPort); err != nil {
+				return fmt.Errorf("failed to add port forward: %w", err)
+			}
+
+			fmt.Printf("Added port forward: :%d -> %s:%d\n", hostPort, sandboxName, guestPort)
+			return nil
+		},
+	}
+}
+
+func networkPortRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "port-remove <sandbox> <host-port>",
+		Short: "Remove a port forwarding rule from a sandbox",
+		Long: `Remove a TCP port forwarding rule from a sandbox.
+
+Examples:
+  tent network port-remove mybox 8080`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+			hostPort, err := strconv.Atoi(args[1])
+			if err != nil {
+				return fmt.Errorf("invalid host port: %w", err)
+			}
+
+			baseDir := getBaseDir()
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+
+			manager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+
+			if err := manager.RemovePortForward(sandboxName, hostPort); err != nil {
+				return fmt.Errorf("failed to remove port forward: %w", err)
+			}
+
+			fmt.Printf("Removed port forward on host port :%d from '%s'\n", hostPort, sandboxName)
+			return nil
+		},
+	}
+}
+
+// parsePortMapping parses "host:guest" port mapping string
+func parsePortMapping(s string) (int, int, error) {
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid port mapping %q, expected host:guest (e.g. 8080:80)", s)
+	}
+	hostPort, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid host port %q: %w", parts[0], err)
+	}
+	guestPort, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid guest port %q: %w", parts[1], err)
+	}
+	return hostPort, guestPort, nil
 }
 
 // getBaseDir gets the base directory, respecting TENT_BASE_DIR env var

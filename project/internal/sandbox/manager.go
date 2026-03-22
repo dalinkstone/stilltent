@@ -65,6 +65,8 @@ type PortForwarder interface {
 	SetupForwards(vmName string, ports []models.PortForward) error
 	ActivateForwards(vmName string, guestIP string) error
 	RemoveForwards(vmName string) error
+	AddForward(vmName string, hostPort, guestPort int, guestIP string) error
+	RemoveForward(vmName string, hostPort int) error
 	ListForwards(vmName string) []network.ForwardStatus
 	ListAllForwards() []network.ForwardStatus
 }
@@ -892,6 +894,27 @@ func (m *VMManager) ListPortForwards(name string) ([]network.ForwardStatus, erro
 // ListAllPortForwards returns port forwarding status for all VMs
 func (m *VMManager) ListAllPortForwards() []network.ForwardStatus {
 	return m.portForwarder.ListAllForwards()
+}
+
+// AddPortForward adds a single port forwarding rule to a running sandbox
+func (m *VMManager) AddPortForward(name string, hostPort, guestPort int) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+	if vmState.Status != "running" {
+		return fmt.Errorf("VM %s is not running (status: %s)", name, vmState.Status)
+	}
+	return m.portForwarder.AddForward(name, hostPort, guestPort, vmState.IP)
+}
+
+// RemovePortForward removes a single port forwarding rule from a sandbox
+func (m *VMManager) RemovePortForward(name string, hostPort int) error {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+	return m.portForwarder.RemoveForward(name, hostPort)
 }
 
 // ExecInVM runs a single command string inside a sandbox and returns the output.
