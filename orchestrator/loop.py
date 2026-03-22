@@ -561,13 +561,13 @@ def log_health_summary(iteration: int):
 # =============================================================================
 
 def backoff_delay(consecutive_failures: int) -> float:
-    """Calculate exponential backoff delay after consecutive failures.
+    """Calculate backoff delay after consecutive failures.
 
-    Returns min(60 * 2^N, 3600) seconds — caps at 1 hour.
+    Capped at 60 seconds — never wait longer than one loop interval.
     """
     if consecutive_failures <= 0:
         return 0
-    delay = min(60 * (2 ** consecutive_failures), 3600)
+    delay = min(60 * (2 ** consecutive_failures), 60)
     return delay
 
 
@@ -997,40 +997,9 @@ _WORK_PATTERNS = (
 def _response_indicates_idle(response: dict) -> bool:
     """Determine if the agent's response indicates no work was available.
 
-    Detection is layered -- multiple signals are checked to avoid false
-    positives/negatives:
-
-      1. Structured result: if the JSON summary has "result": "skipped",
-         that is a strong idle signal.
-      2. Work indicators: if the response contains PR numbers, branch
-         pushes, or file changes, the agent clearly did work regardless
-         of what it said.  NOT idle.
-      3. Idle phrases: if the response text contains known "no work"
-         phrases and no work indicators, treat as idle.
+    DISABLED: The agent should always be working — picking the next roadmap
+    feature, improving code quality, or doing research.  Never enter idle mode.
     """
-    result_field = _extract_result_field(response)
-    text = extract_text_from_response(response)
-    text_lower = text.lower()
-
-    # -- Signal 1: explicit "skipped" result from the agent's JSON summary --
-    if result_field == "skipped":
-        # Even if the agent said "skipped", check for real work artifacts
-        # (defensive -- the agent might mislabel an iteration).
-        for pattern in _WORK_PATTERNS:
-            if pattern.search(text):
-                return False
-        return True
-
-    # -- Signal 2: strong work indicators override everything else ----------
-    for pattern in _WORK_PATTERNS:
-        if pattern.search(text):
-            return False
-
-    # -- Signal 3: idle phrases in freeform text ----------------------------
-    for phrase in _IDLE_PHRASES:
-        if phrase in text_lower:
-            return True
-
     return False
 
 
