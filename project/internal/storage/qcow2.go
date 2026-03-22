@@ -647,3 +647,259 @@ func InspectQCOW2(path string) (*QCOW2Info, error) {
 
 	return info, nil
 }
+
+// ImageFormat represents a disk image format.
+type ImageFormat string
+
+const (
+	FormatRaw   ImageFormat = "raw"
+	FormatQCOW2 ImageFormat = "qcow2"
+)
+
+// DetectFormat detects the image format of a file.
+func DetectFormat(path string) (ImageFormat, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	var magic uint32
+	if err := binary.Read(f, binary.BigEndian, &magic); err != nil {
+		return "", fmt.Errorf("read magic: %w", err)
+	}
+	if magic == qcow2Magic {
+		return FormatQCOW2, nil
+	}
+	return FormatRaw, nil
+}
+
+// ConvertResult holds the result of an image conversion.
+type ConvertResult struct {
+	SourcePath   string      `json:"source_path"`
+	SourceFormat ImageFormat `json:"source_format"`
+	OutputPath   string      `json:"output_path"`
+	OutputFormat ImageFormat `json:"output_format"`
+	SourceBytes  int64       `json:"source_bytes"`
+	OutputBytes  int64       `json:"output_bytes"`
+	VirtualSize  uint64      `json:"virtual_size"`
+}
+
+// ConvertImage converts a disk image between raw and qcow2 formats.
+// It reads the source image and writes it to outputPath in the target format.
+// The flatten flag causes qcow2 images with backing files to be fully resolved.
+func ConvertImage(srcPath, dstPath string, targetFormat ImageFormat, flatten bool) (*ConvertResult, error) {
+	srcFormat, err := DetectFormat(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("detect source format: %w", err)
+	}
+
+	if srcFormat == targetFormat && !flatten {
+		return nil, fmt.Errorf("source is already in %s format; use a different target format or --flatten", targetFormat)
+	}
+
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat source: %w", err)
+	}
+
+	switch {
+	case srcFormat == FormatQCOW2 && targetFormat == FormatRaw:
+		return convertQCOW2ToRaw(srcPath, dstPath, srcInfo.Size())
+	case srcFormat == FormatRaw && targetFormat == FormatQCOW2:
+		return convertRawToQCOW2(srcPath, dstPath, srcInfo.Size())
+	case srcFormat == FormatQCOW2 && targetFormat == FormatQCOW2 && flatten:
+		return convertQCOW2Flatten(srcPath, dstPath, srcInfo.Size())
+	default:
+		return nil, fmt.Errorf("unsupported conversion: %s -> %s", srcFormat, targetFormat)
+	}
+}
+
+// convertQCOW2ToRaw converts a QCOW2 image to raw format.
+func convertQCOW2ToRaw(srcPath, dstPath string, srcSize int64) (*ConvertResult, error) {
+	img, err := OpenQCOW2(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("open qcow2: %w", err)
+	}
+	defer img.Close()
+
+	virtualSize := img.VirtualSize()
+
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return nil, fmt.Errorf("create output: %w", err)
+	}
+	defer dst.Close()
+
+	if err := dst.Truncate(int64(virtualSize)); err != nil {
+		return nil, fmt.Errorf("truncate output: %w", err)
+	}
+
+	// Read cluster by cluster and write non-zero clusters to raw output
+	clusterSize := uint64(defaultClusterSize)
+	totalClusters := (virtualSize + clusterSize - 1) / clusterSize
+	buf := make([]byte, clusterSize)
+
+	for i := uint64(0); i < totalClusters; i++ {
+		data, err := img.ReadCluster(i)
+		if err != nil {
+			return nil, fmt.Errorf("read cluster %d: %w", i, err)
+		}
+		if data == nil {
+			continue // unallocated cluster, raw file is already zero
+		}
+		copy(buf, data)
+		offset := int64(i * clusterSize)
+		remaining := int64(virtualSize) - offset
+		writeLen := int64(clusterSize)
+		if remaining < writeLen {
+			writeLen = remaining
+		}
+		if _, err := dst.WriteAt(buf[:writeLen], offset); err != nil {
+			return nil, fmt.Errorf("write at offset %d: %w", offset, err)
+		}
+	}
+
+	dstInfo, err := dst.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat output: %w", err)
+	}
+
+	return &ConvertResult{
+		SourcePath:   srcPath,
+		SourceFormat: FormatQCOW2,
+		OutputPath:   dstPath,
+		OutputFormat: FormatRaw,
+		SourceBytes:  srcSize,
+		OutputBytes:  dstInfo.Size(),
+		VirtualSize:  virtualSize,
+	}, nil
+}
+
+// convertRawToQCOW2 converts a raw image to QCOW2 format.
+func convertRawToQCOW2(srcPath, dstPath string, srcSize int64) (*ConvertResult, error) {
+	virtualSize := uint64(srcSize)
+
+	if err := CreateQCOW2(dstPath, virtualSize, ""); err != nil {
+		return nil, fmt.Errorf("create qcow2: %w", err)
+	}
+
+	img, err := OpenQCOW2(dstPath)
+	if err != nil {
+		os.Remove(dstPath)
+		return nil, fmt.Errorf("open new qcow2: %w", err)
+	}
+	defer img.Close()
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		os.Remove(dstPath)
+		return nil, fmt.Errorf("open source: %w", err)
+	}
+	defer src.Close()
+
+	clusterSize := uint64(defaultClusterSize)
+	totalClusters := (virtualSize + clusterSize - 1) / clusterSize
+	buf := make([]byte, clusterSize)
+	zero := make([]byte, clusterSize)
+
+	for i := uint64(0); i < totalClusters; i++ {
+		offset := int64(i * clusterSize)
+		readLen := clusterSize
+		remaining := virtualSize - (i * clusterSize)
+		if remaining < readLen {
+			readLen = remaining
+		}
+
+		n, err := src.ReadAt(buf[:readLen], offset)
+		if err != nil && err != io.EOF {
+			os.Remove(dstPath)
+			return nil, fmt.Errorf("read source at offset %d: %w", offset, err)
+		}
+		// Zero out any extra bytes
+		for j := n; j < int(clusterSize); j++ {
+			buf[j] = 0
+		}
+
+		// Skip all-zero clusters to keep qcow2 sparse
+		if string(buf[:clusterSize]) == string(zero) {
+			continue
+		}
+
+		if err := img.WriteCluster(i, buf[:clusterSize]); err != nil {
+			os.Remove(dstPath)
+			return nil, fmt.Errorf("write cluster %d: %w", i, err)
+		}
+	}
+
+	dstInfo, err := os.Stat(dstPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat output: %w", err)
+	}
+
+	return &ConvertResult{
+		SourcePath:   srcPath,
+		SourceFormat: FormatRaw,
+		OutputPath:   dstPath,
+		OutputFormat: FormatQCOW2,
+		SourceBytes:  srcSize,
+		OutputBytes:  dstInfo.Size(),
+		VirtualSize:  virtualSize,
+	}, nil
+}
+
+// convertQCOW2Flatten converts a QCOW2 image with backing to a standalone QCOW2.
+func convertQCOW2Flatten(srcPath, dstPath string, srcSize int64) (*ConvertResult, error) {
+	img, err := OpenQCOW2(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("open qcow2: %w", err)
+	}
+	defer img.Close()
+
+	virtualSize := img.VirtualSize()
+
+	if err := CreateQCOW2(dstPath, virtualSize, ""); err != nil {
+		return nil, fmt.Errorf("create output qcow2: %w", err)
+	}
+
+	dst, err := OpenQCOW2(dstPath)
+	if err != nil {
+		os.Remove(dstPath)
+		return nil, fmt.Errorf("open output qcow2: %w", err)
+	}
+	defer dst.Close()
+
+	clusterSize := uint64(defaultClusterSize)
+	totalClusters := (virtualSize + clusterSize - 1) / clusterSize
+	zero := make([]byte, clusterSize)
+
+	for i := uint64(0); i < totalClusters; i++ {
+		data, err := img.ReadCluster(i)
+		if err != nil {
+			os.Remove(dstPath)
+			return nil, fmt.Errorf("read cluster %d: %w", i, err)
+		}
+		if data == nil || string(data) == string(zero) {
+			continue
+		}
+		if err := dst.WriteCluster(i, data); err != nil {
+			os.Remove(dstPath)
+			return nil, fmt.Errorf("write cluster %d: %w", i, err)
+		}
+	}
+
+	dstInfo, err := os.Stat(dstPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat output: %w", err)
+	}
+
+	return &ConvertResult{
+		SourcePath:   srcPath,
+		SourceFormat: FormatQCOW2,
+		OutputPath:   dstPath,
+		OutputFormat: FormatQCOW2,
+		SourceBytes:  srcSize,
+		OutputBytes:  dstInfo.Size(),
+		VirtualSize:  virtualSize,
+	}, nil
+}

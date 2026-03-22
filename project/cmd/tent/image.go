@@ -12,6 +12,7 @@ import (
 
 	"github.com/dalinkstone/tent/internal/image"
 	vm "github.com/dalinkstone/tent/internal/sandbox"
+	"github.com/dalinkstone/tent/internal/storage"
 )
 
 func imageCmd() *cobra.Command {
@@ -33,6 +34,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageLoadCmd())
 	cmd.AddCommand(imageCacheCmd())
 	cmd.AddCommand(imageVerifyCmd())
+	cmd.AddCommand(imageConvertCmd())
 
 	return cmd
 }
@@ -969,6 +971,102 @@ Examples:
 	cmd.Flags().StringVar(&expectedDigest, "digest", "", "Expected digest to verify against (sha256:...)")
 	cmd.Flags().BoolVar(&storeDigest, "store", false, "Compute and store digest in a sidecar .sha256 file")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func imageConvertCmd() *cobra.Command {
+	var (
+		outputPath string
+		format     string
+		flatten    bool
+		jsonOutput bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "convert <source>",
+		Short: "Convert a disk image between raw and qcow2 formats",
+		Long: `Convert a disk image between supported formats (raw, qcow2).
+
+The source format is auto-detected. The target format is specified with --format.
+Use --flatten to resolve a qcow2 backing chain into a standalone image.
+
+Examples:
+  tent image convert disk.qcow2 --format raw -o disk.raw
+  tent image convert disk.raw --format qcow2 -o disk.qcow2
+  tent image convert overlay.qcow2 --format qcow2 --flatten -o standalone.qcow2
+  tent image convert disk.qcow2 --format raw --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			srcPath := args[0]
+
+			if format == "" {
+				return fmt.Errorf("--format is required (raw or qcow2)")
+			}
+
+			targetFormat := storage.ImageFormat(strings.ToLower(format))
+			switch targetFormat {
+			case storage.FormatRaw, storage.FormatQCOW2:
+			default:
+				return fmt.Errorf("unsupported format %q: use 'raw' or 'qcow2'", format)
+			}
+
+			// Auto-generate output path if not specified
+			if outputPath == "" {
+				ext := ".raw"
+				if targetFormat == storage.FormatQCOW2 {
+					ext = ".qcow2"
+				}
+				base := strings.TrimSuffix(srcPath, filepath.Ext(srcPath))
+				outputPath = base + ext
+			}
+
+			// Don't overwrite source
+			srcAbs, _ := filepath.Abs(srcPath)
+			dstAbs, _ := filepath.Abs(outputPath)
+			if srcAbs == dstAbs {
+				return fmt.Errorf("output path cannot be the same as source path")
+			}
+
+			if !jsonOutput {
+				srcFmt, _ := storage.DetectFormat(srcPath)
+				fmt.Printf("Converting %s (%s) -> %s (%s)\n", srcPath, srcFmt, outputPath, targetFormat)
+				if flatten {
+					fmt.Println("Flattening backing chain...")
+				}
+			}
+
+			result, err := storage.ConvertImage(srcPath, outputPath, targetFormat, flatten)
+			if err != nil {
+				return fmt.Errorf("conversion failed: %w", err)
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+
+			fmt.Printf("Done.\n")
+			fmt.Printf("  Source:       %s (%s, %.1f MB)\n", result.SourcePath, result.SourceFormat,
+				float64(result.SourceBytes)/(1024*1024))
+			fmt.Printf("  Output:       %s (%s, %.1f MB)\n", result.OutputPath, result.OutputFormat,
+				float64(result.OutputBytes)/(1024*1024))
+			fmt.Printf("  Virtual size: %.1f MB\n", float64(result.VirtualSize)/(1024*1024))
+
+			if result.SourceFormat == storage.FormatRaw && result.OutputFormat == storage.FormatQCOW2 && result.OutputBytes < result.SourceBytes {
+				saved := float64(result.SourceBytes-result.OutputBytes) / float64(result.SourceBytes) * 100
+				fmt.Printf("  Space saved:  %.1f%%\n", saved)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&outputPath, "output", "o", "", "Output file path (auto-generated if omitted)")
+	cmd.Flags().StringVar(&format, "format", "", "Target format: raw or qcow2 (required)")
+	cmd.Flags().BoolVar(&flatten, "flatten", false, "Flatten backing chain into standalone image")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result in JSON format")
+	_ = cmd.MarkFlagRequired("format")
 	return cmd
 }
 
