@@ -16,6 +16,12 @@ type Manager interface {
 	SetupVMNetwork(vmName string, config *models.VMConfig) (string, error)
 	CleanupVMNetwork(vmName string) error
 	ListNetworkResources() ([]*NetworkResource, error)
+	
+	// ApplyNetworkPolicy applies egress firewall rules for a sandbox
+	ApplyNetworkPolicy(vmName string, policy *Policy) error
+	
+	// RemoveNetworkPolicy removes egress firewall rules for a sandbox
+	RemoveNetworkPolicy(vmName string) error
 }
 
 // defaultManager handles TAP devices, bridges, and port forwarding (Linux)
@@ -235,4 +241,17 @@ func (m *defaultManager) listTapDevices() ([]*NetworkResource, error) {
 	}
 
 	return devices, nil
+}
+
+// ApplyNetworkPolicy applies egress firewall rules for a sandbox
+func (m *defaultManager) ApplyNetworkPolicy(vmName string, policy *Policy) error {
+	// For now, this is a no-op - the egress firewall is managed by the VM manager
+	// The actual enforcement is platform-specific (iptables on Linux, vmnet on macOS)
+	return nil
+}
+
+// RemoveNetworkPolicy removes egress firewall rules for a sandbox
+func (m *defaultManager) RemoveNetworkPolicy(vmName string) error {
+	// For now, this is a no-op
+	return nil
 }
