@@ -1,35 +1,43 @@
 #!/bin/bash
-# dev-loop.sh — Continuous Claude Code development loop
+# dev-loop.sh — Continuous Claude Code autonomous development loop
 #
-# Runs Claude Code non-interactively in a loop. Each iteration:
-#   1. Pulls latest from main
-#   2. Checks for agent-fix issues
-#   3. Runs Claude Code to implement the next feature
-#   4. Pushes results
-#   5. Immediately starts the next iteration (no delay)
+# Runs Claude Code in non-interactive mode, one iteration after another,
+# forever. Each iteration: pulls, builds a feature, commits, pushes.
 #
 # Usage:
-#   ./scripts/dev-loop.sh          # run forever
-#   ./scripts/dev-loop.sh --once   # single iteration (for testing)
+#   ./scripts/dev-loop.sh              # run forever
+#   ./scripts/dev-loop.sh --once       # single iteration (for testing)
+#   ./scripts/dev-loop.sh --model opus # use specific model
 #
-# Stop: Ctrl+C or kill the process
-# Pause: touch ~/stilltent/PAUSE (loop checks each iteration)
-# Resume: rm ~/stilltent/PAUSE
+# Control:
+#   Pause:   touch PAUSE       (loop checks before each iteration)
+#   Resume:  rm PAUSE
+#   Stop:    Ctrl+C or kill
+#
+# Run in tmux so it survives SSH disconnect:
+#   tmux new -s devloop './scripts/dev-loop.sh'
 
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$REPO_DIR/project"
+AGENT_PROMPT="$REPO_DIR/config/claude-agent/AGENT.md"
 LOG_DIR="$REPO_DIR/scripts/loop-logs"
 PAUSE_FILE="$REPO_DIR/PAUSE"
-AUTH_FAIL_FILE="$REPO_DIR/.auth-failed"
 ONCE=false
+MODEL=""
+COOLDOWN=10  # seconds between iterations — just enough for git to settle
 
 mkdir -p "$LOG_DIR"
 
-if [[ "${1:-}" == "--once" ]]; then
-    ONCE=true
-fi
+# Parse args
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --once) ONCE=true; shift ;;
+        --model) MODEL="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 # Colors
 RED='\033[0;31m'
@@ -38,97 +46,103 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# ── The prompt that drives each iteration ────────────────────────────
-
-read -r -d '' PROMPT << 'PROMPTEOF' || true
-You are building "tent" — a microVM sandbox runtime for AI workloads. The project is in the project/ directory.
-
-CRITICAL RULES:
-- ONLY produce feat: commits. No docs, tests, refactors, or summaries.
-- ALL code must compile. Run: cd project && go build -o tent ./cmd/tent
-- Do NOT create markdown files, iteration logs, or architecture docs.
-- Do NOT modify files outside project/ (no workspace/, scripts/, config/).
-
-DO THIS NOW:
-1. First, check for agent-fix issues that need fixing:
-   gh issue list --repo dalinkstone/stilltent --label agent-fix --state open --limit 5
-   If any exist, read the issue body (gh issue view <N> --repo dalinkstone/stilltent), fix it, and close it when done.
-
-2. If no issues, look at what needs building:
-   - Read project/README.md for the full spec
-   - Check what directories exist: ls project/internal/
-   - The spec requires: hypervisor/, sandbox/, virtio/, boot/, image/, network/ (with policy.go and vmnet_darwin.go), compose/, storage/, config/, state/
-   - Find what's missing or incomplete and implement it
-
-3. Write the code. Build it to verify: cd project && go build -o tent ./cmd/tent
-
-4. If it compiles, commit and push:
-   git add project/
-   git commit -m "feat: <what you built>"
-   git push origin main
-
-5. If you fixed an agent-fix issue, close it:
-   gh issue comment <N> --repo dalinkstone/stilltent --body "Fixed in commit $(git rev-parse --short HEAD). <summary>"
-   gh issue close <N> --repo dalinkstone/stilltent
-
-FOCUS: Make tent actually work on macOS. The owner needs to run:
-  tent create mybox --from ubuntu:22.04 && tent start mybox
-Every feature you build should get closer to that goal.
-PROMPTEOF
-
 # ── Auth check ───────────────────────────────────────────────────────
 
 check_auth() {
-    # Quick auth check — run a trivial prompt
-    if claude -p "respond with OK" --max-turns 1 &>/dev/null 2>&1; then
-        rm -f "$AUTH_FAIL_FILE"
-        return 0
-    else
-        return 1
-    fi
+    claude -p "say OK" --max-turns 1 --no-session-persistence 2>/dev/null | grep -qi "OK" 2>/dev/null
 }
 
 wait_for_auth() {
-    echo -e "${RED}=== Authentication failed ===${NC}"
+    echo -e "${RED}=== Claude Code authentication failed ===${NC}"
     echo ""
-    echo "Claude Code is not authenticated or the session expired."
+    echo "The session has expired or Claude Code is not logged in."
     echo ""
-    echo "To fix this, open a NEW terminal and SSH into the VPS:"
-    echo "  ssh root@$(curl -s ifconfig.me 2>/dev/null || echo '<VPS_IP>')"
+    echo "To fix: open ANOTHER terminal, SSH into this machine, and run:"
     echo ""
-    echo "Then run:"
-    echo "  claude login"
+    echo -e "  ${GREEN}claude login${NC}"
     echo ""
-    echo "Follow the URL it gives you, authenticate in your browser,"
-    echo "then come back here. The loop will resume automatically."
+    echo "Follow the URL in your local browser. The loop will resume automatically."
     echo ""
 
-    touch "$AUTH_FAIL_FILE"
-
-    # Poll until auth works again
     while true; do
         sleep 30
-        echo -n "Checking auth... "
+        echo -n "  Checking auth... "
         if check_auth; then
-            echo -e "${GREEN}OK! Resuming loop.${NC}"
-            rm -f "$AUTH_FAIL_FILE"
+            echo -e "${GREEN}OK — resuming.${NC}"
+            echo ""
             return 0
         else
-            echo "still failing. Waiting 30s..."
+            echo "still expired."
         fi
     done
+}
+
+check_gh_auth() {
+    gh auth status &>/dev/null 2>&1
+}
+
+# ── Build Claude Code command ────────────────────────────────────────
+
+build_claude_cmd() {
+    local cmd="claude -p"
+
+    # The prompt is read from the agent file and passed as the system prompt.
+    # The actual -p prompt is just "go" — the agent file has all instructions.
+    cmd="$cmd \"Read config/claude-agent/AGENT.md and follow its instructions exactly. This is iteration $ITERATION.\""
+
+    # Use the agent prompt as appended system context
+    cmd="$cmd --append-system-prompt-file $AGENT_PROMPT"
+
+    # Allow all the tools Claude Code needs
+    cmd="$cmd --allowedTools \"Bash,Read,Write,Edit,Glob,Grep\""
+
+    # No session persistence — each iteration is independent
+    cmd="$cmd --no-session-persistence"
+
+    # Model override if specified
+    if [[ -n "$MODEL" ]]; then
+        cmd="$cmd --model $MODEL"
+    fi
+
+    echo "$cmd"
 }
 
 # ── Main loop ────────────────────────────────────────────────────────
 
 ITERATION=0
 TOTAL_FEATS=0
+TOTAL_FAILURES=0
+START_TIMESTAMP=$(date +%s)
 
-echo -e "${CYAN}=== tent dev-loop ===${NC}"
-echo "Project: $PROJECT_DIR"
-echo "Logs:    $LOG_DIR"
-echo "Pause:   touch $PAUSE_FILE"
-echo "Stop:    Ctrl+C"
+echo -e "${CYAN}══════════════════════════════════════${NC}"
+echo -e "${CYAN}  tent dev-loop (Claude Code)${NC}"
+echo -e "${CYAN}══════════════════════════════════════${NC}"
+echo "  Repo:    $REPO_DIR"
+echo "  Logs:    $LOG_DIR"
+echo "  Prompt:  $AGENT_PROMPT"
+echo "  Model:   ${MODEL:-default}"
+echo "  Pause:   touch $PAUSE_FILE"
+echo "  Stop:    Ctrl+C"
+echo ""
+
+# Initial auth check
+echo -n "Checking Claude Code auth... "
+if check_auth; then
+    echo -e "${GREEN}OK${NC}"
+else
+    wait_for_auth
+fi
+
+echo -n "Checking GitHub CLI auth... "
+if check_gh_auth; then
+    echo -e "${GREEN}OK${NC}"
+else
+    echo -e "${RED}FAILED${NC}"
+    echo "Run: gh auth login"
+    echo "Or:  echo \"\$(grep GITHUB_TOKEN .env | cut -d= -f2)\" | gh auth login --with-token"
+    exit 1
+fi
+
 echo ""
 
 while true; do
@@ -136,73 +150,76 @@ while true; do
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     LOGFILE="$LOG_DIR/iteration-${ITERATION}-${TIMESTAMP}.log"
 
-    # ── Check for pause file ─────────────────────────────────────
+    # ── Pause check ──────────────────────────────────────────────
     if [[ -f "$PAUSE_FILE" ]]; then
-        echo -e "${YELLOW}Paused (remove $PAUSE_FILE to resume)${NC}"
+        echo -e "${YELLOW}⏸  Paused. Remove $PAUSE_FILE to resume.${NC}"
         while [[ -f "$PAUSE_FILE" ]]; do
-            sleep 10
+            sleep 5
         done
-        echo -e "${GREEN}Resumed.${NC}"
+        echo -e "${GREEN}▶  Resumed.${NC}"
     fi
 
-    echo -e "${CYAN}=== Iteration $ITERATION starting at $(date) ===${NC}"
-
-    # ── Check auth ───────────────────────────────────────────────
-    if ! check_auth; then
-        wait_for_auth
-    fi
-
-    # ── Pull latest ──────────────────────────────────────────────
-    cd "$REPO_DIR"
-    git pull origin main --ff-only 2>&1 || true
-
-    # ── Record state before ──────────────────────────────────────
-    COMMIT_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "none")
-
-    # ── Run Claude Code ──────────────────────────────────────────
-    echo "Running Claude Code..."
-    START_TIME=$(date +%s)
-
-    # Run claude with the prompt, capture output
-    # --allowedTools restricts to safe tools
-    # Timeout after 30 minutes to prevent runaway sessions
-    cd "$REPO_DIR"
-    timeout 1800 claude -p "$PROMPT" \
-        --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \
-        2>&1 | tee "$LOGFILE" || true
-
-    END_TIME=$(date +%s)
-    DURATION=$(( END_TIME - START_TIME ))
-
-    # ── Check what happened ──────────────────────────────────────
-    COMMIT_AFTER=$(git rev-parse HEAD 2>/dev/null || echo "none")
-
-    if [[ "$COMMIT_BEFORE" != "$COMMIT_AFTER" ]]; then
-        # New commits were made
-        NEW_COMMITS=$(git log --oneline "$COMMIT_BEFORE".."$COMMIT_AFTER" 2>/dev/null | head -5)
-        FEAT_COUNT=$(echo "$NEW_COMMITS" | grep -c "^[a-f0-9]* feat:" || true)
-        TOTAL_FEATS=$((TOTAL_FEATS + FEAT_COUNT))
-
-        echo -e "${GREEN}Shipped:${NC}"
-        echo "$NEW_COMMITS" | while read -r line; do echo "  $line"; done
-        echo ""
-    else
-        echo -e "${YELLOW}No commits this iteration.${NC}"
-
-        # Check if auth failed during the run
-        if grep -qi "unauthorized\|authentication\|login required\|session expired" "$LOGFILE" 2>/dev/null; then
-            echo -e "${RED}Auth may have expired during this iteration.${NC}"
+    # ── Auth check (every 20 iterations to save tokens) ──────────
+    if (( ITERATION % 20 == 1 )); then
+        if ! check_auth; then
             wait_for_auth
         fi
     fi
 
-    echo -e "${CYAN}Duration: ${DURATION}s | Total feats shipped: $TOTAL_FEATS | Log: $LOGFILE${NC}"
+    echo -e "${CYAN}── Iteration $ITERATION ──────────────────────── $(date '+%H:%M:%S') ──${NC}"
+
+    # ── Pull latest ──────────────────────────────────────────────
+    cd "$REPO_DIR"
+    git pull origin main --ff-only 2>&1 | grep -v "Already up to date" | grep -v "^$" || true
+
+    COMMIT_BEFORE=$(git rev-parse --short HEAD 2>/dev/null)
+
+    # ── Run Claude Code ──────────────────────────────────────────
+    ITER_START=$(date +%s)
+
+    # Build and run the command
+    timeout 1800 claude -p \
+        "Follow the instructions in config/claude-agent/AGENT.md exactly. This is iteration $ITERATION. Build the next feature." \
+        --append-system-prompt-file "$AGENT_PROMPT" \
+        --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \
+        --no-session-persistence \
+        ${MODEL:+--model "$MODEL"} \
+        2>&1 | tee "$LOGFILE" || true
+
+    ITER_END=$(date +%s)
+    ITER_DURATION=$(( ITER_END - ITER_START ))
+
+    # ── Check results ────────────────────────────────────────────
+    COMMIT_AFTER=$(git rev-parse --short HEAD 2>/dev/null)
+
+    if [[ "$COMMIT_BEFORE" != "$COMMIT_AFTER" ]]; then
+        NEW_COMMITS=$(git log --oneline "$COMMIT_BEFORE".."$COMMIT_AFTER" 2>/dev/null)
+        FEAT_COUNT=$(echo "$NEW_COMMITS" | grep -c "feat:" || true)
+        TOTAL_FEATS=$((TOTAL_FEATS + FEAT_COUNT))
+
+        echo -e "${GREEN}  Shipped ($FEAT_COUNT feat):${NC}"
+        echo "$NEW_COMMITS" | while read -r line; do echo "    $line"; done
+    else
+        echo -e "${YELLOW}  No commits this iteration.${NC}"
+        TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
+
+        # Check for auth failure in output
+        if grep -qi "unauthorized\|session expired\|login required\|Could not authenticate\|not logged in" "$LOGFILE" 2>/dev/null; then
+            wait_for_auth
+        fi
+    fi
+
+    # ── Stats line ───────────────────────────────────────────────
+    ELAPSED=$(( $(date +%s) - START_TIMESTAMP ))
+    ELAPSED_MIN=$(( ELAPSED / 60 ))
+    echo -e "${CYAN}  ${ITER_DURATION}s | feats: $TOTAL_FEATS | no-ops: $TOTAL_FAILURES | uptime: ${ELAPSED_MIN}m | log: $(basename $LOGFILE)${NC}"
     echo ""
 
     if $ONCE; then
-        echo "Single iteration complete (--once mode)."
+        echo "Single iteration complete (--once)."
         exit 0
     fi
 
-    # No sleep — immediately start next iteration
+    # Brief cooldown for git operations to settle
+    sleep "$COOLDOWN"
 done

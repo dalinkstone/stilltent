@@ -141,6 +141,14 @@ func (v *mockVMInstance) Cleanup() error {
 	return nil
 }
 
+func (v *mockVMInstance) SetIP(ip string) {
+	// Mock implementation - IP is set via SetNetwork
+}
+
+func (v *mockVMInstance) SetNetwork(tapDevice string, ip string) {
+	// Mock implementation
+}
+
 func (m *mockHypervisorBackend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
 	if m.ErrCreate != nil {
 		return nil, m.ErrCreate
