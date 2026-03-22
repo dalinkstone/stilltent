@@ -54,12 +54,15 @@ find project/ -type f -name "*.go" | head -80
 ls -la project/internal/
 # These directories MUST exist (from SOUL.md roadmap): hypervisor/, virtio/, boot/, image/, network/policy.go, compose/, sandbox/
 # If they don't exist, that is your next feature.
-gh pr list --state open --limit 10 && gh issue list --state open --limit 10
+gh pr list --state open --limit 10
+# CHECK FOR macOS FEEDBACK — the project owner tests on macOS and files issues with label "agent-fix"
+gh issue list --state open --label "agent-fix" --limit 10
+gh issue list --state open --limit 10
 cd project && go build ./... 2>&1 | tail -20
 ```
-Answer: (1) External PRs to review? (2) Build broken? (3) In-progress plan? (4) Project maturity? (5) What is the next feature on the roadmap in SOUL.md?
+Answer: (1) Any `agent-fix` issues from macOS testing? (2) Build broken? (3) External PRs? (4) What is the next feature on the roadmap?
 
-**Priority:** Fix broken build > Review PRs > Continue plan > **Build the next feature from the SOUL.md roadmap** > Open issues > Improve existing features
+**Priority:** Fix `agent-fix` labeled issues (these are macOS build/runtime failures reported by the owner) > Fix broken build > Review PRs > Continue plan > **Build the next feature from the SOUL.md roadmap**
 
 **BANNED priorities:** Do NOT spend iterations on: standalone tests, documentation, refactoring, or test coverage. These are not valid iteration goals. Tests accompany features in the same PR. Docs come after the tool works.
 
