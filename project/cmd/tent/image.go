@@ -29,6 +29,8 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imagePruneCmd())
 	cmd.AddCommand(imageBuildCmd())
 	cmd.AddCommand(imagePushCmd())
+	cmd.AddCommand(imageSaveCmd())
+	cmd.AddCommand(imageLoadCmd())
 
 	return cmd
 }
@@ -581,4 +583,98 @@ Examples:
 			return nil
 		},
 	}
+}
+
+func imageSaveCmd() *cobra.Command {
+	var output string
+
+	cmd := &cobra.Command{
+		Use:   "save <name>",
+		Short: "Save a local image to a tarball",
+		Long: `Export a locally stored image to a compressed tarball file.
+The tarball includes the image data and a JSON manifest with metadata.
+Use "tent image load" to import the tarball on another machine.
+
+Examples:
+  tent image save ubuntu-22.04 -o ubuntu.tar.gz
+  tent image save myimage -o /tmp/myimage.tar.gz`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			if output == "" {
+				output = name + ".tar.gz"
+			}
+
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+			baseDir := filepath.Join(homeDir, ".tent")
+
+			manager, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			fmt.Printf("Saving image %q to %s...\n", name, output)
+			if err := manager.SaveImage(name, output); err != nil {
+				return fmt.Errorf("save failed: %w", err)
+			}
+
+			info, _ := os.Stat(output)
+			if info != nil {
+				sizeMB := float64(info.Size()) / (1024 * 1024)
+				fmt.Printf("Saved %s (%.1f MB)\n", output, sizeMB)
+			} else {
+				fmt.Printf("Saved %s\n", output)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output file path (default: <name>.tar.gz)")
+	return cmd
+}
+
+func imageLoadCmd() *cobra.Command {
+	var name string
+
+	cmd := &cobra.Command{
+		Use:   "load <file>",
+		Short: "Load an image from a tarball",
+		Long: `Import a previously saved image from a compressed tarball.
+If --name is not specified, the original image name from the tarball is used.
+
+Examples:
+  tent image load ubuntu.tar.gz
+  tent image load myimage.tar.gz --name custom-name`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			archivePath := args[0]
+
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+			baseDir := filepath.Join(homeDir, ".tent")
+
+			manager, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			fmt.Printf("Loading image from %s...\n", archivePath)
+			finalName, err := manager.LoadImage(archivePath, name)
+			if err != nil {
+				return fmt.Errorf("load failed: %w", err)
+			}
+
+			fmt.Printf("Loaded image %q\n", finalName)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&name, "name", "", "Override the image name (default: use name from tarball)")
+	return cmd
 }

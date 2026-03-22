@@ -1024,6 +1024,162 @@ func (m *Manager) downloadFile(filepath string, url string, progress *ProgressTr
 	return nil
 }
 
+// SaveImage exports a local image to a gzipped tarball containing the image
+// file and a JSON metadata manifest. The tarball can be loaded on another
+// machine with LoadImage.
+func (m *Manager) SaveImage(name string, outputPath string) error {
+	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
+	info, err := os.Stat(imagePath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("image not found: %s", name)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to stat image: %w", err)
+	}
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	gw := gzip.NewWriter(outFile)
+	defer gw.Close()
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	// Write manifest
+	manifest := map[string]interface{}{
+		"name":       name,
+		"size_bytes": info.Size(),
+		"created_at": info.ModTime().Format(time.RFC3339),
+		"saved_at":   time.Now().Format(time.RFC3339),
+		"format":     "raw",
+	}
+	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name:    "manifest.json",
+		Size:    int64(len(manifestData)),
+		Mode:    0644,
+		ModTime: time.Now(),
+	}); err != nil {
+		return fmt.Errorf("failed to write manifest header: %w", err)
+	}
+	if _, err := tw.Write(manifestData); err != nil {
+		return fmt.Errorf("failed to write manifest: %w", err)
+	}
+
+	// Write image file
+	imgFile, err := os.Open(imagePath)
+	if err != nil {
+		return fmt.Errorf("failed to open image file: %w", err)
+	}
+	defer imgFile.Close()
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name:    name + ".img",
+		Size:    info.Size(),
+		Mode:    0644,
+		ModTime: info.ModTime(),
+	}); err != nil {
+		return fmt.Errorf("failed to write image header: %w", err)
+	}
+	if _, err := io.Copy(tw, imgFile); err != nil {
+		return fmt.Errorf("failed to write image data: %w", err)
+	}
+
+	return nil
+}
+
+// LoadImage imports an image from a tarball previously created by SaveImage.
+// If newName is empty, the original name from the manifest is used.
+func (m *Manager) LoadImage(archivePath string, newName string) (string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open archive: %w", err)
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+
+	var manifestData []byte
+	var imgData []byte
+	var origImgName string
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to read archive entry: %w", err)
+		}
+
+		switch {
+		case hdr.Name == "manifest.json":
+			manifestData, err = io.ReadAll(tr)
+			if err != nil {
+				return "", fmt.Errorf("failed to read manifest: %w", err)
+			}
+		case strings.HasSuffix(hdr.Name, ".img"):
+			origImgName = strings.TrimSuffix(hdr.Name, ".img")
+			imgData, err = io.ReadAll(tr)
+			if err != nil {
+				return "", fmt.Errorf("failed to read image data: %w", err)
+			}
+		}
+	}
+
+	if imgData == nil {
+		return "", fmt.Errorf("archive does not contain an image file")
+	}
+
+	// Determine final name
+	finalName := newName
+	if finalName == "" {
+		if manifestData != nil {
+			var manifest map[string]interface{}
+			if err := json.Unmarshal(manifestData, &manifest); err == nil {
+				if n, ok := manifest["name"].(string); ok && n != "" {
+					finalName = n
+				}
+			}
+		}
+		if finalName == "" {
+			finalName = origImgName
+		}
+	}
+	if finalName == "" {
+		return "", fmt.Errorf("could not determine image name from archive")
+	}
+
+	// Ensure images directory exists
+	if err := os.MkdirAll(m.baseDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create images directory: %w", err)
+	}
+
+	destPath := filepath.Join(m.baseDir, finalName+".img")
+	if _, err := os.Stat(destPath); err == nil {
+		return "", fmt.Errorf("image %q already exists (use a different name or remove it first)", finalName)
+	}
+
+	if err := os.WriteFile(destPath, imgData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write image file: %w", err)
+	}
+
+	return finalName, nil
+}
+
 // NewProgressReader creates a progress-reporting reader
 func NewProgressReader(r io.Reader, tracker *ProgressTracker) io.Reader {
 	return &progressReader{Reader: r, tracker: tracker}
