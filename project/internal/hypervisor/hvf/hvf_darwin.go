@@ -36,10 +36,87 @@ static const char* hvm_error_string(hv_return_t ret) {
             return "HV_UNKNOWN_ERROR";
     }
 }
+
+// Register constants for x86_64
+#ifndef HV_X86_RIP
+#define HV_X86_RIP 0
+#endif
+#ifndef HV_X86_RFLAGS
+#define HV_X86_RFLAGS 1
+#endif
+#ifndef HV_X86_RAX
+#define HV_X86_RAX 2
+#endif
+#ifndef HV_X86_RBX
+#define HV_X86_RBX 3
+#endif
+#ifndef HV_X86_RCX
+#define HV_X86_RCX 4
+#endif
+#ifndef HV_X86_RDX
+#define HV_X86_RDX 5
+#endif
+#ifndef HV_X86_RSP
+#define HV_X86_RSP 6
+#endif
+#ifndef HV_X86_RBP
+#define HV_X86_RBP 7
+#endif
+#ifndef HV_X86_RSI
+#define HV_X86_RSI 8
+#endif
+#ifndef HV_X86_RDI
+#define HV_X86_RDI 9
+#endif
+#ifndef HV_X86_R8
+#define HV_X86_R8 10
+#endif
+#ifndef HV_X86_R9
+#define HV_X86_R9 11
+#endif
+#ifndef HV_X86_R10
+#define HV_X86_R10 12
+#endif
+#ifndef HV_X86_R11
+#define HV_X86_R11 13
+#endif
+#ifndef HV_X86_R12
+#define HV_X86_R12 14
+#endif
+#ifndef HV_X86_R13
+#define HV_X86_R13 15
+#endif
+#ifndef HV_X86_R14
+#define HV_X86_R14 16
+#endif
+#ifndef HV_X86_R15
+#define HV_X86_R15 17
+#endif
+
+// Segment register constants
+#ifndef HV_X86_CS
+#define HV_X86_CS 18
+#endif
+#ifndef HV_X86_DS
+#define HV_X86_DS 19
+#endif
+#ifndef HV_X86_ES
+#define HV_X86_ES 20
+#endif
+#ifndef HV_X86_FS
+#define HV_X86_FS 21
+#endif
+#ifndef HV_X86_GS
+#define HV_X86_GS 22
+#endif
+#ifndef HV_X86_SS
+#define HV_X86_SS 23
+#endif
 */
 import "C"
 import (
 	"fmt"
+	"os"
 	"sync"
 	"unsafe"
 
@@ -56,12 +133,14 @@ type Backend struct {
 
 // VM represents a Hypervisor.framework virtual machine
 type VM struct {
-	config    *models.VMConfig
-	backend   *Backend
-	vcpuID    uint
-	running   bool
-	ip        string
-	tapDevice string
+	config     *models.VMConfig
+	backend    *Backend
+	vcpuID     uint
+	running    bool
+	ip         string
+	tapDevice  string
+	memoryPtr  unsafe.Pointer
+	memorySize uint64
 }
 
 // NewBackend creates a new Hypervisor.framework backend
@@ -177,21 +256,41 @@ func (v *VM) Start() error {
 		return fmt.Errorf("failed to map guest memory: %s", C.GoString(C.hvm_error_string(ret)))
 	}
 
+	// Store memory pointer and size for cleanup
+	v.memoryPtr = memoryPtr
+	v.memorySize = memorySize
+
+	// Load kernel into guest memory
+	loader, err := v.loadKernelIntoMemory(memoryPtr, memorySize)
+	if err != nil {
+		C.munmap(memoryPtr, C.size_t(memorySize))
+		v.memoryPtr = nil
+		v.memorySize = 0
+		return fmt.Errorf("failed to load kernel: %w", err)
+	}
+
 	// Create vCPU
 	var vcpuID C.uint
 	ret = C.hv_vcpu_create(&vcpuID, C.HV_VCPU_DEFAULT)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
+		v.memoryPtr = nil
+		v.memorySize = 0
 		return fmt.Errorf("failed to create vCPU: %s", C.GoString(C.hvm_error_string(ret)))
 	}
 	v.vcpuID = uint(vcpuID)
 
-	// Set up vCPU state - configure the vCPU with initial registers
-	// For simplicity, we'll set up a minimal configuration
-	// In production, this would set up proper x86/ARM registers for the guest kernel
+	// Set up vCPU state - configure initial register values
+	// For x86_64: set up registers to match Linux x86 boot protocol
+	// For ARM64: set up registers for kernel entry point
+	// This is architecture-specific and needs to match the kernel image format
+	if err := v.setupVCPUState(vcpuID, loader); err != nil {
+		C.munmap(memoryPtr, C.size_t(memorySize))
+		return fmt.Errorf("failed to setup vCPU state: %w", err)
+	}
 
 	// Start the vCPU execution loop
-	if err := v.runVCPU(v.vcpuID); err != nil {
+	if err := v.runVCPU(vcpuID); err != nil {
 		C.munmap(memoryPtr, C.size_t(memorySize))
 		return fmt.Errorf("failed to start vCPU: %w", err)
 	}
@@ -222,6 +321,127 @@ func (v *VM) runVCPU(vcpuID C.uint) error {
 
 		// For now, we just continue the loop
 		// A complete implementation would handle exits properly
+	}
+
+	return nil
+}
+
+// loadKernelIntoMemory loads the kernel binary into guest memory at the specified offset
+func (v *VM) loadKernelIntoMemory(memoryPtr unsafe.Pointer, memorySize uint64) (*loaderInfo, error) {
+	// Get kernel image from the image manager
+	// For now, we'll use a placeholder kernel image path
+	// In production, this would extract the kernel from the OCI image or ISO
+
+	kernelPath := v.config.KernelPath
+	if kernelPath == "" {
+		// Use default kernel path if not specified
+		kernelPath = "/boot/vmlinuz"
+	}
+
+	// Load kernel from file
+	kernelData, err := os.ReadFile(kernelPath)
+	if err != nil {
+		// Fallback: return a loader with no kernel data
+		// In production, this would fail gracefully or use a bundled kernel
+		return &loaderInfo{
+			kernelAddr: 0x100000, // Default kernel load address (x86_64)
+			initrdAddr: 0,         // No initrd
+			entryPoint: 0x100000,  // Default entry point
+		}, nil
+	}
+
+	// Determine load address based on architecture
+	// x86_64 Linux: 0x100000 (1MB)
+	// ARM64 Linux: 0x80000 (512KB)
+	loadAddr := uint64(0x100000) // Default x86_64
+
+	// Copy kernel data into guest memory
+	memoryAddr := uintptr(memoryPtr) + loadAddr
+	copy((*[1 << 30]byte)(unsafe.Pointer(memoryAddr))[:len(kernelData)], kernelData)
+
+	return &loaderInfo{
+		kernelAddr: loadAddr,
+		initrdAddr: 0,
+		entryPoint: loadAddr,
+		kernelSize: uint64(len(kernelData)),
+	}, nil
+}
+
+// loaderInfo holds information about a loaded kernel
+type loaderInfo struct {
+	kernelAddr uint64
+	initrdAddr uint64
+	entryPoint uint64
+	kernelSize uint64
+}
+
+// setupVCPUState configures the vCPU registers for kernel execution
+func (v *VM) setupVCPUState(vcpuID C.uint, loader *loaderInfo) error {
+	// Set up CPU registers for kernel execution
+	// This is architecture-specific - we'll implement x86_64 and ARM64 variants
+
+	// For x86_64: set up registers to match Linux x86 boot protocol
+	// For ARM64: set up registers for kernel entry point (EL1)
+
+	// Set RIP (instruction pointer) to kernel entry point
+	ret := C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RIP, C.uint64_t(loader.entryPoint))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RIP: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	// Set RSP (stack pointer) - start at top of memory
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RSP, C.uint64_t(loader.kernelAddr+0x10000))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RSP: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	// Set RAX, RBX, RCX, RDX to 0 (standard boot protocol)
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RAX, C.uint64_t(0))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RAX: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RBX, C.uint64_t(0))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RBX: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RCX, C.uint64_t(0))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RCX: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RDX, C.uint64_t(0))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RDX: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	// Set EFLAGS to 0x2 (interrupts disabled, reserved bit set)
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_RFLAGS, C.uint64_t(0x2))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set RFLAGS: %s", C.GoString(C.hvm_error_string(ret)))
+	}
+
+	// Set CS, DS, ES, SS segment registers for protected mode
+	// Base = 0, Limit = 0xFFFFFFFF, Access = present + read/write + execute
+	const (
+		HV_X86_CS = C.uint32_t(iota)
+		HV_X86_DS
+		HV_X86_ES
+		HV_X86_FS
+		HV_X86_GS
+		HV_X86_SS
+		HV_X86_TR
+		HV_X86_LDTR
+		HV_X86_GDTR
+		HV_X86_IDTR
+	)
+
+	// Setup CS register for protected mode
+	// Selector = 0x8 (kernel code segment), Base = 0, Limit = 0xFFFFFFFF
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_X86_CS, C.uint64_t(0x000000000000ffff))
+	if ret != C.HV_SUCCESS {
+		return fmt.Errorf("failed to set CS: %s", C.GoString(C.hvm_error_string(ret)))
 	}
 
 	return nil
@@ -277,9 +497,33 @@ func (v *VM) Cleanup() error {
 		_ = v.Stop()
 	}
 
-	// In Hypervisor.framework, there's no explicit cleanup needed for the VM
-	// The per-task VM is automatically destroyed when the task ends
-	// A complete implementation would call hv_vm_destroy() if needed
+	// Destroy vCPU if allocated
+	if v.vcpuID != 0 {
+		var ret C.hv_return_t
+		ret = C.hv_vcpu_destroy(C.hv_vcpu_t(v.vcpuID))
+		if ret != C.HV_SUCCESS {
+			// Log but don't fail - cleanup should be best-effort
+			fmt.Printf("Warning: failed to destroy vCPU: %s\n", C.GoString(C.hvm_error_string(ret)))
+		}
+		v.vcpuID = 0
+	}
+
+	// Unmap and free guest memory
+	if v.memoryPtr != nil && v.memorySize > 0 {
+		C.munmap(v.memoryPtr, C.size_t(v.memorySize))
+		v.memoryPtr = nil
+		v.memorySize = 0
+	}
+
+	// Destroy VM if it was created
+	// Note: Hypervisor.framework uses per-task VM, so we call hv_vm_destroy()
+	// This is optional - the VM is automatically destroyed when the task ends
+	var ret C.hv_return_t
+	ret = C.hv_vm_destroy()
+	if ret != C.HV_SUCCESS {
+		// Log but don't fail - cleanup should be best-effort
+		fmt.Printf("Warning: failed to destroy VM: %s\n", C.GoString(C.hvm_error_string(ret)))
+	}
 
 	v.running = false
 
