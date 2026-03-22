@@ -58,6 +58,7 @@ func main() {
 	rootCmd.AddCommand(registryCmd())
 	rootCmd.AddCommand(resourcesCmd())
 	rootCmd.AddCommand(envCmd())
+	rootCmd.AddCommand(portCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
