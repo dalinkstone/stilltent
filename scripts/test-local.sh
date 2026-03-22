@@ -73,8 +73,11 @@ cd "$PROJECT_DIR"
 echo -e "${YELLOW}Building tent...${NC}"
 BUILD_OUTPUT=$(go build -o tent ./cmd/tent 2>&1) && BUILD_OK=true || BUILD_OK=false
 
+echo -e "${YELLOW}Building tent-agent...${NC}"
+AGENT_BUILD_OUTPUT=$(go build -o tent-agent ./cmd/tent-agent 2>&1) && AGENT_BUILD_OK=true || AGENT_BUILD_OK=false
+
 if $BUILD_OK; then
-    echo -e "${GREEN}Build succeeded.${NC}"
+    echo -e "${GREEN}tent build succeeded.${NC}"
 else
     echo -e "${RED}Build FAILED:${NC}"
     echo "$BUILD_OUTPUT"
@@ -142,6 +145,15 @@ ISSUE_BODY
     fi
 fi
 
+# ── tent-agent Build ─────────────────────────────────────────────────
+
+if $AGENT_BUILD_OK; then
+    echo -e "${GREEN}tent-agent build succeeded.${NC}"
+else
+    echo -e "${RED}tent-agent build FAILED:${NC}"
+    echo "$AGENT_BUILD_OUTPUT"
+fi
+
 # ── Vet ──────────────────────────────────────────────────────────────
 
 VET_OK=true
@@ -193,6 +205,68 @@ ISSUE_BODY
 
             gh issue create --repo "$REPO" \
                 --title "macOS vet failure: $SHORT_DESC" \
+                --label "agent-fix" \
+                --body-file "$TMPFILE"
+            echo -e "${GREEN}Issue filed.${NC}"
+        fi
+    fi
+fi
+
+# ── Unit Tests ───────────────────────────────────────────────────────
+
+TEST_OK=true
+if $BUILD_OK; then
+    echo ""
+    echo -e "${YELLOW}Running unit tests (short mode)...${NC}"
+    TEST_OUTPUT=$(go test ./... -short -count=1 -timeout 120s 2>&1) && TEST_OK=true || TEST_OK=false
+
+    # Count results
+    TEST_PASS=$(echo "$TEST_OUTPUT" | grep -c '^ok' || true)
+    TEST_FAIL=$(echo "$TEST_OUTPUT" | grep -c '^FAIL' || true)
+    TEST_SKIP=$(echo "$TEST_OUTPUT" | grep -c '^\[no test' || true)
+
+    if $TEST_OK; then
+        echo -e "${GREEN}All tests passed (${TEST_PASS} packages).${NC}"
+    else
+        echo -e "${RED}Tests FAILED (${TEST_PASS} passed, ${TEST_FAIL} failed):${NC}"
+        # Show only the failing packages and their output
+        echo "$TEST_OUTPUT" | grep -E '^(FAIL|---\s*FAIL|panic:)' | head -20
+        echo ""
+
+        echo -e "${YELLOW}Want to file a GitHub issue for test failures? [y/N]${NC}"
+        read -r REPLY
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            # Trim output to avoid gigantic issues
+            TRIMMED_TEST_OUTPUT=$(echo "$TEST_OUTPUT" | tail -80)
+
+            cat > "$TMPFILE" <<ISSUE_BODY
+## Unit test failures on macOS
+
+\`go test ./... -short\` has failures.
+
+### Test output (last 80 lines)
+\`\`\`
+${TRIMMED_TEST_OUTPUT}
+\`\`\`
+
+### Platform
+- OS: ${PLATFORM}
+- Architecture: ${ARCH}
+- Go: ${GO_VERSION}
+
+### How to reproduce
+\`\`\`bash
+cd project && go test ./... -short -count=1
+\`\`\`
+
+### Instructions for the agent
+1. Fix all test failures — build errors in test files count too.
+2. Do not delete or skip tests to make them pass. Fix the underlying code.
+3. Run \`go test ./... -short\` to verify before submitting the PR.
+ISSUE_BODY
+
+            gh issue create --repo "$REPO" \
+                --title "macOS test failures: ${TEST_FAIL} package(s)" \
                 --label "agent-fix" \
                 --body-file "$TMPFILE"
             echo -e "${GREEN}Issue filed.${NC}"
@@ -329,10 +403,24 @@ fi
 
 echo ""
 echo -e "${CYAN}═══ Summary ═══${NC}"
+EXIT_CODE=0
 if $BUILD_OK; then
-    echo -e "  Build: ${GREEN}OK${NC}"
-    echo -e "  Vet:   $($VET_OK && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}")"
+    echo -e "  tent build:       ${GREEN}OK${NC}"
 else
-    echo -e "  Build: ${RED}FAILED${NC}"
+    echo -e "  tent build:       ${RED}FAILED${NC}"
+    EXIT_CODE=1
+fi
+if $AGENT_BUILD_OK; then
+    echo -e "  tent-agent build: ${GREEN}OK${NC}"
+else
+    echo -e "  tent-agent build: ${RED}FAILED${NC}"
+    EXIT_CODE=1
+fi
+if $BUILD_OK; then
+    echo -e "  vet:              $($VET_OK && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}")"
+    echo -e "  unit tests:       $($TEST_OK && echo -e "${GREEN}OK${NC}" || echo -e "${RED}FAILED${NC}")"
+    $VET_OK || EXIT_CODE=1
+    $TEST_OK || EXIT_CODE=1
 fi
 echo ""
+exit $EXIT_CODE

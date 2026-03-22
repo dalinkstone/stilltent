@@ -154,6 +154,10 @@ func (v *mockVMInstance) SetConsoleOutput(w io.Writer) {
 	// Mock implementation
 }
 
+func (v *mockVMInstance) AddMounts(mounts []hypervisor.MountTag) {
+	// Mock implementation
+}
+
 func (m *mockHypervisorBackend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
 	if m.ErrCreate != nil {
 		return nil, m.ErrCreate

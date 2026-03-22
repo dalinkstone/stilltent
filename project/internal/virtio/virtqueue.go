@@ -120,6 +120,9 @@ type Virtqueue struct {
 type VirtqueueConfig struct {
 	Name        string
 	Num         uint16 // Queue size (number of descriptors)
+	Index       uint16 // Queue index for the device
+	Size        uint16 // Alias for Num (callers may use either)
+	QueueType   string // Human-readable queue type (e.g. "controlq")
 	MemRead     func(gpa uint64, size uint32) ([]byte, error)
 	MemWrite    func(gpa uint64, data []byte) error
 	NotifyGuest func()
@@ -128,6 +131,9 @@ type VirtqueueConfig struct {
 // NewVirtqueue creates a new virtqueue with the given configuration.
 func NewVirtqueue(cfg VirtqueueConfig) (*Virtqueue, error) {
 	num := cfg.Num
+	if num == 0 {
+		num = cfg.Size
+	}
 	if num == 0 {
 		num = DefaultQueueSize
 	}
@@ -140,10 +146,15 @@ func NewVirtqueue(cfg VirtqueueConfig) (*Virtqueue, error) {
 		return nil, fmt.Errorf("queue size %d exceeds maximum %d", num, MaxQueueSize)
 	}
 
+	name := cfg.Name
+	if name == "" {
+		name = cfg.QueueType
+	}
+
 	vq := &Virtqueue{
 		num:    num,
 		maxNum: num,
-		name:   cfg.Name,
+		name:   name,
 		descs:  make([]VringDesc, num),
 		avail: VringAvail{
 			Ring: make([]uint16, num),
