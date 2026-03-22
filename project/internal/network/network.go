@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package network
 
 import (
@@ -8,24 +11,36 @@ import (
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
-// NetworkManager handles TAP devices, bridges, and port forwarding
-type Manager struct {
+// NetworkManager handles networking for VMs
+type Manager interface {
+	SetupVMNetwork(vmName string, config *models.VMConfig) (string, error)
+	CleanupVMNetwork(vmName string) error
+	ListNetworkResources() ([]*NetworkResource, error)
+}
+
+// defaultManager handles TAP devices, bridges, and port forwarding (Linux)
+type defaultManager struct {
 	bridgeName string
 	ipRange    string
 	dhcpRange  string
 }
 
-// NewManager creates a new network manager
-func NewManager() (*Manager, error) {
-	return &Manager{
+// NewManager creates a new network manager for the current platform
+func NewManager() (Manager, error) {
+	return NewDefaultManager()
+}
+
+// NewDefaultManager creates a new network manager for Linux
+func NewDefaultManager() (*defaultManager, error) {
+	return &defaultManager{
 		bridgeName: "tent0",
 		ipRange:    "172.16.0.1/24",
 		dhcpRange:  "172.16.0.2,172.16.0.254",
 	}, nil
 }
 
-// SetupVMNetwork sets up network for a new VM
-func (m *Manager) SetupVMNetwork(vmName string, config *models.VMConfig) (string, error) {
+// SetupVMNetwork sets up network for a new VM on Linux
+func (m *defaultManager) SetupVMNetwork(vmName string, config *models.VMConfig) (string, error) {
 	// Ensure bridge exists
 	if err := m.ensureBridge(); err != nil {
 		return "", fmt.Errorf("failed to ensure bridge: %w", err)
@@ -49,8 +64,8 @@ func (m *Manager) SetupVMNetwork(vmName string, config *models.VMConfig) (string
 	return tapDevice, nil
 }
 
-// CleanupVMNetwork cleans up network resources for a VM
-func (m *Manager) CleanupVMNetwork(vmName string) error {
+// CleanupVMNetwork cleans up network resources for a VM on Linux
+func (m *defaultManager) CleanupVMNetwork(vmName string) error {
 	tapDevice := fmt.Sprintf("tap-%s", vmName)
 
 	// Remove TAP device from bridge
@@ -67,7 +82,7 @@ func (m *Manager) CleanupVMNetwork(vmName string) error {
 }
 
 // ensureBridge ensures the bridge interface exists
-func (m *Manager) ensureBridge() error {
+func (m *defaultManager) ensureBridge() error {
 	// Check if bridge exists
 	if _, err := exec.Command("ip", "link", "show", m.bridgeName).Output(); err == nil {
 		return nil // Bridge already exists
@@ -95,7 +110,7 @@ func (m *Manager) ensureBridge() error {
 }
 
 // createTapDevice creates a new TAP device
-func (m *Manager) createTapDevice(tapName string) error {
+func (m *defaultManager) createTapDevice(tapName string) error {
 	// Check if TAP device already exists
 	if _, err := exec.Command("ip", "link", "show", tapName).Output(); err == nil {
 		return nil // Device already exists
@@ -122,31 +137,31 @@ func (m *Manager) createTapDevice(tapName string) error {
 }
 
 // cleanupTapDevice cleans up a TAP device
-func (m *Manager) cleanupTapDevice(tapName string) error {
+func (m *defaultManager) cleanupTapDevice(tapName string) error {
 	cmd := exec.Command("ip", "link", "delete", tapName, "type", "tap")
 	return cmd.Run()
 }
 
 // deleteTapDevice deletes a TAP device
-func (m *Manager) deleteTapDevice(tapName string) error {
+func (m *defaultManager) deleteTapDevice(tapName string) error {
 	cmd := exec.Command("ip", "tuntap", "del", "mode", "tap", tapName)
 	return cmd.Run()
 }
 
 // addDeviceToBridge adds a device to the bridge
-func (m *Manager) addDeviceToBridge(deviceName string) error {
+func (m *defaultManager) addDeviceToBridge(deviceName string) error {
 	cmd := exec.Command("ip", "link", "set", "master", m.bridgeName, "dev", deviceName)
 	return cmd.Run()
 }
 
 // removeDeviceFromBridge removes a device from the bridge
-func (m *Manager) removeDeviceFromBridge(deviceName string) error {
+func (m *defaultManager) removeDeviceFromBridge(deviceName string) error {
 	cmd := exec.Command("ip", "link", "set", "nomaster", "dev", deviceName)
 	return cmd.Run()
 }
 
 // ListNetworkResources lists all network resources
-func (m *Manager) ListNetworkResources() ([]*NetworkResource, error) {
+func (m *defaultManager) ListNetworkResources() ([]*NetworkResource, error) {
 	resources := []*NetworkResource{}
 
 	// List bridge info
@@ -165,7 +180,7 @@ func (m *Manager) ListNetworkResources() ([]*NetworkResource, error) {
 }
 
 // getBridgeInfo returns information about the bridge
-func (m *Manager) getBridgeInfo() (*NetworkResource, error) {
+func (m *defaultManager) getBridgeInfo() (*NetworkResource, error) {
 	// Get bridge IP
 	cmd := exec.Command("ip", "addr", "show", m.bridgeName)
 	output, err := cmd.Output()
@@ -195,7 +210,7 @@ func (m *Manager) getBridgeInfo() (*NetworkResource, error) {
 }
 
 // listTapDevices lists all TAP devices
-func (m *Manager) listTapDevices() ([]*NetworkResource, error) {
+func (m *defaultManager) listTapDevices() ([]*NetworkResource, error) {
 	cmd := exec.Command("ip", "link", "show", "type", "tap")
 	output, err := cmd.Output()
 	if err != nil {
@@ -220,12 +235,4 @@ func (m *Manager) listTapDevices() ([]*NetworkResource, error) {
 	}
 
 	return devices, nil
-}
-
-// NetworkResource represents a network resource
-type NetworkResource struct {
-	Name       string   `json:"name"`
-	Type       string   `json:"type"`
-	IP         string   `json:"ip"`
-	Interfaces []string `json:"interfaces,omitempty"`
 }

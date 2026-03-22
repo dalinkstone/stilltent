@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/dalinkstone/tent/internal/vm"
+	"github.com/dalinkstone/tent/internal/sandbox"
 )
 
 // CommonCmdOptions holds optional dependencies for CLI commands

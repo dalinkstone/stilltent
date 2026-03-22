@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package network
 
 import (
@@ -9,9 +12,9 @@ import (
 )
 
 func TestNewManager(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 	if m.bridgeName != "tent0" {
 		t.Errorf("expected bridgeName 'tent0', got '%s'", m.bridgeName)
@@ -25,9 +28,9 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestNetworkManager_WithCustomConfig(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Verify default values
@@ -60,9 +63,9 @@ func TestNetworkResource_Structure(t *testing.T) {
 
 // TestNetworkManager_NetworkConfigIntegration tests that network config is properly applied
 func TestNetworkManager_NetworkConfigIntegration(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	config := &models.VMConfig{
@@ -78,9 +81,9 @@ func TestNetworkManager_NetworkConfigIntegration(t *testing.T) {
 
 // TestNetworkManager_IPRangeConfig tests IP range configuration
 func TestNetworkManager_IPRangeConfig(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Verify default IP range
@@ -121,9 +124,9 @@ func TestNetworkManager_TAPDeviceNaming(t *testing.T) {
 func TestNetworkManager_BridgeCreationOrder(t *testing.T) {
 	// This test verifies the logic order in ensureBridge and createTapDevice
 	// The bridge should be created before adding TAP devices to it
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Verify bridge name is set
@@ -165,9 +168,9 @@ func TestNetworkManager_InvalidVMName(t *testing.T) {
 
 // TestNetworkManager_SetupVMNetwork tests TAP device creation
 func TestNetworkManager_SetupVMNetwork(t *testing.T) {
-	_, err := NewManager()
+	_, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test that TAP device name is correctly formed
@@ -182,9 +185,9 @@ func TestNetworkManager_SetupVMNetwork(t *testing.T) {
 
 // TestNetworkManager_CleanupVMNetwork tests TAP device cleanup
 func TestNetworkManager_CleanupVMNetwork(t *testing.T) {
-	_, err := NewManager()
+	_, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test that cleanup uses correct TAP device name
@@ -198,9 +201,9 @@ func TestNetworkManager_CleanupVMNetwork(t *testing.T) {
 
 // TestNetworkManager_ListNetworkResources tests network resource listing
 func TestNetworkManager_ListNetworkResources(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test that ListNetworkResources returns a slice
@@ -216,9 +219,9 @@ func TestNetworkManager_ListNetworkResources(t *testing.T) {
 
 // TestNetworkManager_BridgeInfo tests bridge information retrieval
 func TestNetworkManager_BridgeInfo(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test bridge info structure
@@ -239,9 +242,9 @@ func TestNetworkManager_BridgeInfo(t *testing.T) {
 
 // TestNetworkManager_TAPDevices tests TAP device listing
 func TestNetworkManager_TAPDevices(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test TAP device listing
@@ -322,9 +325,9 @@ func TestNetworkManager_SetupVMNetwork_CleanupPath(t *testing.T) {
 
 // TestNetworkManager_EnsureBridge tests bridge initialization
 func TestNetworkManager_EnsureBridge(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test that bridge name is set correctly
@@ -341,9 +344,9 @@ func TestNetworkManager_EnsureBridge(t *testing.T) {
 
 // TestNetworkManager_DHCPRange tests DHCP configuration
 func TestNetworkManager_DHCPRange(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test DHCP range configuration
@@ -361,9 +364,9 @@ func TestNetworkManager_DHCPRange(t *testing.T) {
 
 // TestNetworkManager_IPRangeFormat tests IP range validation
 func TestNetworkManager_IPRangeFormat(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test IP range format (CIDR notation)
@@ -380,9 +383,9 @@ func TestNetworkManager_IPRangeFormat(t *testing.T) {
 
 // TestNetworkManager_ListNetworkResources_Empty tests empty resource list
 func TestNetworkManager_ListNetworkResources_Empty(t *testing.T) {
-	m, err := NewManager()
+	m, err := NewDefaultManager()
 	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
+		t.Fatalf("NewDefaultManager() failed: %v", err)
 	}
 
 	// Test that ListNetworkResources returns empty slice when no resources exist
