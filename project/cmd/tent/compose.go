@@ -24,6 +24,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeDownCmd())
 	cmd.AddCommand(composeStatusCmd())
 	cmd.AddCommand(composeLogsCmd())
+	cmd.AddCommand(composeRestartCmd())
 
 	return cmd
 }
@@ -223,6 +224,54 @@ Examples:
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream logs in real-time")
 	cmd.Flags().IntVarP(&tail, "tail", "n", 0, "Number of lines to show from the end (0 = all)")
 	cmd.Flags().StringSliceVar(&services, "service", nil, "Filter by service name (can be repeated)")
+
+	return cmd
+}
+
+func composeRestartCmd() *cobra.Command {
+	var (
+		services []string
+		timeout  int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "restart <file>",
+		Short: "Restart sandboxes in a compose group",
+		Long: `Restart all or selected sandboxes in a compose group.
+Sandboxes are stopped in reverse dependency order and restarted in forward order.
+
+Examples:
+  tent compose restart tent-compose.yaml
+  tent compose restart tent-compose.yaml --service agent --service tool-runner
+  tent compose restart tent-compose.yaml --timeout 10`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+
+			if len(services) > 0 {
+				fmt.Printf("Restarting services %v in compose group '%s'...\n", services, groupName)
+			} else {
+				fmt.Printf("Restarting all sandboxes in compose group '%s'...\n", groupName)
+			}
+
+			if err := manager.Restart(groupName, services, timeout); err != nil {
+				return fmt.Errorf("failed to restart compose group: %w", err)
+			}
+
+			fmt.Printf("Compose group '%s' restarted successfully\n", groupName)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&services, "service", nil, "Restart only specific services (can be repeated)")
+	cmd.Flags().IntVar(&timeout, "timeout", 0, "Seconds to wait for graceful shutdown before restart")
 
 	return cmd
 }

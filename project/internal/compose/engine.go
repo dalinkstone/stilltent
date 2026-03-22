@@ -438,6 +438,59 @@ func reverseOrder(startOrder []string, sandboxes map[string]*SandboxStatus) []st
 	return names
 }
 
+// Restart stops and starts sandboxes in a compose group.
+// If services is non-empty, only those sandboxes are restarted.
+// Otherwise all sandboxes are restarted in dependency order.
+func (m *ComposeManager) Restart(name string, services []string, timeoutSec int) error {
+	status, err := m.stateManager.LoadComposeState(name)
+	if err != nil {
+		return fmt.Errorf("failed to load compose state: %w", err)
+	}
+
+	// Determine which sandboxes to restart
+	var targets []string
+	if len(services) > 0 {
+		// Validate that all requested services exist in the group
+		for _, svc := range services {
+			if _, ok := status.Sandboxes[svc]; !ok {
+				return fmt.Errorf("service %q not found in compose group %q", svc, name)
+			}
+			targets = append(targets, svc)
+		}
+	} else {
+		// Restart all sandboxes — stop in reverse order, start in forward order
+		targets = status.StartOrder
+		if len(targets) == 0 {
+			for svcName := range status.Sandboxes {
+				targets = append(targets, svcName)
+			}
+			sort.Strings(targets)
+		}
+	}
+
+	// Stop in reverse dependency order
+	stopOrder := reverseOrder(targets, status.Sandboxes)
+	var errors []string
+	for _, sandboxName := range stopOrder {
+		if err := m.vmManager.Stop(sandboxName); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to stop %s: %v", sandboxName, err))
+		}
+	}
+
+	// Start in forward dependency order
+	for _, sandboxName := range targets {
+		if err := m.vmManager.Restart(sandboxName, timeoutSec); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to restart %s: %v", sandboxName, err))
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("errors during restart: %s", strings.Join(errors, "; "))
+	}
+
+	return nil
+}
+
 // List returns all compose groups
 func (m *ComposeManager) List() ([]string, error) {
 	statesDir := filepath.Join(m.baseDir, "compose")
