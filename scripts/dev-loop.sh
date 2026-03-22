@@ -203,9 +203,15 @@ while true; do
         echo -e "${YELLOW}  No commits this iteration.${NC}"
         TOTAL_FAILURES=$((TOTAL_FAILURES + 1))
 
-        # Check for auth failure in output
+        # Check for auth failure
         if grep -qi "unauthorized\|session expired\|login required\|Could not authenticate\|not logged in" "$LOGFILE" 2>/dev/null; then
             wait_for_auth
+        fi
+
+        # Check for rate limiting
+        if grep -qi "rate limit\|rate_limit\|429\|too many requests\|overloaded\|capacity" "$LOGFILE" 2>/dev/null; then
+            echo -e "${YELLOW}  Rate limited. Waiting 5 minutes before retrying...${NC}"
+            sleep 300
         fi
     fi
 
