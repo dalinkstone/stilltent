@@ -756,14 +756,65 @@ func (m *Manager) convertQCOW2ToRaw(src, dst string) error {
 	return nil
 }
 
-// extractISO extracts kernel and initrd from an ISO image
+// extractISO extracts kernel, initrd, and rootfs content from an ISO image
+// using the pure-Go ISO9660 reader. No mount or external tools required.
 func (m *Manager) extractISO(imagePath string) (string, error) {
-	// For now, return the ISO path as-is
-	// In a full implementation, this would:
-	// 1. Mount the ISO
-	// 2. Copy /isolinux/vmlinuz and /isolinux/initrd.img
-	// 3. Create a rootfs image with the extracted files
-	
+	iso, err := OpenISO9660(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open ISO: %w", err)
+	}
+	defer iso.Close()
+
+	// Create extraction directory
+	baseName := strings.TrimSuffix(filepath.Base(imagePath), filepath.Ext(imagePath))
+	extractDir := filepath.Join(m.baseDir, baseName+"-iso")
+	if err := os.MkdirAll(extractDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create extraction directory: %w", err)
+	}
+
+	// Find kernel and initrd
+	kernelISO, initrdISO, err := iso.FindKernelAndInitrd()
+	if err != nil {
+		return "", fmt.Errorf("failed to locate kernel in ISO: %w", err)
+	}
+
+	// Extract kernel
+	kernelLocal := filepath.Join(extractDir, "vmlinuz")
+	if err := iso.ExtractFile(kernelISO, kernelLocal); err != nil {
+		return "", fmt.Errorf("failed to extract kernel %s: %w", kernelISO, err)
+	}
+
+	// Extract initrd if found
+	if initrdISO != "" {
+		initrdLocal := filepath.Join(extractDir, "initrd.img")
+		if err := iso.ExtractFile(initrdISO, initrdLocal); err != nil {
+			return "", fmt.Errorf("failed to extract initrd %s: %w", initrdISO, err)
+		}
+	}
+
+	// Also extract any squashfs/rootfs image if present
+	squashfsPaths := []string{
+		"/casper/filesystem.squashfs",
+		"/live/filesystem.squashfs",
+		"/install/filesystem.squashfs",
+		"/LiveOS/squashfs.img",
+	}
+	files, _ := iso.ListFiles()
+	for _, sp := range squashfsPaths {
+		for _, f := range files {
+			if strings.EqualFold(f.Path, sp) {
+				localPath := filepath.Join(extractDir, filepath.Base(sp))
+				if err := iso.ExtractFile(f.Path, localPath); err == nil {
+					// Successfully extracted rootfs
+					break
+				}
+			}
+		}
+	}
+
+	// Return the ISO path for now — the kernel/initrd are extracted
+	// alongside it in the extraction directory for the boot loader to find.
+	// The caller can use extractDir + "/vmlinuz" and "/initrd.img".
 	return imagePath, nil
 }
 
