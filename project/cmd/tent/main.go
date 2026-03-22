@@ -79,6 +79,7 @@ func main() {
 	rootCmd.AddCommand(secProfileCmd())
 	rootCmd.AddCommand(deviceCmd())
 	rootCmd.AddCommand(webhookCmd())
+	rootCmd.AddCommand(scheduleCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
