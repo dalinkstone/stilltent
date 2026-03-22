@@ -1387,6 +1387,158 @@ func NewProgressReader(r io.Reader, tracker *ProgressTracker) io.Reader {
 	return &progressReader{Reader: r, tracker: tracker}
 }
 
+// HistoryEntry represents a single step in an image's build history.
+type HistoryEntry struct {
+	Step      int    `json:"step"`
+	Command   string `json:"command"`
+	Args      string `json:"args"`
+	CreatedBy string `json:"created_by"`
+}
+
+// ImageHistory holds the full build history for an image.
+type ImageHistory struct {
+	Name      string         `json:"name"`
+	BaseImage string         `json:"base_image"`
+	BuiltAt   string         `json:"built_at,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Ports     []string       `json:"exposed_ports,omitempty"`
+	Entries   []HistoryEntry `json:"entries"`
+}
+
+// ImageHistory reads the build history of an image built with BuildImage.
+// It parses the metadata and build script stored in the rootfs overlay directory.
+func (m *Manager) ImageHistory(name string) (*ImageHistory, error) {
+	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
+	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("image not found: %s", name)
+	}
+
+	history := &ImageHistory{
+		Name:   name,
+		Labels: make(map[string]string),
+	}
+
+	// Read image metadata from rootfs overlay
+	rootfsDir := filepath.Join(m.baseDir, name+"_rootfs")
+	metaPath := filepath.Join(rootfsDir, "etc", "tent", "image.meta")
+
+	if data, err := os.ReadFile(metaPath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if idx := strings.Index(line, "="); idx > 0 {
+				key := line[:idx]
+				val := line[idx+1:]
+				switch key {
+				case "base":
+					history.BaseImage = val
+				case "built":
+					history.BuiltAt = val
+				default:
+					if strings.HasPrefix(key, "label.") {
+						history.Labels[strings.TrimPrefix(key, "label.")] = val
+					}
+					if key == "expose" {
+						history.Ports = append(history.Ports, val)
+					}
+				}
+			}
+		}
+	}
+
+	// Build the history entries starting with FROM
+	step := 1
+	if history.BaseImage != "" {
+		history.Entries = append(history.Entries, HistoryEntry{
+			Step:      step,
+			Command:   "FROM",
+			Args:      history.BaseImage,
+			CreatedBy: fmt.Sprintf("FROM %s", history.BaseImage),
+		})
+		step++
+	}
+
+	// Parse the build script for RUN, ENV, WORKDIR instructions
+	buildScript := filepath.Join(rootfsDir, "etc", "tent", "build.sh")
+	if data, err := os.ReadFile(buildScript); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") || line == "set -e" {
+				continue
+			}
+
+			if strings.HasPrefix(line, "export ") {
+				// ENV instruction
+				envExpr := strings.TrimPrefix(line, "export ")
+				history.Entries = append(history.Entries, HistoryEntry{
+					Step:      step,
+					Command:   "ENV",
+					Args:      envExpr,
+					CreatedBy: fmt.Sprintf("ENV %s", envExpr),
+				})
+				step++
+			} else if strings.HasPrefix(line, "cd ") {
+				// WORKDIR instruction
+				dir := strings.TrimPrefix(line, "cd ")
+				history.Entries = append(history.Entries, HistoryEntry{
+					Step:      step,
+					Command:   "WORKDIR",
+					Args:      dir,
+					CreatedBy: fmt.Sprintf("WORKDIR %s", dir),
+				})
+				step++
+			} else {
+				// RUN instruction
+				history.Entries = append(history.Entries, HistoryEntry{
+					Step:      step,
+					Command:   "RUN",
+					Args:      line,
+					CreatedBy: fmt.Sprintf("RUN %s", line),
+				})
+				step++
+			}
+		}
+	}
+
+	// Scan rootfs overlay for COPY artifacts
+	copyDir := rootfsDir
+	if stat, err := os.Stat(copyDir); err == nil && stat.IsDir() {
+		_ = filepath.Walk(copyDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
+			}
+			rel, _ := filepath.Rel(copyDir, path)
+			// Skip build script and metadata (already accounted for)
+			if strings.HasPrefix(rel, "etc/tent/") {
+				return nil
+			}
+			history.Entries = append(history.Entries, HistoryEntry{
+				Step:      step,
+				Command:   "COPY",
+				Args:      fmt.Sprintf(". /%s", rel),
+				CreatedBy: fmt.Sprintf("COPY . /%s", rel),
+			})
+			step++
+			return nil
+		})
+	}
+
+	// Add EXPOSE entries from metadata
+	for _, port := range history.Ports {
+		history.Entries = append(history.Entries, HistoryEntry{
+			Step:      step,
+			Command:   "EXPOSE",
+			Args:      port,
+			CreatedBy: fmt.Sprintf("EXPOSE %s", port),
+		})
+		step++
+	}
+
+	return history, nil
+}
+
 // progressReader wraps an io.Reader to track progress
 type progressReader struct {
 	io.Reader
