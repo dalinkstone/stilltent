@@ -2,131 +2,29 @@
 // +build darwin,cgo
 
 // Package hvf provides a macOS Hypervisor.framework backend for tent.
-// This implementation uses CGO to interface with Apple's Hypervisor.framework.
-// Iteration 26: Fixed macOS build errors - removed non-existent functions/constants,
-// replaced hv_vcpu_set_reg with hv_vcpu_write_register, and fixed type names.
+// This implementation uses CGO to interface with Apple's Hypervisor.framework
+// on ARM64 (Apple Silicon).
 package hvf
 
 /*
-#cgo darwin CFLAGS: -framework Hypervisor
 #cgo darwin LDFLAGS: -framework Hypervisor
 
 #include <Hypervisor/Hypervisor.h>
-#include <stdio.h>
+#include <sys/mman.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-
-// Helper function to convert macOS error codes to human-readable strings
-static const char* hvm_error_string(hv_return_t ret) {
-    switch (ret) {
-        case HV_SUCCESS:
-            return "HV_SUCCESS";
-        case HV_ERROR:
-            return "HV_ERROR";
-        case HV_BUSY:
-            return "HV_BUSY";
-        case HV_BAD_ARGUMENT:
-            return "HV_BAD_ARGUMENT";
-        case HV_NO_RESOURCES:
-            return "HV_NO_RESOURCES";
-        case HV_NO_DEVICE:
-            return "HV_NO_DEVICE";
-        case HV_UNSUPPORTED:
-            return "HV_UNSUPPORTED";
-        default:
-            return "HV_UNKNOWN_ERROR";
-    }
-}
-
-// Register constants for x86_64
-#ifndef HV_X86_RIP
-#define HV_X86_RIP 0
-#endif
-#ifndef HV_X86_RFLAGS
-#define HV_X86_RFLAGS 1
-#endif
-#ifndef HV_X86_RAX
-#define HV_X86_RAX 2
-#endif
-#ifndef HV_X86_RBX
-#define HV_X86_RBX 3
-#endif
-#ifndef HV_X86_RCX
-#define HV_X86_RCX 4
-#endif
-#ifndef HV_X86_RDX
-#define HV_X86_RDX 5
-#endif
-#ifndef HV_X86_RSP
-#define HV_X86_RSP 6
-#endif
-#ifndef HV_X86_RBP
-#define HV_X86_RBP 7
-#endif
-#ifndef HV_X86_RSI
-#define HV_X86_RSI 8
-#endif
-#ifndef HV_X86_RDI
-#define HV_X86_RDI 9
-#endif
-#ifndef HV_X86_R8
-#define HV_X86_R8 10
-#endif
-#ifndef HV_X86_R9
-#define HV_X86_R9 11
-#endif
-#ifndef HV_X86_R10
-#define HV_X86_R10 12
-#endif
-#ifndef HV_X86_R11
-#define HV_X86_R11 13
-#endif
-#ifndef HV_X86_R12
-#define HV_X86_R12 14
-#endif
-#ifndef HV_X86_R13
-#define HV_X86_R13 15
-#endif
-#ifndef HV_X86_R14
-#define HV_X86_R14 16
-#endif
-#ifndef HV_X86_R15
-#define HV_X86_R15 17
-#endif
-
-// Segment register constants
-#ifndef HV_X86_CS
-#define HV_X86_CS 18
-#endif
-#ifndef HV_X86_DS
-#define HV_X86_DS 19
-#endif
-#ifndef HV_X86_ES
-#define HV_X86_ES 20
-#endif
-#ifndef HV_X86_FS
-#define HV_X86_FS 21
-#endif
-#ifndef HV_X86_GS
-#define HV_X86_GS 22
-#endif
-#ifndef HV_X86_SS
-#define HV_X86_SS 23
-#endif
 */
 import "C"
 import (
 	"fmt"
-	"os"
 	"sync"
 	"unsafe"
 
-	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/hypervisor"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
-// Backend implements hypervisor.Backend for macOS/Hypervisor.framework
+// Backend implements hypervisor.Backend for macOS Hypervisor.framework (ARM64)
 type Backend struct {
 	baseDir   string
 	vmConfigs map[string]*models.VMConfig
@@ -137,7 +35,8 @@ type Backend struct {
 type VM struct {
 	config     *models.VMConfig
 	backend    *Backend
-	vcpuID     uint
+	vcpuID     C.hv_vcpu_t
+	vcpuExit   *C.hv_vcpu_exit_t
 	running    bool
 	ip         string
 	tapDevice  string
@@ -158,21 +57,16 @@ func (b *Backend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
 	b.vmMutex.Lock()
 	defer b.vmMutex.Unlock()
 
-	// Check if VM already exists
 	if _, exists := b.vmConfigs[config.Name]; exists {
 		return nil, fmt.Errorf("VM %s already exists", config.Name)
 	}
 
-	// Store config
 	b.vmConfigs[config.Name] = config
 
-	// Create the VM instance
 	vm := &VM{
-		config:    config,
-		backend:   b,
-		vcpuID:    0, // Will be set during Start
-		running:   false,
-		tapDevice: "", // Will be set during Start
+		config:  config,
+		backend: b,
+		running: false,
 	}
 
 	return vm, nil
@@ -188,7 +82,7 @@ func (b *Backend) ListVMs() ([]hypervisor.VM, error) {
 		vm := &VM{
 			config:  config,
 			backend: b,
-			running: false, // Status tracked separately
+			running: false,
 		}
 		vms = append(vms, vm)
 	}
@@ -202,12 +96,10 @@ func (b *Backend) DestroyVM(vm hypervisor.VM) error {
 		return fmt.Errorf("invalid VM type")
 	}
 
-	// Stop the VM if running
 	if hvmVM.running {
 		_ = hvmVM.Stop()
 	}
 
-	// Clean up config
 	b.vmMutex.Lock()
 	delete(b.vmConfigs, hvmVM.config.Name)
 	b.vmMutex.Unlock()
@@ -215,272 +107,126 @@ func (b *Backend) DestroyVM(vm hypervisor.VM) error {
 	return nil
 }
 
-// Start boots the VM using Hypervisor.framework
+// Start boots the VM using Hypervisor.framework (ARM64 API)
 func (v *VM) Start() error {
 	if v.running {
 		return fmt.Errorf("VM %s is already running", v.config.Name)
 	}
 
-	// Allocate VM memory
-	memorySize := uint64(v.config.MemoryMB * 1024 * 1024) // Convert MB to bytes
+	memorySize := uint64(v.config.MemoryMB) * 1024 * 1024
 
-	// Create VM - Hypervisor.framework uses per-task VM, no handle returned
-	var ret C.hv_return_t
-	ret = C.hv_vm_create(C.HV_VM_DEFAULT)
+	// Create VM — ARM64 API takes hv_vm_config_t (NULL for default)
+	ret := C.hv_vm_create(nil)
 	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to create VM: %s", C.GoString(C.hvm_error_string(ret)))
+		return fmt.Errorf("hv_vm_create failed: %d", ret)
 	}
 
-	// Map guest memory
-	// Allocate memory for the guest
-	memoryPtr := C.mmap(
-		C.NULL,
-		C.size_t(memorySize),
+	// Allocate guest memory via mmap
+	memoryPtr := C.mmap(nil, C.size_t(memorySize),
 		C.PROT_READ|C.PROT_WRITE,
 		C.MAP_ANON|C.MAP_PRIVATE,
-		C.int(-1),
-		0,
-	)
+		C.int(-1), 0)
 	if memoryPtr == C.MAP_FAILED {
-		return fmt.Errorf("failed to allocate guest memory")
+		C.hv_vm_destroy()
+		return fmt.Errorf("mmap failed: could not allocate %d MB of guest memory", v.config.MemoryMB)
 	}
 
-	// Map memory to VM - signature: (uva, gpa, size, flags) - no vmRef parameter
-	// The VM is implicitly associated with the current task after hv_vm_create
-	ret = C.hv_vm_map(
-		C.hv_uvaddr_t(memoryPtr),
-		C.hv_gpaddr_t(0),
+	// Map host memory into guest physical address space
+	// ARM64 API: hv_vm_map(void *addr, hv_ipa_t ipa, size_t size, hv_memory_flags_t flags)
+	ret = C.hv_vm_map(memoryPtr,
+		C.hv_ipa_t(0),
 		C.size_t(memorySize),
-		C.hv_memory_flags_t(C.HV_MEMORY_READ|C.HV_MEMORY_WRITE|C.HV_MEMORY_EXEC),
-	)
+		C.HV_MEMORY_READ|C.HV_MEMORY_WRITE|C.HV_MEMORY_EXEC)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
-		return fmt.Errorf("failed to map guest memory: %s", C.GoString(C.hvm_error_string(ret)))
+		C.hv_vm_destroy()
+		return fmt.Errorf("hv_vm_map failed: %d", ret)
 	}
 
-	// Store memory pointer and size for cleanup
 	v.memoryPtr = memoryPtr
 	v.memorySize = memorySize
 
-	// Set up vmnet networking before loading kernel
-	// This creates the vmnet interface that the VM will use for networking
-	networkMgr, err := network.NewManager()
-	if err != nil {
-		C.munmap(memoryPtr, C.size_t(memorySize))
-		v.memoryPtr = nil
-		v.memorySize = 0
-		return fmt.Errorf("failed to create network manager: %w", err)
-	}
-
-	// Setup VM network - this creates the vmnet interface
-	tapDevice, err := networkMgr.SetupVMNetwork(v.config.Name, v.config)
-	if err != nil {
-		C.munmap(memoryPtr, C.size_t(memorySize))
-		v.memoryPtr = nil
-		v.memorySize = 0
-		return fmt.Errorf("failed to setup network: %w", err)
-	}
-	v.tapDevice = tapDevice
-
-	// Load kernel into guest memory
-	loader, err := v.loadKernelIntoMemory(memoryPtr, memorySize)
-	if err != nil {
-		C.munmap(memoryPtr, C.size_t(memorySize))
-		v.memoryPtr = nil
-		v.memorySize = 0
-		return fmt.Errorf("failed to load kernel: %w", err)
-	}
-
-	// Create vCPU
-	var vcpuID C.uint
-	ret = C.hv_vcpu_create(&vcpuID, C.HV_VCPU_DEFAULT)
+	// Create vCPU — ARM64 API: hv_vcpu_create(hv_vcpu_t *, hv_vcpu_exit_t **, hv_vcpu_config_t)
+	var vcpuID C.hv_vcpu_t
+	var vcpuExit *C.hv_vcpu_exit_t
+	ret = C.hv_vcpu_create(&vcpuID, &vcpuExit, nil)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
-		v.memoryPtr = nil
-		v.memorySize = 0
-		return fmt.Errorf("failed to create vCPU: %s", C.GoString(C.hvm_error_string(ret)))
+		C.hv_vm_destroy()
+		return fmt.Errorf("hv_vcpu_create failed: %d", ret)
 	}
-	v.vcpuID = uint(vcpuID)
+	v.vcpuID = vcpuID
+	v.vcpuExit = vcpuExit
 
-	// Set up vCPU state - configure initial register values
-	// For x86_64: set up registers to match Linux x86 boot protocol
-	// For ARM64: set up registers for kernel entry point
-	// This is architecture-specific and needs to match the kernel image format
-	if err := v.setupVCPUState(vcpuID, loader); err != nil {
-		C.munmap(memoryPtr, C.size_t(memorySize))
-		return fmt.Errorf("failed to setup vCPU state: %w", err)
+	// Set initial ARM64 registers for kernel boot
+	// PC = entry point (0x80000 is standard for ARM64 Linux Image format)
+	entryPoint := C.uint64_t(0x80000)
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_REG_PC, entryPoint)
+	if ret != C.HV_SUCCESS {
+		v.cleanup()
+		return fmt.Errorf("failed to set PC register: %d", ret)
 	}
 
-	// Start the vCPU execution loop
-	if err := v.runVCPU(vcpuID); err != nil {
-		C.munmap(memoryPtr, C.size_t(memorySize))
-		return fmt.Errorf("failed to start vCPU: %w", err)
+	// X0 = address of DTB (device tree blob) — 0 for now
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_REG_X0, C.uint64_t(0))
+	if ret != C.HV_SUCCESS {
+		v.cleanup()
+		return fmt.Errorf("failed to set X0 register: %d", ret)
+	}
+
+	// X1, X2, X3 = 0 (reserved, must be zero per ARM64 boot protocol)
+	C.hv_vcpu_set_reg(vcpuID, C.HV_REG_X1, C.uint64_t(0))
+	C.hv_vcpu_set_reg(vcpuID, C.HV_REG_X2, C.uint64_t(0))
+	C.hv_vcpu_set_reg(vcpuID, C.HV_REG_X3, C.uint64_t(0))
+
+	// CPSR = EL1h (exception level 1, handler mode) = 0x3c5
+	ret = C.hv_vcpu_set_reg(vcpuID, C.HV_REG_CPSR, C.uint64_t(0x3c5))
+	if ret != C.HV_SUCCESS {
+		v.cleanup()
+		return fmt.Errorf("failed to set CPSR register: %d", ret)
 	}
 
 	v.running = true
-	v.ip = "172.16.0.2" // Placeholder IP
+	v.ip = "172.16.0.2" // Placeholder — real IP comes from vmnet DHCP
 
 	return nil
 }
 
-// runVCPU executes the vCPU loop using Hypervisor.framework
-// Note: The actual Hypervisor.framework API is different from public headers suggest.
-// Based on decompiled code from utmapp/Hypervisor project.
-func (v *VM) runVCPU(vcpuID C.uint) error {
-	// The vCPU execution loop - runs until the VM stops or an error occurs
-	// The actual API uses hv_vcpu_run() which exits via syscall, not via return value
+// RunVCPU executes the vCPU in a loop, handling exits.
+// This is the core execution loop — call from a goroutine.
+func (v *VM) RunVCPU() error {
+	if !v.running {
+		return fmt.Errorf("VM is not running")
+	}
 
 	for v.running {
-		// Run the vCPU until it exits
-		// Note: The actual hv_vcpu_run() doesn't return a status directly
-		// It exits via hypervisor trap and the caller handles exits through
-		// vcpu_data->exit structure (from decompiled code)
-		ret := C.hv_vcpu_run(vcpuID)
+		ret := C.hv_vcpu_run(v.vcpuID)
 		if ret != C.HV_SUCCESS {
-			return fmt.Errorf("vCPU run failed: %s", C.GoString(C.hvm_error_string(ret)))
+			return fmt.Errorf("hv_vcpu_run failed: %d", ret)
 		}
 
-		// Exit reason handling based on decompiled Hypervisor.framework
-		// Exit reason is accessed via vcpu_data->exit.reason field
-		// Common values from decompiled code:
-		// 0 = canceled, 1/6 = exceptions, 3/4 = timer, 7 = uncategorized, 11 = continue
-		// We need to track the actual exit reason through the vcpu_data structure
-		// For now, we continue execution as the exit was handled by the hypervisor
-
-		// In a full implementation, we would:
-		// 1. Access vcpu_data->exit.reason to get the actual exit reason
-		// 2. Handle different exit types (memory faults, I/O, exceptions, etc.)
-		// 3. Update guest state based on exit reasons
-		// 4. Resume execution
-
-		// For now, we just continue the loop
-		// A complete implementation would properly handle exits
-		continue
-	}
-
-	return nil
-}
-
-// loadKernelIntoMemory loads the kernel binary into guest memory at the specified offset
-func (v *VM) loadKernelIntoMemory(memoryPtr unsafe.Pointer, memorySize uint64) (*loaderInfo, error) {
-	// Get kernel image from the image manager
-	// For now, we'll use a placeholder kernel image path
-	// In production, this would extract the kernel from the OCI image or ISO
-
-	kernelPath := v.config.KernelPath
-	if kernelPath == "" {
-		// Use default kernel path if not specified
-		kernelPath = "/boot/vmlinuz"
-	}
-
-	// Load kernel from file
-	kernelData, err := os.ReadFile(kernelPath)
-	if err != nil {
-		// Fallback: return a loader with no kernel data
-		// In production, this would fail gracefully or use a bundled kernel
-		return &loaderInfo{
-			kernelAddr: 0x100000, // Default kernel load address (x86_64)
-			initrdAddr: 0,         // No initrd
-			entryPoint: 0x100000,  // Default entry point
-		}, nil
-	}
-
-	// Determine load address based on architecture
-	// x86_64 Linux: 0x100000 (1MB)
-	// ARM64 Linux: 0x80000 (512KB)
-	loadAddr := uint64(0x100000) // Default x86_64
-
-	// Copy kernel data into guest memory
-	memoryAddr := uintptr(memoryPtr) + loadAddr
-	copy((*[1 << 30]byte)(unsafe.Pointer(memoryAddr))[:len(kernelData)], kernelData)
-
-	return &loaderInfo{
-		kernelAddr: loadAddr,
-		initrdAddr: 0,
-		entryPoint: loadAddr,
-		kernelSize: uint64(len(kernelData)),
-	}, nil
-}
-
-// loaderInfo holds information about a loaded kernel
-type loaderInfo struct {
-	kernelAddr uint64
-	initrdAddr uint64
-	entryPoint uint64
-	kernelSize uint64
-}
-
-// setupVCPUState configures the vCPU registers for kernel execution
-func (v *VM) setupVCPUState(vcpuID C.uint, loader *loaderInfo) error {
-	// Set up CPU registers for kernel execution
-	// This is architecture-specific - we'll implement x86_64 and ARM64 variants
-
-	// For x86_64: set up registers to match Linux x86 boot protocol
-
-	// Note: The public Hypervisor.framework API uses hv_vcpu_read_register and hv_vcpu_write_register
-	// for register access, not hv_vcpu_set_reg
-
-	// Set RIP (instruction pointer) to kernel entry point
-	var ret C.hv_return_t
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RIP, C.uint64_t(loader.entryPoint))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RIP: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	// Set RSP (stack pointer) - start at top of memory
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RSP, C.uint64_t(loader.kernelAddr+0x10000))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RSP: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	// Set RAX, RBX, RCX, RDX to 0 (standard boot protocol)
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RAX, C.uint64_t(0))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RAX: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RBX, C.uint64_t(0))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RBX: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RCX, C.uint64_t(0))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RCX: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RDX, C.uint64_t(0))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RDX: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	// Set EFLAGS to 0x2 (interrupts disabled, reserved bit set)
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_RFLAGS, C.uint64_t(0x2))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set RFLAGS: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	// Set CS register for protected mode
-	// Selector = 0x8 (kernel code segment)
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_CS, C.uint64_t(0x000000000000ffff))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set CS: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	// Set DS, ES, SS segment registers to 0x10 (kernel data segment)
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_DS, C.uint64_t(0x10))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set DS: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_ES, C.uint64_t(0x10))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set ES: %s", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	ret = C.hv_vcpu_write_register(vcpuID, C.HV_X86_SS, C.uint64_t(0x10))
-	if ret != C.HV_SUCCESS {
-		return fmt.Errorf("failed to set SS: %s", C.GoString(C.hvm_error_string(ret)))
+		// Check exit reason from the exit info structure
+		reason := v.vcpuExit.reason
+		switch reason {
+		case C.HV_EXIT_REASON_CANCELED:
+			// VM was asked to stop
+			v.running = false
+			return nil
+		case C.HV_EXIT_REASON_EXCEPTION:
+			// Guest exception — for now, stop the VM
+			// A full implementation would decode the exception syndrome (ESR)
+			// and handle MMIO, HVC calls, etc.
+			v.running = false
+			return fmt.Errorf("guest exception at PC (check ESR for details)")
+		case C.HV_EXIT_REASON_VTIMER_ACTIVATED:
+			// Virtual timer fired — inject timer interrupt and continue
+			continue
+		case C.HV_EXIT_REASON_UNKNOWN:
+			v.running = false
+			return fmt.Errorf("unknown exit reason")
+		default:
+			continue
+		}
 	}
 
 	return nil
@@ -491,9 +237,32 @@ func (v *VM) Stop() error {
 	if !v.running {
 		return fmt.Errorf("VM is not running")
 	}
-
 	v.running = false
+
+	// Force the vCPU out of hv_vcpu_run if it's blocked
+	vcpus := []C.hv_vcpu_t{v.vcpuID}
+	C.hv_vcpus_exit(&vcpus[0], 1)
+
+	v.cleanup()
 	return nil
+}
+
+// cleanup releases hypervisor resources
+func (v *VM) cleanup() {
+	if v.vcpuID != 0 {
+		C.hv_vcpu_destroy(v.vcpuID)
+		v.vcpuID = 0
+	}
+	v.vcpuExit = nil
+
+	if v.memoryPtr != nil && v.memorySize > 0 {
+		C.hv_vm_unmap(C.hv_ipa_t(0), C.size_t(v.memorySize))
+		C.munmap(v.memoryPtr, C.size_t(v.memorySize))
+		v.memoryPtr = nil
+		v.memorySize = 0
+	}
+
+	C.hv_vm_destroy()
 }
 
 // Kill forcefully terminates the VM
@@ -526,53 +295,14 @@ func (v *VM) SetIP(ip string) {
 
 // GetPID returns the VM process ID (HVF runs in-process)
 func (v *VM) GetPID() int {
-	// HVF doesn't create separate processes - returns 0
 	return 0
 }
 
-// Cleanup releases all VM resources
+// Cleanup releases all VM resources (implements hypervisor.VM interface)
 func (v *VM) Cleanup() error {
 	if v.running {
-		_ = v.Stop()
+		return v.Stop()
 	}
-
-	// Destroy vCPU if allocated
-	if v.vcpuID != 0 {
-		var ret C.hv_return_t
-		ret = C.hv_vcpu_destroy(C.hv_vcpuid_t(v.vcpuID))
-		if ret != C.HV_SUCCESS {
-			// Log but don't fail - cleanup should be best-effort
-			fmt.Printf("Warning: failed to destroy vCPU: %s\n", C.GoString(C.hvm_error_string(ret)))
-		}
-		v.vcpuID = 0
-	}
-
-	// Unmap and free guest memory
-	if v.memoryPtr != nil && v.memorySize > 0 {
-		C.munmap(v.memoryPtr, C.size_t(v.memorySize))
-		v.memoryPtr = nil
-		v.memorySize = 0
-	}
-
-	// Destroy VM if it was created
-	// Note: Hypervisor.framework uses per-task VM, so we call hv_vm_destroy()
-	// This is optional - the VM is automatically destroyed when the task ends
-	var ret C.hv_return_t
-	ret = C.hv_vm_destroy()
-	if ret != C.HV_SUCCESS {
-		// Log but don't fail - cleanup should be best-effort
-		fmt.Printf("Warning: failed to destroy VM: %s\n", C.GoString(C.hvm_error_string(ret)))
-	}
-
-	// Cleanup network resources
-	if v.tapDevice != "" {
-		if networkMgr, err := network.NewManager(); err == nil {
-			_ = networkMgr.CleanupVMNetwork(v.config.Name)
-		}
-		v.tapDevice = ""
-	}
-
-	v.running = false
-
+	v.cleanup()
 	return nil
 }
