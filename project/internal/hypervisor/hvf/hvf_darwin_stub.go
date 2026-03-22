@@ -74,6 +74,14 @@ func (v *VM) GetIP() string {
 	return ""
 }
 
+// SetIP sets the VM's IP address
+func (v *VM) SetIP(ip string) {
+}
+
+// SetNetwork configures the VM's network interface
+func (v *VM) SetNetwork(tapDevice string, ip string) {
+}
+
 // GetPID returns the VM process ID
 func (v *VM) GetPID() int {
 	return 0

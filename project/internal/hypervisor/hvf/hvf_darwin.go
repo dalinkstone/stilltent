@@ -373,6 +373,12 @@ func (v *VM) SetIP(ip string) {
 	v.ip = ip
 }
 
+// SetNetwork configures the VM's network interface
+func (v *VM) SetNetwork(tapDevice string, ip string) {
+	v.tapDevice = tapDevice
+	v.ip = ip
+}
+
 // GetPID returns the VM process ID (HVF runs in-process)
 func (v *VM) GetPID() int {
 	return 0
