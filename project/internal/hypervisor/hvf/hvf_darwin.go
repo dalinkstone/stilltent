@@ -1,7 +1,6 @@
 //go:build darwin && cgo
 // +build darwin,cgo
 
-
 // Package hvf provides a macOS Hypervisor.framework backend for tent.
 // This implementation uses CGO to interface with Apple's Hypervisor.framework.
 package hvf
@@ -14,6 +13,7 @@ package hvf
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 // Helper function to convert macOS error codes to human-readable strings
 static const char* hvm_error_string(hv_return_t ret) {
