@@ -76,9 +76,11 @@ func (m *ComposeManager) ParseConfig(filePath string) (*ComposeConfig, error) {
 
 // Up starts all sandboxes in a compose group
 func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus, error) {
+	startOrder := config.TopologicalOrder()
 	status := &ComposeStatus{
-		Name:      name,
-		Sandboxes: make(map[string]*SandboxStatus),
+		Name:       name,
+		Sandboxes:  make(map[string]*SandboxStatus),
+		StartOrder: startOrder,
 	}
 
 	// Start a DNS server for service discovery within this compose group.
@@ -90,7 +92,9 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 		}
 	}
 
-	for sandboxName, sandboxConfig := range config.Sandboxes {
+	// Start sandboxes in dependency order (dependencies first)
+	for _, sandboxName := range startOrder {
+		sandboxConfig := config.Sandboxes[sandboxName]
 		// Expand environment variable references from host env
 		expandedEnv := expandSandboxEnv(sandboxConfig.Env)
 
@@ -173,8 +177,11 @@ func (m *ComposeManager) Down(name string) error {
 		return fmt.Errorf("failed to load compose state: %w", err)
 	}
 
+	// Stop sandboxes in reverse dependency order (dependents first)
+	stopOrder := reverseOrder(status.StartOrder, status.Sandboxes)
+
 	var errors []string
-	for sandboxName := range status.Sandboxes {
+	for _, sandboxName := range stopOrder {
 		// Stop sandbox
 		if err := m.vmManager.Stop(sandboxName); err != nil {
 			errors = append(errors, fmt.Sprintf("failed to stop %s: %v", sandboxName, err))
@@ -410,6 +417,25 @@ func (pw *prefixWriter) Write(p []byte) (int, error) {
 		pw.mu.Unlock()
 	}
 	return len(p), nil
+}
+
+// reverseOrder returns the start order reversed. If startOrder is empty or nil
+// (e.g. from older state), it falls back to iterating the sandboxes map.
+func reverseOrder(startOrder []string, sandboxes map[string]*SandboxStatus) []string {
+	if len(startOrder) > 0 {
+		reversed := make([]string, len(startOrder))
+		for i, name := range startOrder {
+			reversed[len(startOrder)-1-i] = name
+		}
+		return reversed
+	}
+	// Fallback: no ordering info, just iterate the map
+	names := make([]string, 0, len(sandboxes))
+	for name := range sandboxes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // List returns all compose groups

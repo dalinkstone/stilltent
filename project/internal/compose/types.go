@@ -12,14 +12,15 @@ type ComposeConfig struct {
 
 // SandboxConfig represents a single sandbox definition in the compose file
 type SandboxConfig struct {
-	Name      string       `yaml:"name,omitempty"`
-	From      string       `yaml:"from"`
-	VCPUs     int          `yaml:"vcpus,omitempty"`
-	MemoryMB  int          `yaml:"memory_mb,omitempty"`
-	DiskGB    int          `yaml:"disk_gb,omitempty"`
-	Network   *NetworkConf `yaml:"network,omitempty"`
-	Mounts    []Mount      `yaml:"mounts,omitempty"`
+	Name      string            `yaml:"name,omitempty"`
+	From      string            `yaml:"from"`
+	VCPUs     int               `yaml:"vcpus,omitempty"`
+	MemoryMB  int               `yaml:"memory_mb,omitempty"`
+	DiskGB    int               `yaml:"disk_gb,omitempty"`
+	Network   *NetworkConf      `yaml:"network,omitempty"`
+	Mounts    []Mount           `yaml:"mounts,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
+	DependsOn []string          `yaml:"depends_on,omitempty"`
 }
 
 // NetworkConf defines network policy for a sandbox
@@ -37,8 +38,9 @@ type Mount struct {
 
 // ComposeStatus represents the status of all sandboxes in a compose group
 type ComposeStatus struct {
-	Name      string                    `yaml:"name"`
-	Sandboxes map[string]*SandboxStatus `yaml:"sandboxes"`
+	Name       string                    `yaml:"name"`
+	Sandboxes  map[string]*SandboxStatus `yaml:"sandboxes"`
+	StartOrder []string                  `yaml:"start_order,omitempty"`
 }
 
 // SandboxStatus represents the status of a single sandbox in a compose group

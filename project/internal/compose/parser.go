@@ -3,6 +3,7 @@ package compose
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 
@@ -49,9 +50,109 @@ func (c *ComposeConfig) Validate() error {
 		if sandbox.DiskGB <= 0 {
 			sandbox.DiskGB = 10 // Default
 		}
+
+		// Validate depends_on references
+		for _, dep := range sandbox.DependsOn {
+			if _, ok := c.Sandboxes[dep]; !ok {
+				return fmt.Errorf("sandbox %s: depends_on references unknown sandbox %q", name, dep)
+			}
+			if dep == name {
+				return fmt.Errorf("sandbox %s: cannot depend on itself", name)
+			}
+		}
+	}
+
+	// Detect dependency cycles
+	if err := c.detectCycles(); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+// detectCycles checks for circular dependencies in the compose config
+func (c *ComposeConfig) detectCycles() error {
+	const (
+		unvisited = 0
+		visiting  = 1
+		visited   = 2
+	)
+
+	state := make(map[string]int)
+	for name := range c.Sandboxes {
+		state[name] = unvisited
+	}
+
+	var visit func(name string, path []string) error
+	visit = func(name string, path []string) error {
+		if state[name] == visited {
+			return nil
+		}
+		if state[name] == visiting {
+			return fmt.Errorf("dependency cycle detected: %s -> %s", joinPath(path), name)
+		}
+		state[name] = visiting
+		path = append(path, name)
+		for _, dep := range c.Sandboxes[name].DependsOn {
+			if err := visit(dep, path); err != nil {
+				return err
+			}
+		}
+		state[name] = visited
+		return nil
+	}
+
+	for name := range c.Sandboxes {
+		if state[name] == unvisited {
+			if err := visit(name, nil); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TopologicalOrder returns sandbox names in dependency order (dependencies first).
+func (c *ComposeConfig) TopologicalOrder() []string {
+	var order []string
+	visited := make(map[string]bool)
+
+	var visit func(name string)
+	visit = func(name string) {
+		if visited[name] {
+			return
+		}
+		visited[name] = true
+		if sb, ok := c.Sandboxes[name]; ok {
+			for _, dep := range sb.DependsOn {
+				visit(dep)
+			}
+		}
+		order = append(order, name)
+	}
+
+	// Sort keys for deterministic ordering of sandboxes at the same level
+	names := make([]string, 0, len(c.Sandboxes))
+	for name := range c.Sandboxes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		visit(name)
+	}
+	return order
+}
+
+func joinPath(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	result := path[0]
+	for i := 1; i < len(path); i++ {
+		result += " -> " + path[i]
+	}
+	return result
 }
 
 // ParseConfigFile parses a compose YAML file from disk
