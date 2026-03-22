@@ -49,7 +49,7 @@ NC='\033[0m'
 # ── Auth check ───────────────────────────────────────────────────────
 
 check_auth() {
-    claude -p "say OK" --max-turns 1 --no-session-persistence 2>/dev/null | grep -qi "OK" 2>/dev/null
+    claude -p "say OK" --max-turns 1 --no-session-persistence --dangerously-skip-permissions --model "${MODEL:-opus}" 2>/dev/null | grep -qi "OK" 2>/dev/null
 }
 
 wait_for_auth() {
@@ -181,9 +181,9 @@ while true; do
     timeout 1800 claude -p \
         "Follow the instructions in config/claude-agent/AGENT.md exactly. This is iteration $ITERATION. Build the next feature." \
         --append-system-prompt-file "$AGENT_PROMPT" \
-        --allowedTools "Bash,Read,Write,Edit,Glob,Grep" \
+        --dangerously-skip-permissions \
+        --model "${MODEL:-opus}" \
         --no-session-persistence \
-        ${MODEL:+--model "$MODEL"} \
         2>&1 | tee "$LOGFILE" || true
 
     ITER_END=$(date +%s)
