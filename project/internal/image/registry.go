@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -173,8 +174,74 @@ func (c *RegistryClient) DownloadLayer(registry, repo string, layer LayerInfo) (
 	return body, nil
 }
 
+// registryRetryConfig controls retry behavior for registry requests.
+const (
+	registryMaxRetries    = 3
+	registryBaseDelay     = 1 * time.Second
+	registryMaxDelay      = 30 * time.Second
+)
+
+// isRetryableStatus returns true for HTTP status codes that should be retried.
+func isRetryableStatus(code int) bool {
+	return code == http.StatusTooManyRequests ||
+		code == http.StatusServiceUnavailable ||
+		code == http.StatusGatewayTimeout ||
+		code == http.StatusBadGateway
+}
+
+// parseRetryAfter extracts the delay from a Retry-After header.
+// It handles both integer seconds ("120") and HTTP-date formats.
+// Returns 0 if the header is missing or unparseable.
+func parseRetryAfter(resp *http.Response) time.Duration {
+	val := resp.Header.Get("Retry-After")
+	if val == "" {
+		return 0
+	}
+
+	// Try integer seconds first
+	if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+		d := time.Duration(secs) * time.Second
+		if d > registryMaxDelay {
+			d = registryMaxDelay
+		}
+		return d
+	}
+
+	// Try HTTP-date format (RFC 1123)
+	if t, err := time.Parse(time.RFC1123, val); err == nil {
+		d := time.Until(t)
+		if d <= 0 {
+			return registryBaseDelay
+		}
+		if d > registryMaxDelay {
+			d = registryMaxDelay
+		}
+		return d
+	}
+
+	return 0
+}
+
+// retryDelay calculates the delay for a given retry attempt, honoring
+// the Retry-After header if present, otherwise using exponential backoff.
+func retryDelay(attempt int, resp *http.Response) time.Duration {
+	if resp != nil {
+		if d := parseRetryAfter(resp); d > 0 {
+			return d
+		}
+	}
+	// Exponential backoff: 1s, 2s, 4s, ...
+	d := registryBaseDelay << uint(attempt)
+	if d > registryMaxDelay {
+		d = registryMaxDelay
+	}
+	return d
+}
+
 // registryGet performs an authenticated GET to a registry endpoint.
-// It handles the WWW-Authenticate challenge flow for bearer token auth.
+// It handles the WWW-Authenticate challenge flow for bearer token auth
+// and retries on HTTP 429 (rate limit) and 5xx server errors with
+// exponential backoff.
 func (c *RegistryClient) registryGet(registry, repo, url, accept string) (io.ReadCloser, string, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -220,6 +287,24 @@ func (c *RegistryClient) registryGet(registry, repo, url, accept string) (io.Rea
 		resp, err = c.httpClient.Do(req2)
 		if err != nil {
 			return nil, "", fmt.Errorf("authenticated request failed: %w", err)
+		}
+	}
+
+	// Retry on rate-limit (429) and server errors (502, 503, 504)
+	for attempt := 0; attempt < registryMaxRetries && isRetryableStatus(resp.StatusCode); attempt++ {
+		delay := retryDelay(attempt, resp)
+		resp.Body.Close()
+		time.Sleep(delay)
+
+		retryReq, _ := http.NewRequest("GET", url, nil)
+		retryReq.Header.Set("Accept", accept)
+		if te, ok := c.tokens[tokenKey]; ok && time.Now().Before(te.expires) {
+			retryReq.Header.Set("Authorization", "Bearer "+te.token)
+		}
+
+		resp, err = c.httpClient.Do(retryReq)
+		if err != nil {
+			return nil, "", fmt.Errorf("retry request failed: %w", err)
 		}
 	}
 
@@ -417,6 +502,33 @@ func (c *RegistryClient) registryRequest(method, registry, repo, url, contentTyp
 		resp, err = c.httpClient.Do(req2)
 		if err != nil {
 			return nil, fmt.Errorf("authenticated request failed: %w", err)
+		}
+	}
+
+	// Retry on rate-limit (429) and server errors (502, 503, 504).
+	// Only retry idempotent methods or methods where the caller can handle re-send.
+	if method == "GET" || method == "HEAD" {
+		for attempt := 0; attempt < registryMaxRetries && isRetryableStatus(resp.StatusCode); attempt++ {
+			delay := retryDelay(attempt, resp)
+			resp.Body.Close()
+			time.Sleep(delay)
+
+			retryReq, err := http.NewRequest(method, url, nil)
+			if err != nil {
+				return nil, err
+			}
+			if contentType != "" {
+				retryReq.Header.Set("Content-Type", contentType)
+			}
+			tokenKey := registry + "/" + repo + ":push"
+			if te, ok := c.tokens[tokenKey]; ok && time.Now().Before(te.expires) {
+				retryReq.Header.Set("Authorization", "Bearer "+te.token)
+			}
+
+			resp, err = c.httpClient.Do(retryReq)
+			if err != nil {
+				return nil, fmt.Errorf("retry request failed: %w", err)
+			}
 		}
 	}
 
