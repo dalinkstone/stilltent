@@ -38,6 +38,7 @@ type VMConfig struct {
 	Resources      *ResourceLimits    `yaml:"resources,omitempty" json:"resources,omitempty"`
 	Devices        []DeviceConfig     `yaml:"devices,omitempty" json:"devices,omitempty"`
 	TTL            string             `yaml:"ttl,omitempty" json:"ttl,omitempty"`
+	DependsOn      []string           `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 }
 
 // DeviceType represents the type of device passthrough
@@ -289,6 +290,7 @@ type VMState struct {
 	Locked         bool             `json:"locked,omitempty"`
 	LockedReason   string           `json:"locked_reason,omitempty"`
 	LockedAt       int64            `json:"locked_at,omitempty"`
+	DependsOn      []string         `json:"depends_on,omitempty"`
 }
 
 // DeviceState tracks a passthrough device attached to a sandbox
