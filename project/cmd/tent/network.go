@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -26,6 +27,12 @@ func networkCmd() *cobra.Command {
 	cmd.AddCommand(networkPortsCmd())
 	cmd.AddCommand(networkPortAddCmd())
 	cmd.AddCommand(networkPortRemoveCmd())
+	cmd.AddCommand(networkCreateCmd())
+	cmd.AddCommand(networkDeleteCmd())
+	cmd.AddCommand(networkInspectCmd())
+	cmd.AddCommand(networkConnectCmd())
+	cmd.AddCommand(networkDisconnectCmd())
+	cmd.AddCommand(networkLsCmd())
 
 	return cmd
 }
@@ -335,6 +342,272 @@ Examples:
 			return nil
 		},
 	}
+}
+
+func networkCreateCmd() *cobra.Command {
+	var (
+		subnet   string
+		gateway  string
+		internal bool
+		labels   []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a custom bridge network",
+		Long: `Create a named bridge network with its own subnet. Sandboxes connected
+to the same network can communicate with each other. Use --internal to
+prevent external connectivity.
+
+Examples:
+  tent network create mynet
+  tent network create mynet --subnet 10.0.1.0/24 --gateway 10.0.1.1
+  tent network create isolated --internal
+  tent network create dev --label env=development`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+
+			store, err := network.NewNetworkStore(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open network store: %w", err)
+			}
+
+			labelMap := make(map[string]string)
+			for _, l := range labels {
+				parts := strings.SplitN(l, "=", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid label %q, expected key=value", l)
+				}
+				labelMap[parts[0]] = parts[1]
+			}
+
+			n, err := store.CreateNetwork(name, subnet, gateway, internal, labelMap)
+			if err != nil {
+				return fmt.Errorf("failed to create network: %w", err)
+			}
+
+			fmt.Printf("Created network %q\n", n.Name)
+			fmt.Printf("  Subnet:   %s\n", n.Subnet)
+			fmt.Printf("  Gateway:  %s\n", n.Gateway)
+			fmt.Printf("  Driver:   %s\n", n.Driver)
+			if n.Internal {
+				fmt.Printf("  Internal: yes (no external connectivity)\n")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&subnet, "subnet", "", "Subnet in CIDR notation (auto-allocated if empty)")
+	cmd.Flags().StringVar(&gateway, "gateway", "", "Gateway IP (defaults to first IP in subnet)")
+	cmd.Flags().BoolVar(&internal, "internal", false, "Restrict to inter-sandbox traffic only")
+	cmd.Flags().StringSliceVar(&labels, "label", nil, "Labels in key=value format")
+
+	return cmd
+}
+
+func networkDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete <name>",
+		Short: "Delete a custom network",
+		Long: `Delete a custom bridge network. All sandboxes must be disconnected first.
+
+Examples:
+  tent network delete mynet`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+
+			store, err := network.NewNetworkStore(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open network store: %w", err)
+			}
+
+			if err := store.DeleteNetwork(name); err != nil {
+				return fmt.Errorf("failed to delete network: %w", err)
+			}
+
+			fmt.Printf("Deleted network %q\n", name)
+			return nil
+		},
+	}
+}
+
+func networkInspectCmd() *cobra.Command {
+	var outputFormat string
+
+	cmd := &cobra.Command{
+		Use:   "inspect <name>",
+		Short: "Show details of a custom network",
+		Long: `Display detailed information about a custom network including subnet,
+gateway, connected sandboxes, and labels.
+
+Examples:
+  tent network inspect mynet
+  tent network inspect mynet --format json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+
+			store, err := network.NewNetworkStore(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open network store: %w", err)
+			}
+
+			n, err := store.GetNetwork(name)
+			if err != nil {
+				return fmt.Errorf("network not found: %w", err)
+			}
+
+			if outputFormat == "json" {
+				data, err := json.MarshalIndent(n, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+
+			fmt.Printf("Network: %s\n", n.Name)
+			fmt.Printf("  Driver:   %s\n", n.Driver)
+			fmt.Printf("  Subnet:   %s\n", n.Subnet)
+			fmt.Printf("  Gateway:  %s\n", n.Gateway)
+			fmt.Printf("  Internal: %v\n", n.Internal)
+			if len(n.Labels) > 0 {
+				fmt.Printf("  Labels:\n")
+				for k, v := range n.Labels {
+					fmt.Printf("    %s=%s\n", k, v)
+				}
+			}
+			if len(n.Sandboxes) > 0 {
+				fmt.Printf("  Sandboxes:\n")
+				for _, s := range n.Sandboxes {
+					fmt.Printf("    - %s\n", s)
+				}
+			} else {
+				fmt.Printf("  Sandboxes: (none)\n")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json")
+	return cmd
+}
+
+func networkConnectCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "connect <network> <sandbox>",
+		Short: "Connect a sandbox to a custom network",
+		Long: `Attach a sandbox to a named network so it can communicate with other
+sandboxes on the same network.
+
+Examples:
+  tent network connect mynet agent-box
+  tent network connect shared-net db-box`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			networkName := args[0]
+			sandboxName := args[1]
+			baseDir := getBaseDir()
+
+			store, err := network.NewNetworkStore(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open network store: %w", err)
+			}
+
+			if err := store.ConnectSandbox(networkName, sandboxName); err != nil {
+				return err
+			}
+
+			fmt.Printf("Connected sandbox %q to network %q\n", sandboxName, networkName)
+			return nil
+		},
+	}
+}
+
+func networkDisconnectCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disconnect <network> <sandbox>",
+		Short: "Disconnect a sandbox from a custom network",
+		Long: `Detach a sandbox from a named network.
+
+Examples:
+  tent network disconnect mynet agent-box`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			networkName := args[0]
+			sandboxName := args[1]
+			baseDir := getBaseDir()
+
+			store, err := network.NewNetworkStore(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open network store: %w", err)
+			}
+
+			if err := store.DisconnectSandbox(networkName, sandboxName); err != nil {
+				return err
+			}
+
+			fmt.Printf("Disconnected sandbox %q from network %q\n", sandboxName, networkName)
+			return nil
+		},
+	}
+}
+
+func networkLsCmd() *cobra.Command {
+	var quiet bool
+
+	cmd := &cobra.Command{
+		Use:   "ls",
+		Short: "List custom networks",
+		Long: `List all user-created networks with their subnet, gateway, and
+connected sandbox count.
+
+Examples:
+  tent network ls
+  tent network ls -q`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+
+			store, err := network.NewNetworkStore(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open network store: %w", err)
+			}
+
+			networks := store.ListNetworks()
+			if len(networks) == 0 {
+				fmt.Println("No custom networks found.")
+				return nil
+			}
+
+			if quiet {
+				for _, n := range networks {
+					fmt.Println(n.Name)
+				}
+				return nil
+			}
+
+			fmt.Printf("%-20s %-8s %-20s %-16s %-10s %s\n",
+				"NAME", "DRIVER", "SUBNET", "GATEWAY", "INTERNAL", "SANDBOXES")
+			for _, n := range networks {
+				internalStr := "no"
+				if n.Internal {
+					internalStr = "yes"
+				}
+				fmt.Printf("%-20s %-8s %-20s %-16s %-10s %d\n",
+					n.Name, n.Driver, n.Subnet, n.Gateway, internalStr, len(n.Sandboxes))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Only show network names")
+	return cmd
 }
 
 // parsePortMapping parses "host:guest" port mapping string
