@@ -266,6 +266,126 @@ The principle is: **write as much as possible, but don't reimplement kernel inte
 
 Everything else — sandbox orchestration, virtio device emulation, boot protocol, networking, egress firewall, image conversion, compose engine, state tracking — is code that tent writes itself.
 
+## Quickstart
+
+### Build
+
+```bash
+cd project
+go build -o tent ./cmd/tent
+```
+
+### Pull an image and create a sandbox
+
+```bash
+# Pull an image from Docker Hub (or any OCI registry)
+tent image pull ubuntu:22.04
+
+# Create a sandbox from the image
+tent create my-sandbox --from ubuntu:22.04
+
+# Start it
+tent start my-sandbox
+```
+
+### Run commands and interact
+
+```bash
+# Execute a command inside the running sandbox
+tent exec my-sandbox -- ls /
+tent exec my-sandbox -- apt-get update
+
+# SSH into the sandbox for interactive use
+tent ssh my-sandbox
+
+# View console/boot logs
+tent logs my-sandbox
+```
+
+### Control network access
+
+By default, all outbound traffic is blocked. Allowlist only what you need:
+
+```bash
+# Allow the sandbox to reach specific APIs
+tent network allow my-sandbox api.anthropic.com
+tent network allow my-sandbox openrouter.ai
+
+# Check what's allowed
+tent network status my-sandbox
+
+# Revoke access
+tent network deny my-sandbox openrouter.ai
+```
+
+### Orchestrate a multi-sandbox app
+
+Create a `tent-compose.yaml`:
+
+```yaml
+sandboxes:
+  agent:
+    from: ubuntu:22.04
+    vcpus: 2
+    memory_mb: 2048
+    network:
+      allow: [api.anthropic.com, openrouter.ai]
+    env:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    hooks:
+      post_start:
+        - /app/warmup.sh
+
+  tool-runner:
+    from: python:3.12-slim
+    vcpus: 1
+    memory_mb: 512
+    depends_on: [agent]
+    network:
+      allow: []  # no external access — talks only to other sandboxes
+    health_check:
+      command: [curl, -f, http://localhost:8000/health]
+      interval_sec: 30
+    restart: on-failure
+
+  shared-db:
+    from: postgres:16
+    vcpus: 1
+    memory_mb: 1024
+    network:
+      allow: []
+
+volumes:
+  shared-data:
+    size_mb: 1024
+```
+
+All sandboxes in a compose group share a private network and can reach each other by name (e.g., `tool-runner` can connect to `shared-db:5432`).
+
+```bash
+# Start everything (respects depends_on order)
+tent compose up tent-compose.yaml
+
+# Check status
+tent compose status tent-compose.yaml
+
+# View logs across all sandboxes
+tent compose logs tent-compose.yaml --follow
+
+# Run a command in a specific service
+tent compose exec tent-compose.yaml agent -- curl http://tool-runner:8000/status
+
+# Tear it all down
+tent compose down tent-compose.yaml
+```
+
+### Clean up
+
+```bash
+tent stop my-sandbox
+tent destroy my-sandbox
+```
+
 ## Development
 
 ### Prerequisites
