@@ -36,6 +36,7 @@ func networkCmd() *cobra.Command {
 	cmd.AddCommand(networkBandwidthCmd())
 	cmd.AddCommand(networkLatencyCmd())
 	cmd.AddCommand(networkProxyCmd())
+	cmd.AddCommand(networkTraceCmd())
 
 	return cmd
 }
