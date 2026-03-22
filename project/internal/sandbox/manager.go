@@ -83,7 +83,8 @@ type VMManager struct {
 	policyMgr      *network.PolicyManager
 	egressFirewall *network.EgressFirewall
 	mountMgr       *MountManager
-	eventLogger    *EventLogger
+	eventLogger     *EventLogger
+	webhookMgr      *WebhookManager
 	resourceLimiter *ResourceLimiter
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
@@ -142,7 +143,8 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		policyMgr:      policyMgr,
 		egressFirewall: egressFw,
 		mountMgr:       NewMountManager(baseDir),
-		eventLogger:    NewEventLogger(baseDir),
+		eventLogger:     NewEventLogger(baseDir),
+		webhookMgr:      NewWebhookManager(baseDir),
 		resourceLimiter: NewResourceLimiter(baseDir),
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
@@ -160,11 +162,24 @@ func (m *VMManager) logEvent(eventType EventType, sandbox string, details map[st
 	if m.eventLogger != nil {
 		_ = m.eventLogger.Log(eventType, sandbox, details)
 	}
+	if m.webhookMgr != nil {
+		m.webhookMgr.Deliver(Event{
+			Timestamp: time.Now().UTC(),
+			Type:      eventType,
+			Sandbox:   sandbox,
+			Details:   details,
+		})
+	}
 }
 
 // EventLogger returns the event logger for external use
 func (m *VMManager) EventLog() *EventLogger {
 	return m.eventLogger
+}
+
+// WebhookManager returns the webhook manager for external use.
+func (m *VMManager) WebhookMgr() *WebhookManager {
+	return m.webhookMgr
 }
 
 // GetResourceLimits returns the applied resource limits for a sandbox.
