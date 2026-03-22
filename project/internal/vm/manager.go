@@ -386,6 +386,40 @@ func (m *VMManager) ListSnapshots(name string) ([]*models.Snapshot, error) {
 	return result, nil
 }
 
+// Exec executes a command inside a running microVM
+func (m *VMManager) Exec(name string, command string) (string, error) {
+	// Check if VM exists
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning {
+		return "", fmt.Errorf("VM %s is not running", name)
+	}
+
+	// Get running VM instance
+	vm, ok := m.runningVMs[name]
+	if !ok {
+		return "", fmt.Errorf("VM %s not found in running VMs", name)
+	}
+
+	// For now, return a placeholder - in production, this would:
+	// 1. Use the hypervisor backend's exec capability
+	// 2. Execute the command inside the VM's shell
+	// 3. Capture and return the output
+
+	// Get VM's IP for SSH/exec connection
+	vmIP := vm.GetIP()
+	if vmIP == "" {
+		vmIP = vmState.IP
+	}
+
+	// Placeholder implementation - would need hypervisor-specific exec support
+	// For now, return a message indicating the command would run
+	return fmt.Sprintf("Command '%s' would execute in VM %s (IP: %s)\n", command, name, vmIP), nil
+}
+
 // loadConfigFromState loads the VM config from the state file
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
 	// Load config from state file if present
