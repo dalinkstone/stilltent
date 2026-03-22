@@ -4,10 +4,55 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/dalinkstone/tent/internal/sandbox"
 	"github.com/dalinkstone/tent/pkg/models"
 )
+
+// envVarPattern matches ${VAR} and $VAR references in strings
+var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// expandEnvVars expands environment variable references in a string.
+// Supports ${VAR}, ${VAR:-default}, and $VAR syntax.
+// Unset variables without defaults expand to empty string.
+func expandEnvVars(s string) string {
+	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		// Strip ${ } or $ prefix
+		var varExpr string
+		if strings.HasPrefix(match, "${") {
+			varExpr = match[2 : len(match)-1]
+		} else {
+			varExpr = match[1:]
+		}
+
+		// Check for default value syntax: VAR:-default
+		if idx := strings.Index(varExpr, ":-"); idx >= 0 {
+			name := varExpr[:idx]
+			defaultVal := varExpr[idx+2:]
+			if val, ok := os.LookupEnv(name); ok {
+				return val
+			}
+			return defaultVal
+		}
+
+		return os.Getenv(varExpr)
+	})
+}
+
+// expandSandboxEnv expands all environment variable references in a
+// sandbox's env map, returning a new map with resolved values.
+func expandSandboxEnv(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return env
+	}
+	expanded := make(map[string]string, len(env))
+	for k, v := range env {
+		expanded[k] = expandEnvVars(v)
+	}
+	return expanded
+}
 
 // NewComposeManager creates a new compose manager
 func NewComposeManager(baseDir string, vmManager *vm.VMManager, stateManager StateManager) *ComposeManager {
@@ -31,14 +76,26 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 	}
 
 	for sandboxName, sandboxConfig := range config.Sandboxes {
+		// Expand environment variable references from host env
+		expandedEnv := expandSandboxEnv(sandboxConfig.Env)
+
+		// Build network config with allow/deny from compose
+		netConfig := models.NetworkConfig{}
+		if sandboxConfig.Network != nil {
+			netConfig.Allow = sandboxConfig.Network.Allow
+			netConfig.Deny = sandboxConfig.Network.Deny
+		}
+
 		// Create sandbox configuration
 		vmConfig := &models.VMConfig{
 			Name:     sandboxName,
+			From:     sandboxConfig.From,
 			VCPUs:    sandboxConfig.VCPUs,
 			MemoryMB: sandboxConfig.MemoryMB,
 			DiskGB:   sandboxConfig.DiskGB,
 			Mounts:   make([]models.MountConfig, len(sandboxConfig.Mounts)),
-			Env:      sandboxConfig.Env,
+			Env:      expandedEnv,
+			Network:  netConfig,
 		}
 
 		// Convert mounts
