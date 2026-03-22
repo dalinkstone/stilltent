@@ -286,6 +286,9 @@ type VMState struct {
 	Devices        []DeviceState    `json:"devices,omitempty"`
 	TTL            string           `json:"ttl,omitempty"`
 	TTLExpiresAt   int64            `json:"ttl_expires_at,omitempty"`
+	Locked         bool             `json:"locked,omitempty"`
+	LockedReason   string           `json:"locked_reason,omitempty"`
+	LockedAt       int64            `json:"locked_at,omitempty"`
 }
 
 // DeviceState tracks a passthrough device attached to a sandbox

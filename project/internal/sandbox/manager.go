@@ -549,6 +549,10 @@ func (m *VMManager) Start(name string) error {
 
 // Stop gracefully shuts down a running microVM
 func (m *VMManager) Stop(name string) error {
+	if err := m.checkLock(name); err != nil {
+		return err
+	}
+
 	vmState, err := m.stateManager.GetVM(name)
 	if err != nil {
 		return fmt.Errorf("VM not found: %w", err)
@@ -772,6 +776,10 @@ func (m *VMManager) SetRestartPolicy(name string, policy models.RestartPolicy) e
 
 // Destroy removes a microVM and all its resources
 func (m *VMManager) Destroy(name string) error {
+	if err := m.checkLock(name); err != nil {
+		return err
+	}
+
 	vmState, err := m.stateManager.GetVM(name)
 	if err != nil {
 		return fmt.Errorf("VM not found: %w", err)
@@ -1336,6 +1344,10 @@ func (m *VMManager) LoadConfig(name string) (*models.VMConfig, error) {
 
 // UpdateConfig updates the persisted VMConfig and state for a stopped sandbox.
 func (m *VMManager) UpdateConfig(name string, config *models.VMConfig) error {
+	if err := m.checkLock(name); err != nil {
+		return err
+	}
+
 	// Save the updated config to disk
 	config.Name = name
 	if err := m.saveConfig(config); err != nil {
@@ -1946,4 +1958,66 @@ func (m *VMManager) GetLabels(name string) (map[string]string, error) {
 		return map[string]string{}, nil
 	}
 	return vmState.Labels, nil
+}
+
+// Lock prevents a sandbox from being stopped, destroyed, or modified
+func (m *VMManager) Lock(name string, reason string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+	if vmState.Locked {
+		return fmt.Errorf("sandbox %q is already locked", name)
+	}
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Locked = true
+		s.LockedReason = reason
+		s.LockedAt = time.Now().Unix()
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to lock sandbox: %w", err)
+	}
+
+	m.logEvent(EventType("lock"), name, map[string]string{"reason": reason})
+	return nil
+}
+
+// Unlock removes the lock from a sandbox, allowing modifications again
+func (m *VMManager) Unlock(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+	if !vmState.Locked {
+		return fmt.Errorf("sandbox %q is not locked", name)
+	}
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Locked = false
+		s.LockedReason = ""
+		s.LockedAt = 0
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to unlock sandbox: %w", err)
+	}
+
+	m.logEvent(EventType("unlock"), name, nil)
+	return nil
+}
+
+// checkLock returns an error if the sandbox is locked
+func (m *VMManager) checkLock(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil // will fail later with proper error
+	}
+	if vmState.Locked {
+		reason := ""
+		if vmState.LockedReason != "" {
+			reason = fmt.Sprintf(" (reason: %s)", vmState.LockedReason)
+		}
+		return fmt.Errorf("sandbox %q is locked%s — use 'tent unlock %s' to unlock it first", name, reason, name)
+	}
+	return nil
 }
