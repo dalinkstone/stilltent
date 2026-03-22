@@ -17,6 +17,7 @@ type VMNetManager struct {
 	ipRange     string
 	dhcpRange   string
 	ifaceName   string
+	firewall    *EgressFirewall
 }
 
 // NewManager creates a new network manager for macOS (overrides the Linux version)
@@ -123,15 +124,26 @@ func GetVMNetPath() string {
 }
 
 // ApplyNetworkPolicy applies egress firewall rules for a sandbox on macOS
+// using the PF-based egress firewall engine
 func (m *VMNetManager) ApplyNetworkPolicy(vmName string, policy *Policy) error {
-	// On macOS with vmnet.framework, the vmnet interface uses NAT mode
-	// which blocks all outbound traffic by default
-	// The actual enforcement is handled by the hypervisor backend
-	return nil
+	if m.firewall == nil {
+		m.firewall = NewEgressFirewall()
+	}
+	return m.firewall.ApplyPolicy(vmName, policy)
 }
 
 // RemoveNetworkPolicy removes egress firewall rules for a sandbox on macOS
 func (m *VMNetManager) RemoveNetworkPolicy(vmName string) error {
-	// No explicit cleanup needed for vmnet on macOS
-	return nil
+	if m.firewall == nil {
+		return nil
+	}
+	return m.firewall.RemovePolicy(vmName)
+}
+
+// SetSandboxIP sets the IP address for a sandbox in the egress firewall
+func (m *VMNetManager) SetSandboxIP(vmName string, ip string) {
+	if m.firewall == nil {
+		m.firewall = NewEgressFirewall()
+	}
+	m.firewall.SetSandboxIP(vmName, ip)
 }

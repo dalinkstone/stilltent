@@ -29,6 +29,7 @@ type defaultManager struct {
 	bridgeName string
 	ipRange    string
 	dhcpRange  string
+	firewall   *EgressFirewall
 }
 
 // NewManager creates a new network manager for the current platform
@@ -243,15 +244,26 @@ func (m *defaultManager) listTapDevices() ([]*NetworkResource, error) {
 	return devices, nil
 }
 
-// ApplyNetworkPolicy applies egress firewall rules for a sandbox
+// ApplyNetworkPolicy applies egress firewall rules for a sandbox using iptables
 func (m *defaultManager) ApplyNetworkPolicy(vmName string, policy *Policy) error {
-	// For now, this is a no-op - the egress firewall is managed by the VM manager
-	// The actual enforcement is platform-specific (iptables on Linux, vmnet on macOS)
-	return nil
+	if m.firewall == nil {
+		m.firewall = NewEgressFirewall()
+	}
+	return m.firewall.ApplyPolicy(vmName, policy)
 }
 
 // RemoveNetworkPolicy removes egress firewall rules for a sandbox
 func (m *defaultManager) RemoveNetworkPolicy(vmName string) error {
-	// For now, this is a no-op
-	return nil
+	if m.firewall == nil {
+		return nil
+	}
+	return m.firewall.RemovePolicy(vmName)
+}
+
+// SetSandboxIP sets the IP address for a sandbox in the egress firewall
+func (m *defaultManager) SetSandboxIP(vmName string, ip string) {
+	if m.firewall == nil {
+		m.firewall = NewEgressFirewall()
+	}
+	m.firewall.SetSandboxIP(vmName, ip)
 }
