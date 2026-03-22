@@ -2,7 +2,7 @@
 -include .env
 export
 
-.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run
+.PHONY: up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once
 
 # Start all services (initializes DB on first run if needed)
 up:
@@ -261,3 +261,15 @@ reset-metrics:
 	@echo '{}' > workspace/metrics.json
 	@rm -f workspace/PAUSE
 	@echo "Metrics cleared and PAUSE removed."
+
+# Install Claude Code on the VPS (run on VPS)
+setup-claude:
+	@bash scripts/vps-install-claude.sh
+
+# Run Claude Code dev loop (forever)
+dev-loop:
+	@bash scripts/dev-loop.sh
+
+# Run a single Claude Code iteration (for testing)
+dev-loop-once:
+	@bash scripts/dev-loop.sh --once
