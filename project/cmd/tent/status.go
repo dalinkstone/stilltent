@@ -71,6 +71,9 @@ func ConfigureStatusCmd(options ...CommonCmdOption) *cobra.Command {
 			fmt.Printf("  TAP:       %s\n", vmState.TAPDevice)
 			fmt.Printf("  Socket:    %s\n", vmState.SocketPath)
 			fmt.Printf("  SSH Key:   %s\n", vmState.SSHKeyPath)
+			if vmState.RestartPolicy != "" {
+				fmt.Printf("  Restart:   %s (count: %d)\n", vmState.RestartPolicy, vmState.RestartCount)
+			}
 			fmt.Printf("  Created:   %d\n", vmState.CreatedAt)
 			fmt.Printf("  Updated:   %d\n", vmState.UpdatedAt)
 

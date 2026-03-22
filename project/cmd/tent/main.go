@@ -30,6 +30,7 @@ func main() {
 	rootCmd.AddCommand(imageCmd())
 	rootCmd.AddCommand(composeCmd())
 	rootCmd.AddCommand(execCmd())
+	rootCmd.AddCommand(restartCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

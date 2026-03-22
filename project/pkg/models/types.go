@@ -27,8 +27,21 @@ type VMConfig struct {
 	DiskGB    int           `yaml:"disk_gb" json:"disk_gb"`
 	Network   NetworkConfig `yaml:"network" json:"network"`
 	Mounts    []MountConfig `yaml:"mounts" json:"mounts,omitempty"`
-	Env       map[string]string `yaml:"env" json:"env,omitempty"`
+	Env            map[string]string `yaml:"env" json:"env,omitempty"`
+	RestartPolicy  RestartPolicy     `yaml:"restart_policy" json:"restart_policy,omitempty"`
 }
+
+// RestartPolicy defines the restart behavior for a sandbox
+type RestartPolicy string
+
+const (
+	// RestartPolicyNever never auto-restarts the sandbox (default)
+	RestartPolicyNever RestartPolicy = "never"
+	// RestartPolicyAlways always restarts the sandbox when it stops
+	RestartPolicyAlways RestartPolicy = "always"
+	// RestartPolicyOnFailure restarts the sandbox only on non-zero exit
+	RestartPolicyOnFailure RestartPolicy = "on-failure"
+)
 
 // NetworkConfig represents network configuration for a VM
 type NetworkConfig struct {
@@ -66,8 +79,10 @@ type VMState struct {
 	VCPUs       int        `json:"vcpus,omitempty"`
 	MemoryMB    int        `json:"memory_mb,omitempty"`
 	DiskGB      int        `json:"disk_gb,omitempty"`
-	CreatedAt   int64      `json:"created_at"`
-	UpdatedAt   int64      `json:"updated_at"`
+	CreatedAt      int64         `json:"created_at"`
+	UpdatedAt      int64         `json:"updated_at"`
+	RestartCount   int           `json:"restart_count,omitempty"`
+	RestartPolicy  RestartPolicy `json:"restart_policy,omitempty"`
 }
 
 // Snapshot represents a VM snapshot

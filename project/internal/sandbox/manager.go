@@ -388,6 +388,70 @@ func (m *VMManager) Stop(name string) error {
 	return nil
 }
 
+// Restart stops and starts a running microVM, incrementing the restart count
+func (m *VMManager) Restart(name string, timeoutSec int) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning {
+		return fmt.Errorf("VM %s is not running (status: %s)", name, vmState.Status)
+	}
+
+	// Stop the VM
+	if err := m.Stop(name); err != nil {
+		return fmt.Errorf("failed to stop VM during restart: %w", err)
+	}
+
+	// Wait briefly for clean shutdown if timeout specified
+	if timeoutSec > 0 {
+		time.Sleep(time.Duration(timeoutSec) * time.Second)
+	}
+
+	// Start the VM again
+	if err := m.Start(name); err != nil {
+		return fmt.Errorf("failed to start VM during restart: %w", err)
+	}
+
+	// Update restart count
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.RestartCount++
+		s.UpdatedAt = time.Now().Unix()
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update restart count: %w", err)
+	}
+
+	return nil
+}
+
+// SetRestartPolicy updates the restart policy for a sandbox
+func (m *VMManager) SetRestartPolicy(name string, policy models.RestartPolicy) error {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	// Validate policy
+	switch policy {
+	case models.RestartPolicyNever, models.RestartPolicyAlways, models.RestartPolicyOnFailure:
+		// valid
+	default:
+		return fmt.Errorf("invalid restart policy %q: must be never, always, or on-failure", policy)
+	}
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.RestartPolicy = policy
+		s.UpdatedAt = time.Now().Unix()
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update restart policy: %w", err)
+	}
+
+	return nil
+}
+
 // Destroy removes a microVM and all its resources
 func (m *VMManager) Destroy(name string) error {
 	vmState, err := m.stateManager.GetVM(name)
