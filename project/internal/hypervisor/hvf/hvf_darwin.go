@@ -20,20 +20,18 @@ static const char* hvm_error_string(hv_return_t ret) {
     switch (ret) {
         case HV_SUCCESS:
             return "HV_SUCCESS";
-        case HV_NO_RESOURCE:
-            return "HV_NO_RESOURCE";
-        case HV_NO_SPACE:
-            return "HV_NO_SPACE";
+        case HV_ERROR:
+            return "HV_ERROR";
+        case HV_BUSY:
+            return "HV_BUSY";
         case HV_BAD_ARGUMENT:
             return "HV_BAD_ARGUMENT";
-        case HV_IN_USE:
-            return "HV_IN_USE";
-        case HV_NO_PRIVILEGE:
-            return "HV_NO_PRIVILEGE";
-        case HV_IO_ERROR:
-            return "HV_IO_ERROR";
-        case HV_VM_CONFIG_ERROR:
-            return "HV_VM_CONFIG_ERROR";
+        case HV_NO_RESOURCES:
+            return "HV_NO_RESOURCES";
+        case HV_NO_DEVICE:
+            return "HV_NO_DEVICE";
+        case HV_UNSUPPORTED:
+            return "HV_UNSUPPORTED";
         default:
             return "HV_UNKNOWN_ERROR";
     }
@@ -58,11 +56,11 @@ type Backend struct {
 
 // VM represents a Hypervisor.framework virtual machine
 type VM struct {
-	config   *models.VMConfig
-	backend  *Backend
-	vmRef    C.hv_vm_t
-	running  bool
-	ip       string
+	config    *models.VMConfig
+	backend   *Backend
+	vcpuID    C.hv_vcpuid_t
+	running   bool
+	ip        string
 	tapDevice string
 }
 
@@ -91,7 +89,7 @@ func (b *Backend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
 	vm := &VM{
 		config:    config,
 		backend:   b,
-		vmRef:     nil, // Will be set during Start
+		vcpuID:    0, // Will be set during Start
 		running:   false,
 		tapDevice: "", // Will be set during Start
 	}
@@ -145,9 +143,9 @@ func (v *VM) Start() error {
 	// Allocate VM memory
 	memorySize := uint64(v.config.MemoryMB * 1024 * 1024) // Convert MB to bytes
 
-	// Create VM
+	// Create VM - Hypervisor.framework uses per-task VM, no handle returned
 	var ret C.hv_return_t
-	ret = C.hv_vm_create(&v.vmRef)
+	ret = C.hv_vm_create(C.HV_VM_DEFAULT)
 	if ret != C.HV_SUCCESS {
 		return fmt.Errorf("failed to create VM: %s", C.GoString(C.hvm_error_string(ret)))
 	}
@@ -166,8 +164,7 @@ func (v *VM) Start() error {
 		return fmt.Errorf("failed to allocate guest memory")
 	}
 
-	// Map memory to VM
-	// Note: hv_vm_map signature is (uva, gpa, size, flags) - no vmRef parameter
+	// Map memory to VM - signature: (uva, gpa, size, flags) - no vmRef parameter
 	// The VM is implicitly associated with the current task after hv_vm_create
 	ret = C.hv_vm_map(
 		C.hv_uvaddr_t(unsafe.Pointer(memoryPtr)),
@@ -181,8 +178,7 @@ func (v *VM) Start() error {
 	}
 
 	// Create vCPU
-	var vcpuRef C.hv_vcpu_t
-	ret = C.hv_vcpu_create(&vcpuRef, nil)
+	ret = C.hv_vcpu_create(&v.vcpuID, C.HV_VCPU_DEFAULT)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
 		return fmt.Errorf("failed to create vCPU: %s", C.GoString(C.hvm_error_string(ret)))
@@ -193,7 +189,7 @@ func (v *VM) Start() error {
 	// In production, this would set up proper x86/ARM registers for the guest kernel
 
 	// Start the vCPU execution loop
-	if err := v.runVCPU(vcpuRef); err != nil {
+	if err := v.runVCPU(v.vcpuID); err != nil {
 		C.munmap(memoryPtr, C.size_t(memorySize))
 		return fmt.Errorf("failed to start vCPU: %w", err)
 	}
@@ -205,13 +201,13 @@ func (v *VM) Start() error {
 }
 
 // runVCPU executes the vCPU loop using Hypervisor.framework
-func (v *VM) runVCPU(vcpuRef C.hv_vcpu_t) error {
+func (v *VM) runVCPU(vcpuID C.hv_vcpuid_t) error {
 	// The vCPU execution loop - runs until the VM stops or an error occurs
 	// This implements the basic HVF vCPU execution loop using hv_vcpu_run
 
 	for v.running {
 		// Run the vCPU until it exits
-		ret := C.hv_vcpu_run(vcpuRef)
+		ret := C.hv_vcpu_run(vcpuID)
 		if ret != C.HV_SUCCESS {
 			return fmt.Errorf("vCPU run failed: %s", C.GoString(C.hvm_error_string(ret)))
 		}
@@ -279,14 +275,11 @@ func (v *VM) Cleanup() error {
 		_ = v.Stop()
 	}
 
-	// Unmap memory if allocated
-	if v.vmRef != nil {
-		// In a full implementation, we would unmap memory and destroy the VM
-		// This is a simplified version
-	}
+	// In Hypervisor.framework, there's no explicit cleanup needed for the VM
+	// The per-task VM is automatically destroyed when the task ends
+	// A complete implementation would call hv_vm_destroy() if needed
 
 	v.running = false
-	v.vmRef = nil
 
 	return nil
 }
