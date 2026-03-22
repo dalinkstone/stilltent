@@ -86,6 +86,7 @@ type VMManager struct {
 	eventLogger     *EventLogger
 	webhookMgr      *WebhookManager
 	resourceLimiter *ResourceLimiter
+	accounting      *AccountingManager
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -133,6 +134,8 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 
 	egressFw := network.NewEgressFirewall()
 
+	acctMgr, _ := NewAccountingManager(baseDir)
+
 	return &VMManager{
 		stateManager:   stateManager,
 		hypervisor:     hv,
@@ -146,6 +149,7 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		eventLogger:     NewEventLogger(baseDir),
 		webhookMgr:      NewWebhookManager(baseDir),
 		resourceLimiter: NewResourceLimiter(baseDir),
+		accounting:      acctMgr,
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -537,6 +541,11 @@ func (m *VMManager) Start(name string) error {
 
 	m.logEvent(EventStart, name, nil)
 
+	// Record start in accounting
+	if m.accounting != nil {
+		_ = m.accounting.RecordStart(name, config.VCPUs, config.MemoryMB)
+	}
+
 	// Run post-start lifecycle hooks (non-fatal)
 	if config.Hooks != nil {
 		if _, err := m.RunHooks(name, config.Hooks, HookPostStart); err != nil {
@@ -625,6 +634,11 @@ func (m *VMManager) Stop(name string) error {
 
 	m.logEvent(EventStop, name, nil)
 
+	// Record stop in accounting
+	if m.accounting != nil {
+		_ = m.accounting.RecordStop(name)
+	}
+
 	// Run post-stop lifecycle hooks (non-fatal)
 	if config != nil && config.Hooks != nil {
 		if _, err := m.RunHooks(name, config.Hooks, HookPostStop); err != nil {
@@ -633,6 +647,11 @@ func (m *VMManager) Stop(name string) error {
 	}
 
 	return nil
+}
+
+// Accounting returns the accounting manager for external use.
+func (m *VMManager) Accounting() *AccountingManager {
+	return m.accounting
 }
 
 // Pause freezes a running sandbox's vCPUs without tearing it down.
