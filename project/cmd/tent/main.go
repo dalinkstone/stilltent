@@ -92,6 +92,7 @@ func main() {
 	rootCmd.AddCommand(groupCmd())
 	rootCmd.AddCommand(volumeCmd())
 	rootCmd.AddCommand(poolCmd())
+	rootCmd.AddCommand(workspaceCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
