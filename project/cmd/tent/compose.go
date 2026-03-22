@@ -46,6 +46,9 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeHooksCmd())
 	cmd.AddCommand(composeProfilesCmd())
 	cmd.AddCommand(composeWatchCmd())
+	cmd.AddCommand(composeEventsCmd())
+	cmd.AddCommand(composeTopCmd())
+	cmd.AddCommand(composePortCmd())
 
 	return cmd
 }
@@ -1859,5 +1862,314 @@ Examples:
 	cmd.Flags().IntVar(&intervalSec, "interval", 2, "Polling interval in seconds")
 	cmd.Flags().StringSliceVar(&services, "service", nil, "Watch only specific services")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Detect changes without restarting sandboxes")
+	return cmd
+}
+
+func composeEventsCmd() *cobra.Command {
+	var (
+		follow    bool
+		jsonOut   bool
+		eventType string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "events <file>",
+		Short: "Stream lifecycle events for a compose group",
+		Long: `Display or stream lifecycle events scoped to the sandboxes in a compose group.
+Shows events like create, start, stop, destroy, snapshot, health checks, and hooks.
+
+Examples:
+  tent compose events compose.yaml
+  tent compose events compose.yaml --follow
+  tent compose events compose.yaml --json
+  tent compose events compose.yaml --type start`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			groupName := composeGroupName(filePath)
+
+			// Build set of sandbox names in this compose group
+			sandboxNames := make(map[string]bool)
+			for name := range config.Sandboxes {
+				sandboxNames[groupName+"-"+name] = true
+				sandboxNames[name] = true
+			}
+
+			baseDir := getBaseDir()
+			logger := vm.NewEventLogger(baseDir)
+
+			if follow {
+				// Stream events in real-time
+				done := make(chan struct{})
+				filter := vm.EventFilter{}
+				if eventType != "" {
+					filter.Type = vm.EventType(eventType)
+				}
+
+				ch := logger.Watch(filter, 500*time.Millisecond, done)
+
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt)
+
+				fmt.Printf("Streaming events for compose group '%s' (Ctrl+C to stop)...\n", groupName)
+
+				for {
+					select {
+					case <-sigCh:
+						close(done)
+						return nil
+					case we, ok := <-ch:
+						if !ok {
+							return nil
+						}
+						if we.Err != nil {
+							fmt.Fprintf(os.Stderr, "event error: %v\n", we.Err)
+							continue
+						}
+						if !sandboxNames[we.Event.Sandbox] {
+							continue
+						}
+						printComposeEvent(we.Event, jsonOut)
+					}
+				}
+			}
+
+			// Non-follow mode: show historical events
+			filter := vm.EventFilter{
+				Limit: 100,
+			}
+			if eventType != "" {
+				filter.Type = vm.EventType(eventType)
+			}
+
+			events, err := logger.Query(filter)
+			if err != nil {
+				return fmt.Errorf("failed to query events: %w", err)
+			}
+
+			// Filter to only sandboxes in this compose group
+			count := 0
+			for _, ev := range events {
+				if !sandboxNames[ev.Sandbox] {
+					continue
+				}
+				printComposeEvent(ev, jsonOut)
+				count++
+			}
+
+			if count == 0 {
+				fmt.Printf("No events found for compose group '%s'\n", groupName)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream events in real-time")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output events as JSON")
+	cmd.Flags().StringVar(&eventType, "type", "", "Filter by event type (e.g. start, stop, create)")
+	return cmd
+}
+
+func printComposeEvent(ev vm.Event, jsonOut bool) {
+	if jsonOut {
+		data, _ := json.Marshal(ev)
+		fmt.Println(string(data))
+		return
+	}
+
+	ts := ev.Timestamp.Local().Format("2006-01-02 15:04:05")
+	details := ""
+	if len(ev.Details) > 0 {
+		parts := make([]string, 0, len(ev.Details))
+		for k, v := range ev.Details {
+			parts = append(parts, k+"="+v)
+		}
+		sort.Strings(parts)
+		details = " " + strings.Join(parts, " ")
+	}
+	fmt.Printf("%s  %-20s  %-22s%s\n", ts, ev.Sandbox, ev.Type, details)
+}
+
+func composeTopCmd() *cobra.Command {
+	var sortBy string
+
+	cmd := &cobra.Command{
+		Use:   "top <file>",
+		Short: "Display running processes across all sandboxes in a compose group",
+		Long: `Show running processes inside each sandbox of a compose group.
+Aggregates ps output from all running sandboxes in the group.
+
+Examples:
+  tent compose top compose.yaml
+  tent compose top compose.yaml --sort cpu`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+			status, err := manager.Status(groupName)
+			if err != nil {
+				return fmt.Errorf("failed to get compose status: %w", err)
+			}
+
+			baseDir := getBaseDir()
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+			vmManager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+			if err := vmManager.Setup(); err != nil {
+				return fmt.Errorf("failed to setup VM manager: %w", err)
+			}
+
+			// Iterate through sandboxes and collect process info
+			for name := range config.Sandboxes {
+				sbStatus, ok := status.Sandboxes[name]
+				if !ok || sbStatus.Status != "running" {
+					continue
+				}
+
+				vmName := groupName + "-" + name
+				output, _, err := vmManager.Exec(vmName, []string{"ps", "aux"})
+				if err != nil {
+					fmt.Printf("\n=== %s (failed to get processes: %v) ===\n", name, err)
+					continue
+				}
+
+				processes, err := parsePSOutput(output)
+				if err != nil {
+					fmt.Printf("\n=== %s (failed to parse processes) ===\n", name)
+					continue
+				}
+
+				sortProcesses(processes, sortBy)
+
+				fmt.Printf("\n=== %s ===\n", name)
+				printProcessTable(processes, false)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sortBy, "sort", "pid", "Sort by field: pid, cpu, mem, user, command")
+	return cmd
+}
+
+func composePortCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "port <file> [service]",
+		Short: "Show port mappings for sandboxes in a compose group",
+		Long: `Display host-to-guest port mappings configured for sandboxes in a compose group.
+Optionally filter to a specific service name.
+
+Examples:
+  tent compose port compose.yaml
+  tent compose port compose.yaml web`,
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+			filterService := ""
+			if len(args) > 1 {
+				filterService = args[1]
+			}
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			found := false
+			for name, sb := range config.Sandboxes {
+				if filterService != "" && name != filterService {
+					continue
+				}
+				if sb.Network == nil {
+					continue
+				}
+
+				// Check for port mappings via the sandbox config's network ports
+				// The port spec is typically in the sandbox's full config (from models.VMConfig)
+				// For compose, we show the allow/deny network policy and any port info
+				if !found {
+					fmt.Printf("%-15s %-8s %-10s %-10s\n", "SERVICE", "PROTO", "HOST", "GUEST")
+					found = true
+				}
+
+				// Compose configs may not have explicit port mappings in the network block,
+				// but we can check for them via the running VM state
+				baseDir := getBaseDir()
+				hvBackend, bErr := vm.NewPlatformBackend(baseDir)
+				if bErr != nil {
+					continue
+				}
+				vmManager, mErr := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+				if mErr != nil {
+					continue
+				}
+				if sErr := vmManager.Setup(); sErr != nil {
+					continue
+				}
+
+				groupName := composeGroupName(filePath)
+				vmName := groupName + "-" + name
+				forwards, _ := vmManager.ListPortForwards(vmName)
+				for _, pf := range forwards {
+					fmt.Printf("%-15s %-8s %-10d %-10d\n", name, "tcp", pf.HostPort, pf.GuestPort)
+				}
+
+				if len(forwards) == 0 {
+					// Show network policy instead
+					if len(sb.Network.Allow) > 0 {
+						for _, ep := range sb.Network.Allow {
+							fmt.Printf("%-15s %-8s %-10s %-10s\n", name, "egress", "->", ep)
+						}
+					}
+				}
+			}
+
+			if !found {
+				fmt.Println("No port mappings configured in this compose group.")
+			}
+
+			return nil
+		},
+	}
+
 	return cmd
 }
