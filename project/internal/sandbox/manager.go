@@ -151,6 +151,12 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		}
 	}
 
+	// Generate SSH keypair for this sandbox
+	keyPair, err := GenerateSSHKeys(m.baseDir, name)
+	if err != nil {
+		return fmt.Errorf("failed to generate SSH keys: %w", err)
+	}
+
 	// Persist the full config so it survives stop/start cycles
 	if err := m.saveConfig(config); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
@@ -162,6 +168,7 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		Status:      models.VMStatusCreated,
 		RootFSPath:  rootfsPath,
 		TAPDevice:   tapDevice,
+		SSHKeyPath:  keyPair.PrivateKeyPath,
 		CreatedAt:   time.Now().Unix(),
 		UpdatedAt:   time.Now().Unix(),
 	}
@@ -331,6 +338,12 @@ func (m *VMManager) Destroy(name string) error {
 		}
 	}
 
+	// Cleanup SSH keys
+	if err := RemoveSSHKeys(m.baseDir, name); err != nil {
+		// Non-fatal — keys might not exist for older sandboxes
+		fmt.Fprintf(os.Stderr, "warning: failed to remove SSH keys for %s: %v\n", name, err)
+	}
+
 	// Cleanup storage
 	if err := m.storageMgr.DestroyVMStorage(name); err != nil {
 		return fmt.Errorf("failed to destroy storage: %w", err)
@@ -470,20 +483,27 @@ func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 		return "", 1, fmt.Errorf("VM %s has no IP address", name)
 	}
 
-	return m.execSSH(vmIP, command)
+	return m.execSSH(name, vmIP, command)
 }
 
 // execSSH runs a command inside the guest VM over SSH and returns
 // the combined output and exit code.
-func (m *VMManager) execSSH(ip string, command []string) (string, int, error) {
+func (m *VMManager) execSSH(vmName, ip string, command []string) (string, int, error) {
 	sshArgs := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
 		"-o", "ConnectTimeout=10",
-		"root@" + ip,
-		"--",
 	}
+
+	// Use per-sandbox SSH key if available
+	keyPath := SSHPrivateKeyPath(m.baseDir, vmName)
+	if _, err := os.Stat(keyPath); err == nil {
+		sshArgs = append(sshArgs, "-i", keyPath)
+	}
+
+	sshArgs = append(sshArgs, "root@"+ip, "--")
+	sshArgs = append(sshArgs, command...)
 	sshArgs = append(sshArgs, command...)
 
 	cmd := m.execCommand("ssh", sshArgs...)
@@ -498,6 +518,38 @@ func (m *VMManager) execSSH(ip string, command []string) (string, int, error) {
 	}
 
 	return string(output), exitCode, nil
+}
+
+// GetSSHArgs returns SSH arguments (including identity key) for connecting to a sandbox.
+// This is used by the CLI's `tent ssh` command.
+func (m *VMManager) GetSSHArgs(name string) ([]string, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning {
+		return nil, fmt.Errorf("VM %s is not running", name)
+	}
+
+	if vmState.IP == "" {
+		return nil, fmt.Errorf("VM %s has no IP address assigned", name)
+	}
+
+	args := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=10",
+	}
+
+	keyPath := SSHPrivateKeyPath(m.baseDir, name)
+	if _, err := os.Stat(keyPath); err == nil {
+		args = append(args, "-i", keyPath)
+	}
+
+	args = append(args, "root@"+vmState.IP)
+	return args, nil
 }
 
 // ListPortForwards returns port forwarding status for a specific VM

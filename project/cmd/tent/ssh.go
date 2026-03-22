@@ -54,22 +54,14 @@ func ConfigureSshCmd(options ...CommonCmdOption) *cobra.Command {
 				return fmt.Errorf("failed to setup VM manager: %w", err)
 			}
 
-			// Get VM status to check if running and get IP
-			vmState, err := manager.Status(name)
+			// Build SSH arguments with per-sandbox key
+			sshArgs, err := manager.GetSSHArgs(name)
 			if err != nil {
-				return fmt.Errorf("failed to get VM status: %w", err)
+				return err
 			}
 
-			if vmState.Status != "running" {
-				return fmt.Errorf("VM %s is not running", name)
-			}
-
-			if vmState.IP == "" {
-				return fmt.Errorf("VM %s has no IP address assigned", name)
-			}
-
-			// SSH into the VM
-			sshCmd := exec.Command("ssh", "root@"+vmState.IP)
+			// SSH into the VM interactively
+			sshCmd := exec.Command("ssh", sshArgs...)
 			sshCmd.Stdin = os.Stdin
 			sshCmd.Stdout = os.Stdout
 			sshCmd.Stderr = os.Stderr
