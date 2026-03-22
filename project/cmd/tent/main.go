@@ -33,6 +33,7 @@ func main() {
 	rootCmd.AddCommand(restartCmd())
 	rootCmd.AddCommand(healthCmd())
 	rootCmd.AddCommand(inspectCmd())
+	rootCmd.AddCommand(cpCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

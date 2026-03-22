@@ -705,7 +705,6 @@ func (m *VMManager) execSSH(vmName, ip string, command []string) (string, int, e
 
 	sshArgs = append(sshArgs, "root@"+ip, "--")
 	sshArgs = append(sshArgs, command...)
-	sshArgs = append(sshArgs, command...)
 
 	cmd := m.execCommand("ssh", sshArgs...)
 	output, err := cmd.CombinedOutput()
@@ -796,6 +795,91 @@ func (m *VMManager) LoadConfig(name string) (*models.VMConfig, error) {
 		return nil, fmt.Errorf("VM not found: %w", err)
 	}
 	return m.loadConfigFromState(vmState)
+}
+
+// CopyToGuest copies a file or directory from the host to a running sandbox using SCP.
+func (m *VMManager) CopyToGuest(name, hostPath, guestPath string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+	if vmState.Status != models.VMStatusRunning {
+		return fmt.Errorf("VM %s is not running", name)
+	}
+	ip := vmState.IP
+	if vm, ok := m.runningVMs[name]; ok {
+		if vmIP := vm.GetIP(); vmIP != "" {
+			ip = vmIP
+		}
+	}
+	if ip == "" {
+		return fmt.Errorf("VM %s has no IP address", name)
+	}
+
+	info, err := os.Stat(hostPath)
+	if err != nil {
+		return fmt.Errorf("host path not found: %w", err)
+	}
+
+	args := m.scpBaseArgs(name)
+	if info.IsDir() {
+		args = append(args, "-r")
+	}
+	args = append(args, hostPath, fmt.Sprintf("root@%s:%s", ip, guestPath))
+
+	cmd := m.execCommand("scp", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("scp to guest failed: %s: %w", string(output), err)
+	}
+	return nil
+}
+
+// CopyFromGuest copies a file or directory from a running sandbox to the host using SCP.
+func (m *VMManager) CopyFromGuest(name, guestPath, hostPath string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+	if vmState.Status != models.VMStatusRunning {
+		return fmt.Errorf("VM %s is not running", name)
+	}
+	ip := vmState.IP
+	if vm, ok := m.runningVMs[name]; ok {
+		if vmIP := vm.GetIP(); vmIP != "" {
+			ip = vmIP
+		}
+	}
+	if ip == "" {
+		return fmt.Errorf("VM %s has no IP address", name)
+	}
+
+	args := m.scpBaseArgs(name)
+	// Always use -r for directories; SCP handles files fine with -r too
+	args = append(args, "-r")
+	args = append(args, fmt.Sprintf("root@%s:%s", ip, guestPath), hostPath)
+
+	cmd := m.execCommand("scp", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("scp from guest failed: %s: %w", string(output), err)
+	}
+	return nil
+}
+
+// scpBaseArgs returns the common SCP arguments for a sandbox, including the identity key.
+func (m *VMManager) scpBaseArgs(vmName string) []string {
+	args := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=10",
+	}
+	keyPath := SSHPrivateKeyPath(m.baseDir, vmName)
+	if _, err := os.Stat(keyPath); err == nil {
+		args = append(args, "-i", keyPath)
+	}
+	return args
 }
 
 // loadConfigFromState loads the VM config from the state file
