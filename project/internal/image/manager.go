@@ -73,6 +73,42 @@ func (m *Manager) Pull(name string, url string) (string, error) {
 	return imagePath, nil
 }
 
+// ResolveImage resolves an image reference to a local rootfs path.
+// It handles:
+//   - Local file paths (ISO, raw disk, qcow2) — used directly
+//   - Registry references (ubuntu:22.04, gcr.io/proj/img:tag) — pulled via OCI
+//
+// If the image is already cached locally, it returns the cached path.
+func (m *Manager) ResolveImage(ref string) (string, error) {
+	// Check if it's a local file path
+	if strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "~/") {
+		expandedPath := ref
+		if strings.HasPrefix(ref, "~/") {
+			home, _ := os.UserHomeDir()
+			expandedPath = filepath.Join(home, ref[2:])
+		}
+		if _, err := os.Stat(expandedPath); err != nil {
+			return "", fmt.Errorf("local image not found: %s", expandedPath)
+		}
+		return expandedPath, nil
+	}
+
+	// It's a registry reference — check local cache first
+	safeName := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
+	cachedPath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", safeName))
+	if _, err := os.Stat(cachedPath); err == nil {
+		return cachedPath, nil
+	}
+
+	// Pull from registry
+	rootfsPath, err := m.PullOCI(safeName, ref)
+	if err != nil {
+		return "", fmt.Errorf("failed to pull image %q: %w", ref, err)
+	}
+
+	return rootfsPath, nil
+}
+
 // PullOCI pulls an OCI/Docker image from a registry (Docker Hub, GCR, ECR, etc.)
 // It parses the image reference, authenticates if needed, pulls layers, and extracts to rootfs
 func (m *Manager) PullOCI(name string, ref string) (string, error) {

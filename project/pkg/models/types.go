@@ -18,22 +18,25 @@ func (s VMStatus) String() string {
 
 // VMConfig represents the configuration for a microVM
 type VMConfig struct {
-	Name      string        `yaml:"name"`
-	VCPUs     int           `yaml:"vcpus"`
-	MemoryMB  int           `yaml:"memory_mb"`
-	Kernel    string        `yaml:"kernel"`
-	RootFS    string        `yaml:"rootfs"`
-	DiskGB    int           `yaml:"disk_gb"`
-	Network   NetworkConfig `yaml:"network"`
-	Mounts    []MountConfig `yaml:"mounts"`
-	Env       map[string]string `yaml:"env"`
+	Name      string        `yaml:"name" json:"name"`
+	From      string        `yaml:"from" json:"from,omitempty"`
+	VCPUs     int           `yaml:"vcpus" json:"vcpus"`
+	MemoryMB  int           `yaml:"memory_mb" json:"memory_mb"`
+	Kernel    string        `yaml:"kernel" json:"kernel,omitempty"`
+	RootFS    string        `yaml:"rootfs" json:"rootfs,omitempty"`
+	DiskGB    int           `yaml:"disk_gb" json:"disk_gb"`
+	Network   NetworkConfig `yaml:"network" json:"network"`
+	Mounts    []MountConfig `yaml:"mounts" json:"mounts,omitempty"`
+	Env       map[string]string `yaml:"env" json:"env,omitempty"`
 }
 
 // NetworkConfig represents network configuration for a VM
 type NetworkConfig struct {
-	Mode   string        `yaml:"mode"`
-	Bridge string        `yaml:"bridge"`
-	Ports  []PortForward `yaml:"ports"`
+	Mode   string        `yaml:"mode" json:"mode"`
+	Bridge string        `yaml:"bridge" json:"bridge,omitempty"`
+	Allow  []string      `yaml:"allow" json:"allow,omitempty"`
+	Deny   []string      `yaml:"deny" json:"deny,omitempty"`
+	Ports  []PortForward `yaml:"ports" json:"ports,omitempty"`
 }
 
 // PortForward represents port forwarding configuration
