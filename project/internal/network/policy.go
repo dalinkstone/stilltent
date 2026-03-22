@@ -294,6 +294,41 @@ func (pm *PolicyManager) ListPolicies() ([]*Policy, error) {
 	return policies, nil
 }
 
+// DefaultAIAllowlist returns the default set of AI API endpoints that are
+// allowed by default for AI workloads. This implements tent's "AI-native
+// defaults" — sandboxes can reach common model APIs out of the box.
+func DefaultAIAllowlist() []string {
+	return []string{
+		"api.anthropic.com",
+		"api.openai.com",
+		"openrouter.ai",
+		"api.openrouter.ai",
+		"generativelanguage.googleapis.com",
+		"localhost:12434", // Docker Model Runner
+	}
+}
+
+// EnsureDefaultPolicy creates a policy with the default AI allowlist if no
+// policy exists yet for the given sandbox. Returns the (possibly new) policy.
+func (pm *PolicyManager) EnsureDefaultPolicy(name string) (*Policy, error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if policy, exists := pm.policies[name]; exists {
+		return policy, nil
+	}
+
+	policy := &Policy{
+		Name:      name,
+		Allowed:   DefaultAIAllowlist(),
+		Denied:    []string{},
+		CreatedAt: time.Now().Unix(),
+		UpdatedAt: time.Now().Unix(),
+	}
+	pm.policies[name] = policy
+	return policy, nil
+}
+
 // IsEndpointAllowed checks if an endpoint is allowed for a sandbox
 func (pm *PolicyManager) IsEndpointAllowed(name, endpoint string) (bool, error) {
 	pm.mu.Lock()

@@ -71,6 +71,8 @@ type VMManager struct {
 	storageMgr     StorageManager
 	portForwarder  PortForwarder
 	consoleMgr     *console.Manager
+	policyMgr      *network.PolicyManager
+	egressFirewall *network.EgressFirewall
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -111,6 +113,13 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		return nil, fmt.Errorf("failed to create console manager: %w", err)
 	}
 
+	policyMgr, err := network.NewPolicyManager(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create policy manager: %w", err)
+	}
+
+	egressFw := network.NewEgressFirewall()
+
 	return &VMManager{
 		stateManager:   stateManager,
 		hypervisor:     hv,
@@ -118,6 +127,8 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		storageMgr:     storageMgr,
 		portForwarder:  network.NewPortForwarder(),
 		consoleMgr:     consoleMgr,
+		policyMgr:      policyMgr,
+		egressFirewall: egressFw,
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -157,6 +168,26 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 	if len(config.Network.Ports) > 0 {
 		if err := m.portForwarder.SetupForwards(name, config.Network.Ports); err != nil {
 			return fmt.Errorf("failed to setup port forwarding: %w", err)
+		}
+	}
+
+	// Initialize egress policy — use config-specified allowlist or fall back
+	// to the default AI allowlist (AI-native defaults).
+	if len(config.Network.Allow) > 0 || len(config.Network.Deny) > 0 {
+		policy, err := m.policyMgr.SetPolicy(name, config.Network.Allow, config.Network.Deny)
+		if err != nil {
+			return fmt.Errorf("failed to set network policy: %w", err)
+		}
+		if err := m.policyMgr.SavePolicy(policy); err != nil {
+			return fmt.Errorf("failed to save network policy: %w", err)
+		}
+	} else {
+		policy, err := m.policyMgr.EnsureDefaultPolicy(name)
+		if err != nil {
+			return fmt.Errorf("failed to create default network policy: %w", err)
+		}
+		if err := m.policyMgr.SavePolicy(policy); err != nil {
+			return fmt.Errorf("failed to save default network policy: %w", err)
 		}
 	}
 
@@ -260,6 +291,17 @@ func (m *VMManager) Start(name string) error {
 	vmState.IP = vm.GetIP()
 	vmState.UpdatedAt = time.Now().Unix()
 
+	// Apply egress firewall rules now that VM has an IP
+	if vmState.IP != "" {
+		m.egressFirewall.SetSandboxIP(name, vmState.IP)
+		policy, err := m.policyMgr.GetPolicy(name)
+		if err == nil {
+			if fwErr := m.egressFirewall.ApplyPolicy(name, policy); fwErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to apply egress firewall for %s: %v\n", name, fwErr)
+			}
+		}
+	}
+
 	// Activate port forwarding now that VM has an IP
 	if vmState.IP != "" {
 		if err := m.portForwarder.ActivateForwards(name, vmState.IP); err != nil {
@@ -306,6 +348,11 @@ func (m *VMManager) Stop(name string) error {
 
 	// Close console logger
 	m.consoleMgr.CloseLogger(name)
+
+	// Remove egress firewall rules
+	if err := m.egressFirewall.RemovePolicy(name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to remove egress firewall rules for %s: %v\n", name, err)
+	}
 
 	// Remove port forwarding
 	m.portForwarder.RemoveForwards(name)
