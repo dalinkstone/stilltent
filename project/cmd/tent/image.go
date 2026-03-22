@@ -76,14 +76,25 @@ func imagePullCmd() *cobra.Command {
 
 			fmt.Printf("Pulling image '%s'...\n", imageRef)
 
-			// Create image manager
+			// Create image manager with progress callback
 			baseDir := os.Getenv("TENT_BASE_DIR")
 			if baseDir == "" {
 				home, _ := os.UserHomeDir()
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := image.NewManager(baseDir)
+			manager, err := image.NewManager(baseDir, image.WithProgressCallback(func(bytes, total int64) {
+				if total > 0 {
+					percent := float64(bytes) / float64(total) * 100
+					fmt.Printf("\rDownloading: %.1f%% (%.1f MB / %.1f MB)", 
+						percent, float64(bytes)/(1024*1024), float64(total)/(1024*1024))
+				} else {
+					fmt.Printf("\rDownloading: %.1f MB", float64(bytes)/(1024*1024))
+				}
+				if bytes >= total && total > 0 {
+					fmt.Println() // Add newline when complete
+				}
+			}))
 			if err != nil {
 				return fmt.Errorf("failed to create image manager: %w", err)
 			}
@@ -109,7 +120,7 @@ func imagePullCmd() *cobra.Command {
 				return fmt.Errorf("failed to pull image: %w", err)
 			}
 
-			fmt.Printf("Image '%s' pulled successfully to %s\n", imageRef, imagePath)
+			fmt.Printf("\nImage '%s' pulled successfully to %s\n", imageRef, imagePath)
 			return nil
 		},
 	}
