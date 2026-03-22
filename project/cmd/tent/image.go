@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dalinkstone/tent/internal/image"
+	vm "github.com/dalinkstone/tent/internal/sandbox"
 )
 
 func imageCmd() *cobra.Command {
@@ -23,6 +24,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageRmCmd())
 	cmd.AddCommand(imageInspectCmd())
 	cmd.AddCommand(imageTagCmd())
+	cmd.AddCommand(imagePruneCmd())
 
 	return cmd
 }
@@ -319,5 +321,116 @@ func imageInspectCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func imagePruneCmd() *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Remove images not used by any sandbox",
+		Long: `Remove locally cached images that are not referenced by any existing sandbox.
+Running sandboxes, stopped sandboxes, and created sandboxes all count as "in use".
+
+Examples:
+  tent image prune
+  tent image prune --force`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			// Get sandbox manager to find in-use images
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+
+			sandboxMgr, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create sandbox manager: %w", err)
+			}
+
+			if err := sandboxMgr.Setup(); err != nil {
+				return fmt.Errorf("failed to setup sandbox manager: %w", err)
+			}
+
+			vms, err := sandboxMgr.List()
+			if err != nil {
+				return fmt.Errorf("failed to list sandboxes: %w", err)
+			}
+
+			// Build set of image names referenced by sandboxes
+			inUse := make(map[string]bool)
+			for _, v := range vms {
+				if v.ImageRef != "" {
+					// Normalize: strip tag separators for matching
+					// Image refs may be like "ubuntu:22.04" -> stored as "ubuntu_22.04"
+					ref := strings.ReplaceAll(v.ImageRef, ":", "_")
+					ref = strings.ReplaceAll(ref, "/", "_")
+					inUse[ref] = true
+					// Also keep the raw ref in case it matches directly
+					inUse[v.ImageRef] = true
+				}
+			}
+
+			// Create image manager
+			imgMgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			// Preview what would be removed
+			images, err := imgMgr.ListImages()
+			if err != nil {
+				return fmt.Errorf("failed to list images: %w", err)
+			}
+
+			var candidates []string
+			for _, img := range images {
+				if !inUse[img.Name] {
+					candidates = append(candidates, img.Name)
+				}
+			}
+
+			if len(candidates) == 0 {
+				fmt.Println("No unused images to remove.")
+				return nil
+			}
+
+			if !force {
+				fmt.Printf("The following %d image(s) will be removed:\n", len(candidates))
+				for _, name := range candidates {
+					fmt.Printf("  - %s\n", name)
+				}
+				fmt.Print("\nProceed? [y/N] ")
+				var response string
+				fmt.Scanln(&response)
+				if response != "y" && response != "Y" && response != "yes" {
+					fmt.Println("Aborted.")
+					return nil
+				}
+			}
+
+			removed, freedBytes, err := imgMgr.PruneImages(inUse)
+			if err != nil {
+				return fmt.Errorf("failed to prune images: %w", err)
+			}
+
+			for _, name := range removed {
+				fmt.Printf("Removed: %s\n", name)
+			}
+
+			freedMB := float64(freedBytes) / (1024 * 1024)
+			fmt.Printf("\nRemoved %d image(s), freed %.1f MB\n", len(removed), freedMB)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
 	return cmd
 }

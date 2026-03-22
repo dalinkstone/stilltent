@@ -621,6 +621,60 @@ func (m *Manager) RemoveImage(name string) error {
 	return nil
 }
 
+// PruneImages removes images not referenced by any sandbox.
+// inUseRefs is the set of image names/refs currently used by sandboxes.
+// Returns the list of removed image names and total bytes freed.
+func (m *Manager) PruneImages(inUseRefs map[string]bool) ([]string, int64, error) {
+	images, err := m.ListImages()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to list images: %w", err)
+	}
+
+	var removed []string
+	var freedBytes int64
+
+	for _, img := range images {
+		if inUseRefs[img.Name] {
+			continue
+		}
+
+		// Get actual size before removal
+		imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", img.Name))
+		if info, err := os.Stat(imagePath); err == nil {
+			freedBytes += info.Size()
+		}
+
+		// Also count rootfs directory size
+		rootfsDir := filepath.Join(m.baseDir, img.Name+"_rootfs")
+		if info, err := os.Stat(rootfsDir); err == nil {
+			if info.IsDir() {
+				dirSize := calcDirSize(rootfsDir)
+				freedBytes += dirSize
+			}
+		}
+
+		if err := m.RemoveImage(img.Name); err != nil {
+			continue
+		}
+		removed = append(removed, img.Name)
+	}
+
+	return removed, freedBytes, nil
+}
+
+// calcDirSize calculates total size of files in a directory tree.
+func calcDirSize(path string) int64 {
+	var size int64
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		size += info.Size()
+		return nil
+	})
+	return size
+}
+
 // InspectImage returns detailed information about an image
 func (m *Manager) InspectImage(name string) (*ImageDetail, error) {
 	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
