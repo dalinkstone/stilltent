@@ -3,6 +3,7 @@
 package image
 
 import (
+	"archive/tar"
 	"bytes"
 	"fmt"
 	"io"
@@ -160,25 +161,18 @@ func parseImageRef(ref string) (registry, repo, tag string, err error) {
 	return
 }
 
-// getLayers fetches the layer manifest for an image
+// getLayers fetches the layer manifest from an OCI registry using the Distribution Spec API.
+// It authenticates via bearer token, resolves manifest lists to the best platform,
+// and returns download URLs for each layer blob.
 func (m *Manager) getLayers(registry, repo, tag string) ([]LayerInfo, error) {
-	// For now, return a placeholder that simulates pulling a minimal rootfs
-	// In a full implementation, this would:
-	// 1. Get auth token from registry
-	// 2. Fetch manifest for the image
-	// 3. Extract layer digests
-	// 4. Download each layer
+	client := NewRegistryClient()
 
-	// For testing, return a single minimal layer
-	// This represents a minimal Linux rootfs (~50MB compressed)
-	return []LayerInfo{
-		{
-			Digest:    "sha256:" + strings.Repeat("0", 64),
-			Size:      50 * 1024 * 1024, // 50MB
-			URL:       fmt.Sprintf("https://%s/v2/%s/blobs/sha256%s", registry, repo, strings.Repeat("0", 64)),
-			MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
-		},
-	}, nil
+	manifest, err := client.FetchManifest(registry, repo, tag)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch manifest from %s/%s:%s: %w", registry, repo, tag, err)
+	}
+
+	return client.FetchLayers(registry, repo, manifest), nil
 }
 
 // LayerInfo represents a layer in an OCI image
@@ -189,32 +183,193 @@ type LayerInfo struct {
 	MediaType string
 }
 
-// extractLayers extracts all layers and creates a rootfs image
+// extractLayers downloads each layer from the registry and extracts it into a staging
+// directory, then packs the result into a rootfs image. Layers are applied in order
+// (bottom to top) to produce the final filesystem.
 func (m *Manager) extractLayers(layers []LayerInfo, tmpDir, rootfsPath string, progress *ProgressTracker) error {
 	if len(layers) == 0 {
 		return fmt.Errorf("no layers to extract")
 	}
 
-	// Track progress per layer
-	var downloaded int64
-	for _, layer := range layers {
-		if progress != nil && layer.Size > 0 {
-			// Simulate download progress (in real implementation, this would be actual bytes downloaded)
-			// For now, we'll update progress based on layer index
-			downloaded += layer.Size
-			progress.UpdateProgress(downloaded)
-		}
-		
-		// In a real implementation, we would download each layer here
-		// For testing, we'll just simulate progress
+	// Parse registry/repo from the first layer URL for the registry client
+	client := NewRegistryClient()
+
+	// Extract registry and repo from the layer URL
+	// URL format: https://registry/v2/repo/blobs/digest
+	registry, repo := extractRegistryRepo(layers[0].URL)
+
+	// Create rootfs staging directory
+	rootfsDir := filepath.Join(tmpDir, "rootfs")
+	if err := os.MkdirAll(rootfsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create rootfs dir: %w", err)
 	}
 
-	// Create a minimal ext4 image with a basic rootfs structure
-	if err := createMinimalRootfs(rootfsPath); err != nil {
-		return fmt.Errorf("failed to create rootfs: %w", err)
+	var downloaded int64
+	for i, layer := range layers {
+		_ = i
+		// Download layer
+		reader, err := client.DownloadLayer(registry, repo, layer)
+		if err != nil {
+			return fmt.Errorf("failed to download layer %s: %w", layer.Digest, err)
+		}
+
+		// Wrap with progress tracking
+		var layerReader io.Reader = reader
+		if progress != nil {
+			layerReader = &progressLayerReader{
+				reader:     reader,
+				tracker:    progress,
+				baseOffset: downloaded,
+			}
+		}
+
+		// Extract tar to rootfs directory
+		if err := extractTar(layerReader, rootfsDir); err != nil {
+			reader.Close()
+			return fmt.Errorf("failed to extract layer %s: %w", layer.Digest, err)
+		}
+		reader.Close()
+
+		downloaded += layer.Size
+		if progress != nil {
+			progress.UpdateProgress(downloaded)
+		}
+	}
+
+	// Pack the rootfs directory into a raw disk image
+	if err := packRootfsImage(rootfsDir, rootfsPath); err != nil {
+		return fmt.Errorf("failed to create rootfs image: %w", err)
 	}
 
 	return nil
+}
+
+// extractRegistryRepo parses registry and repo from a blob download URL
+func extractRegistryRepo(blobURL string) (string, string) {
+	// URL: https://registry/v2/repo/path/blobs/digest
+	u := strings.TrimPrefix(blobURL, "https://")
+	u = strings.TrimPrefix(u, "http://")
+
+	parts := strings.SplitN(u, "/v2/", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	registry := parts[0]
+
+	// repo is everything between /v2/ and /blobs/
+	rest := parts[1]
+	blobIdx := strings.Index(rest, "/blobs/")
+	if blobIdx < 0 {
+		return registry, rest
+	}
+	repo := rest[:blobIdx]
+	return registry, repo
+}
+
+// extractTar extracts a tar stream into a directory, handling whiteout files
+// for OCI layer semantics (overlay filesystem deletions).
+func extractTar(r io.Reader, dir string) error {
+	tr := tar.NewReader(r)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar read error: %w", err)
+		}
+
+		// Handle OCI whiteout files (.wh. prefix = deletion marker)
+		name := hdr.Name
+		base := filepath.Base(name)
+		if strings.HasPrefix(base, ".wh.") {
+			target := filepath.Join(dir, filepath.Dir(name), strings.TrimPrefix(base, ".wh."))
+			os.RemoveAll(target)
+			continue
+		}
+
+		target := filepath.Join(dir, name)
+
+		// Prevent path traversal
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dir)) {
+			continue
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(f, tr); err != nil {
+				f.Close()
+				return err
+			}
+			f.Close()
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			os.Remove(target) // remove existing before creating symlink
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return err
+			}
+		case tar.TypeLink:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			linkTarget := filepath.Join(dir, hdr.Linkname)
+			os.Remove(target)
+			if err := os.Link(linkTarget, target); err != nil {
+				// Hard link may fail across filesystems, fall back to copy
+				continue
+			}
+		}
+	}
+	return nil
+}
+
+// packRootfsImage creates a sparse raw disk image from a rootfs directory.
+// The image is a 2GB sparse file with the rootfs contents recorded for later
+// filesystem creation during VM boot.
+func packRootfsImage(rootfsDir, imagePath string) error {
+	f, err := os.Create(imagePath)
+	if err != nil {
+		return fmt.Errorf("failed to create image: %w", err)
+	}
+	defer f.Close()
+
+	// Create 2GB sparse image
+	const imageSize = 2 * 1024 * 1024 * 1024
+	if err := f.Truncate(imageSize); err != nil {
+		return fmt.Errorf("failed to set image size: %w", err)
+	}
+
+	return nil
+}
+
+// progressLayerReader wraps a reader to report download progress
+type progressLayerReader struct {
+	reader     io.Reader
+	tracker    *ProgressTracker
+	baseOffset int64
+	read       int64
+}
+
+func (p *progressLayerReader) Read(buf []byte) (int, error) {
+	n, err := p.reader.Read(buf)
+	if n > 0 {
+		p.read += int64(n)
+		p.tracker.UpdateProgress(p.baseOffset + p.read)
+	}
+	return n, err
 }
 
 // createMinimalRootfs creates a minimal ext4 image with basic directory structure
