@@ -36,8 +36,8 @@ func TestRootCommand(t *testing.T) {
 func TestCreateCommand(t *testing.T) {
 	cmd := createCmd()
 	
-	if cmd.Use != "create <name> [--config <path>]" {
-		t.Errorf("Expected use 'create <name> [--config <path>]', got '%s'", cmd.Use)
+	if cmd.Use != "create <name> [--from <image-ref>] [--config <path>]" {
+		t.Errorf("Expected use 'create <name> [--from <image-ref>] [--config <path>]', got '%s'", cmd.Use)
 	}
 	
 	if cmd.Short == "" {
