@@ -38,6 +38,7 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 		mountSpecs  []string
 		portSpecs   []string
 		labelSpecs  []string
+		hookSpecs   []string
 		backendName string
 	)
 
@@ -143,6 +144,31 @@ Examples:
 				}
 			}
 
+			// Parse --hook phase:command specs
+			if len(hookSpecs) > 0 {
+				if cfg.Hooks == nil {
+					cfg.Hooks = &models.LifecycleHooks{}
+				}
+				for _, spec := range hookSpecs {
+					phase, action, err := parseHookSpec(spec)
+					if err != nil {
+						return fmt.Errorf("invalid hook spec %q: %w", spec, err)
+					}
+					switch phase {
+					case "pre_start":
+						cfg.Hooks.PreStart = append(cfg.Hooks.PreStart, action)
+					case "post_start":
+						cfg.Hooks.PostStart = append(cfg.Hooks.PostStart, action)
+					case "pre_stop":
+						cfg.Hooks.PreStop = append(cfg.Hooks.PreStop, action)
+					case "post_stop":
+						cfg.Hooks.PostStop = append(cfg.Hooks.PostStop, action)
+					default:
+						return fmt.Errorf("unknown hook phase %q (use pre_start, post_start, pre_stop, post_stop)", phase)
+					}
+				}
+			}
+
 			// Validate config
 			if err := cfg.Validate(); err != nil {
 				return fmt.Errorf("invalid configuration: %w", err)
@@ -209,6 +235,7 @@ Examples:
 	cmd.Flags().StringSliceVar(&mountSpecs, "mount", nil, "Host-to-guest directory mounts in host:guest[:ro] format (can be repeated)")
 	cmd.Flags().StringSliceVar(&portSpecs, "port", nil, "Port forwarding in hostPort:guestPort format (can be repeated)")
 	cmd.Flags().StringSliceVar(&labelSpecs, "label", nil, "Labels in key=value format (can be repeated)")
+	cmd.Flags().StringSliceVar(&hookSpecs, "hook", nil, "Lifecycle hooks in phase:command format (e.g., pre_start:echo hello)")
 	cmd.Flags().StringVar(&backendName, "backend", "", "Hypervisor backend (e.g., kvm, hvf, firecracker)")
 
 	return cmd
@@ -268,6 +295,29 @@ func parsePortSpec(spec string) (models.PortForward, error) {
 	}
 
 	return models.PortForward{Host: hostPort, Guest: guestPort}, nil
+}
+
+// parseHookSpec parses a hook spec in the format phase:command
+// e.g., "pre_start:echo hello" or "post_stop:cleanup.sh"
+func parseHookSpec(spec string) (string, models.HookAction, error) {
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", models.HookAction{}, fmt.Errorf("expected phase:command (e.g., pre_start:echo hello)")
+	}
+
+	phase := parts[0]
+	validPhases := map[string]bool{
+		"pre_start": true, "post_start": true,
+		"pre_stop": true, "post_stop": true,
+	}
+	if !validPhases[phase] {
+		return "", models.HookAction{}, fmt.Errorf("unknown phase %q", phase)
+	}
+
+	return phase, models.HookAction{
+		Command: parts[1],
+		Where:   "host",
+	}, nil
 }
 
 // loadConfigFromFile loads VM config from a YAML file

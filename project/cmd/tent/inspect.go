@@ -27,8 +27,9 @@ type InspectOutput struct {
 	Mounts        []models.MountConfig `json:"mounts,omitempty"`
 	Env           map[string]string   `json:"env,omitempty"`
 	Health        *models.HealthState `json:"health,omitempty"`
-	RestartPolicy models.RestartPolicy `json:"restart_policy,omitempty"`
-	RestartCount  int                 `json:"restart_count,omitempty"`
+	RestartPolicy models.RestartPolicy  `json:"restart_policy,omitempty"`
+	RestartCount  int                  `json:"restart_count,omitempty"`
+	Hooks         *models.LifecycleHooks `json:"hooks,omitempty"`
 }
 
 // InspectConfig holds the sandbox's resource configuration
@@ -224,6 +225,9 @@ func buildInspectOutput(vmState *models.VMState, vmConfig *models.VMConfig) *Ins
 		output.Network.Deny = vmConfig.Network.Deny
 		output.Network.Ports = vmConfig.Network.Ports
 
+		if vmConfig.Hooks != nil {
+			output.Hooks = vmConfig.Hooks
+		}
 		if vmConfig.RestartPolicy != "" {
 			output.RestartPolicy = vmConfig.RestartPolicy
 		}

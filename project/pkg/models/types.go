@@ -32,6 +32,29 @@ type VMConfig struct {
 	Labels         map[string]string  `yaml:"labels" json:"labels,omitempty"`
 	RestartPolicy  RestartPolicy      `yaml:"restart_policy" json:"restart_policy,omitempty"`
 	HealthCheck    *HealthCheckConfig `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
+	Hooks          *LifecycleHooks    `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+}
+
+// LifecycleHooks defines commands to run at specific sandbox lifecycle points.
+type LifecycleHooks struct {
+	PreStart  []HookAction `yaml:"pre_start,omitempty" json:"pre_start,omitempty"`
+	PostStart []HookAction `yaml:"post_start,omitempty" json:"post_start,omitempty"`
+	PreStop   []HookAction `yaml:"pre_stop,omitempty" json:"pre_stop,omitempty"`
+	PostStop  []HookAction `yaml:"post_stop,omitempty" json:"post_stop,omitempty"`
+}
+
+// HookAction represents a single lifecycle hook action.
+type HookAction struct {
+	// Name is an optional human-readable label for the hook
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	// Command is the shell command to execute
+	Command string `yaml:"command" json:"command"`
+	// Where specifies execution context: "host" (default) or "guest"
+	Where string `yaml:"where,omitempty" json:"where,omitempty"`
+	// TimeoutSec is the maximum time in seconds for the hook to complete (default: 30)
+	TimeoutSec int `yaml:"timeout_sec,omitempty" json:"timeout_sec,omitempty"`
+	// OnFailure controls behavior when the hook fails: "continue" (default) or "abort"
+	OnFailure string `yaml:"on_failure,omitempty" json:"on_failure,omitempty"`
 }
 
 // RestartPolicy defines the restart behavior for a sandbox

@@ -32,6 +32,8 @@ const (
 	EventPause           EventType = "pause"
 	EventUnpause         EventType = "unpause"
 	EventCommit          EventType = "commit"
+	EventHookRun         EventType = "hook.run"
+	EventHookError       EventType = "hook.error"
 )
 
 // Event represents a single sandbox lifecycle event

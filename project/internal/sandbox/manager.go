@@ -417,6 +417,13 @@ func (m *VMManager) Start(name string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
+	// Run pre-start lifecycle hooks
+	if config.Hooks != nil {
+		if _, err := m.RunHooks(name, config.Hooks, HookPreStart); err != nil {
+			return fmt.Errorf("pre-start hook failed: %w", err)
+		}
+	}
+
 	// Use hypervisor backend to start VM
 	vm, err := m.hypervisor.CreateVM(config)
 	if err != nil {
@@ -495,6 +502,13 @@ func (m *VMManager) Start(name string) error {
 
 	m.logEvent(EventStart, name, nil)
 
+	// Run post-start lifecycle hooks (non-fatal)
+	if config.Hooks != nil {
+		if _, err := m.RunHooks(name, config.Hooks, HookPostStart); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: post-start hook failed for %s: %v\n", name, err)
+		}
+	}
+
 	return nil
 }
 
@@ -507,6 +521,16 @@ func (m *VMManager) Stop(name string) error {
 
 	if vmState.Status != models.VMStatusRunning {
 		return fmt.Errorf("VM %s is not running", name)
+	}
+
+	// Load config to check for lifecycle hooks
+	config, _ := m.loadConfigFromState(vmState)
+
+	// Run pre-stop lifecycle hooks
+	if config != nil && config.Hooks != nil {
+		if _, err := m.RunHooks(name, config.Hooks, HookPreStop); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: pre-stop hook failed for %s: %v\n", name, err)
+		}
 	}
 
 	// Get running VM instance
@@ -556,6 +580,13 @@ func (m *VMManager) Stop(name string) error {
 	}
 
 	m.logEvent(EventStop, name, nil)
+
+	// Run post-stop lifecycle hooks (non-fatal)
+	if config != nil && config.Hooks != nil {
+		if _, err := m.RunHooks(name, config.Hooks, HookPostStop); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: post-stop hook failed for %s: %v\n", name, err)
+		}
+	}
 
 	return nil
 }
