@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -71,6 +72,5 @@ func readFile(filePath string) ([]byte, error) {
 
 // readFileImpl is the actual file reading implementation
 func readFileImpl(filePath string) ([]byte, error) {
-	// Implementation stub - will use os.ReadFile in real code
-	return nil, nil
+	return os.ReadFile(filePath)
 }
