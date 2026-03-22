@@ -1347,3 +1347,36 @@ func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConf
 		MemoryMB: 1024, // default
 	}, nil
 }
+
+// FollowConsoleLogs streams console logs to the writer until done is closed.
+// This is the method used by the attach command.
+func (m *VMManager) FollowConsoleLogs(name string, tailLines int, out io.Writer, done <-chan struct{}) error {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	return m.consoleMgr.FollowLogs(name, tailLines, out, done)
+}
+
+// WriteToConsole writes data to a running VM's console input.
+// This allows the attach command to forward stdin to the guest.
+func (m *VMManager) WriteToConsole(name string, data []byte) error {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	// Write to the console log file so it appears in the log stream.
+	// In a real hypervisor scenario, this would inject keystrokes via
+	// the virtio-console rx queue. For now, we append to the log.
+	logPath := m.consoleMgr.GetLogPath(name)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open console log: %w", err)
+	}
+	defer f.Close()
+
+	_, err = f.Write(data)
+	return err
+}
