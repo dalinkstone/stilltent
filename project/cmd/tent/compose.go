@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -26,6 +27,8 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeLogsCmd())
 	cmd.AddCommand(composeRestartCmd())
 	cmd.AddCommand(composeExecCmd())
+	cmd.AddCommand(composeListCmd())
+	cmd.AddCommand(composeValidateCmd())
 
 	return cmd
 }
@@ -275,6 +278,156 @@ Examples:
 	cmd.Flags().IntVar(&timeout, "timeout", 0, "Seconds to wait for graceful shutdown before restart")
 
 	return cmd
+}
+
+func composeListCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all compose groups",
+		Long: `List all known compose groups and their sandbox counts.
+
+Examples:
+  tent compose list
+  tent compose list --json`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groups, err := manager.List()
+			if err != nil {
+				return fmt.Errorf("failed to list compose groups: %w", err)
+			}
+
+			if len(groups) == 0 {
+				fmt.Println("No compose groups found.")
+				return nil
+			}
+
+			if jsonOutput {
+				type groupInfo struct {
+					Name      string `json:"name"`
+					Sandboxes int    `json:"sandboxes"`
+					Status    string `json:"status"`
+				}
+				var infos []groupInfo
+				for _, name := range groups {
+					info := groupInfo{Name: name}
+					status, err := manager.Status(name)
+					if err == nil && status != nil {
+						info.Sandboxes = len(status.Sandboxes)
+						running := 0
+						for _, s := range status.Sandboxes {
+							if s.Status == "running" {
+								running++
+							}
+						}
+						if running == len(status.Sandboxes) {
+							info.Status = "running"
+						} else if running > 0 {
+							info.Status = "partial"
+						} else {
+							info.Status = "stopped"
+						}
+					}
+					infos = append(infos, info)
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(infos)
+			}
+
+			fmt.Printf("%-25s %-10s %-10s\n", "GROUP", "SANDBOXES", "STATUS")
+			for _, name := range groups {
+				sandboxCount := 0
+				groupStatus := "unknown"
+				status, err := manager.Status(name)
+				if err == nil && status != nil {
+					sandboxCount = len(status.Sandboxes)
+					running := 0
+					for _, s := range status.Sandboxes {
+						if s.Status == "running" {
+							running++
+						}
+					}
+					if sandboxCount == 0 {
+						groupStatus = "empty"
+					} else if running == sandboxCount {
+						groupStatus = "running"
+					} else if running > 0 {
+						groupStatus = "partial"
+					} else {
+						groupStatus = "stopped"
+					}
+				}
+				fmt.Printf("%-25s %-10d %-10s\n", name, sandboxCount, groupStatus)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func composeValidateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate <file>",
+		Short: "Validate a compose file without deploying",
+		Long: `Parse and validate a compose file, checking for errors such as missing fields,
+invalid configurations, dependency cycles, and unknown sandbox references.
+
+Examples:
+  tent compose validate tent-compose.yaml
+  tent compose validate ./my-stack.yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("validation failed: %w", err)
+			}
+
+			if err := config.Validate(); err != nil {
+				return fmt.Errorf("validation failed: %w", err)
+			}
+
+			order := config.TopologicalOrder()
+
+			fmt.Printf("Compose file '%s' is valid.\n", filePath)
+			fmt.Printf("  Sandboxes: %d\n", len(config.Sandboxes))
+			for _, name := range order {
+				sb := config.Sandboxes[name]
+				vcpus := sb.VCPUs
+				if vcpus == 0 {
+					vcpus = 1
+				}
+				mem := sb.MemoryMB
+				if mem == 0 {
+					mem = 512
+				}
+				deps := ""
+				if len(sb.DependsOn) > 0 {
+					deps = fmt.Sprintf(" (depends: %s)", strings.Join(sb.DependsOn, ", "))
+				}
+				fmt.Printf("    %s: from=%s vcpus=%d mem=%dMB%s\n", name, sb.From, vcpus, mem, deps)
+			}
+			fmt.Printf("  Start order: %s\n", strings.Join(order, " -> "))
+
+			return nil
+		},
+	}
 }
 
 func composeExecCmd() *cobra.Command {
