@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -19,6 +20,8 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageListCmd())
 	cmd.AddCommand(imagePullCmd())
 	cmd.AddCommand(imageExtractCmd())
+	cmd.AddCommand(imageRmCmd())
+	cmd.AddCommand(imageInspectCmd())
 
 	return cmd
 }
@@ -182,5 +185,101 @@ func imageExtractCmd() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
+}
+
+func imageRmCmd() *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:     "rm <image> [image...]",
+		Aliases: []string{"remove", "delete"},
+		Short:   "Remove one or more locally cached images",
+		Long:    `Remove one or more locally cached images from the local store.`,
+		Args:    cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			var errs []error
+			for _, name := range args {
+				if err := manager.RemoveImage(name); err != nil {
+					if force {
+						fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+					} else {
+						errs = append(errs, err)
+					}
+				} else {
+					fmt.Printf("Removed image '%s'\n", name)
+				}
+			}
+
+			if len(errs) > 0 {
+				return fmt.Errorf("failed to remove %d image(s): %v", len(errs), errs[0])
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Ignore errors for missing images")
+	return cmd
+}
+
+func imageInspectCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "inspect <image>",
+		Short: "Show detailed information about an image",
+		Long:  `Display detailed metadata and format information about a locally cached image.`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			detail, err := manager.InspectImage(name)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(detail)
+			}
+
+			fmt.Printf("Image: %s\n", detail.Name)
+			fmt.Printf("  Path:      %s\n", detail.Path)
+			fmt.Printf("  Format:    %s\n", detail.Format)
+			fmt.Printf("  Size:      %d MB (%d bytes)\n", detail.SizeMB, detail.SizeBytes)
+			fmt.Printf("  Created:   %s\n", detail.CreatedAt)
+			fmt.Printf("  Modified:  %s\n", detail.ModTime)
+			if detail.HasRootfs {
+				fmt.Printf("  Rootfs:    %s\n", detail.RootfsPath)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
 	return cmd
 }

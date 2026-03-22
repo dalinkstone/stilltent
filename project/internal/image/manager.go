@@ -598,6 +598,81 @@ func (m *Manager) GetImage(name string) (*models.ImageInfo, error) {
 	}, nil
 }
 
+// RemoveImage removes a locally cached image by name
+func (m *Manager) RemoveImage(name string) error {
+	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
+
+	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
+		return fmt.Errorf("image not found: %s", name)
+	}
+
+	if err := os.Remove(imagePath); err != nil {
+		return fmt.Errorf("failed to remove image: %w", err)
+	}
+
+	// Also remove any associated rootfs directory
+	rootfsDir := filepath.Join(m.baseDir, name+"_rootfs")
+	if _, err := os.Stat(rootfsDir); err == nil {
+		if err := os.RemoveAll(rootfsDir); err != nil {
+			return fmt.Errorf("failed to remove rootfs directory: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// InspectImage returns detailed information about an image
+func (m *Manager) InspectImage(name string) (*ImageDetail, error) {
+	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
+
+	info, err := os.Stat(imagePath)
+	if os.IsNotExist(err) {
+		return nil, fmt.Errorf("image not found: %s", name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat image: %w", err)
+	}
+
+	detail := &ImageDetail{
+		Name:      name,
+		Path:      imagePath,
+		SizeBytes: info.Size(),
+		SizeMB:    int(info.Size() / (1024 * 1024)),
+		CreatedAt: info.ModTime().Format("2006-01-02 15:04:05"),
+		ModTime:   info.ModTime().Format("2006-01-02 15:04:05"),
+	}
+
+	// Detect format
+	format, err := m.DetectFormat(imagePath)
+	if err == nil {
+		detail.Format = string(format)
+	} else {
+		detail.Format = "unknown"
+	}
+
+	// Check for associated rootfs
+	rootfsDir := filepath.Join(m.baseDir, name+"_rootfs")
+	if stat, err := os.Stat(rootfsDir); err == nil && stat.IsDir() {
+		detail.HasRootfs = true
+		detail.RootfsPath = rootfsDir
+	}
+
+	return detail, nil
+}
+
+// ImageDetail holds detailed information about an image
+type ImageDetail struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Format     string `json:"format"`
+	SizeBytes  int64  `json:"size_bytes"`
+	SizeMB     int    `json:"size_mb"`
+	CreatedAt  string `json:"created_at"`
+	ModTime    string `json:"modified_at"`
+	HasRootfs  bool   `json:"has_rootfs"`
+	RootfsPath string `json:"rootfs_path,omitempty"`
+}
+
 // copyFile copies a file
 func (m *Manager) copyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
