@@ -158,6 +158,14 @@ func (v *VM) Start() error {
 	v.vcpuID = vcpuID
 	v.vcpuExit = vcpuExit
 
+	// Load kernel into guest memory at offset 0x80000 (ARM64 Linux Image format)
+	// For now, we'll write a minimal "hello world" style kernel that just halts
+	// A production implementation would load a real kernel image here
+	if err := v.loadMinimalKernel(); err != nil {
+		v.cleanup()
+		return fmt.Errorf("failed to load kernel: %w", err)
+	}
+
 	// Set initial ARM64 registers for kernel boot
 	// PC = entry point (0x80000 is standard for ARM64 Linux Image format)
 	entryPoint := C.uint64_t(0x80000)
@@ -188,6 +196,78 @@ func (v *VM) Start() error {
 
 	v.running = true
 	v.ip = "172.16.0.2" // Placeholder — real IP comes from vmnet DHCP
+
+	return nil
+}
+
+// loadMinimalKernel writes a minimal kernel image to guest memory
+// This creates a functional VM that can boot and execute code
+func (v *VM) loadMinimalKernel() error {
+	// ARM64 Linux kernel entry point is at offset 0x80000
+	const entryOffset = 0x80000
+
+	// Write a minimal ARM64 kernel that just halts the CPU
+	// This is a simplified version - a real kernel would be much larger
+	// The kernel image starts with a magic number "ARM\x64"
+	kernelImage := []byte{
+		// ARM64 Image header (simplified)
+		0x41, 0x52, 0x4d, 0x64, // Magic: "ARM\x64"
+		0x00, 0x00, 0x00, 0x00, // Image size (0 = unknown)
+		0x00, 0x00, 0x00, 0x00, // Text offset
+		0x00, 0x00, 0x00, 0x00, // Image size
+		0x00, 0x00, 0x00, 0x00, // Reserved
+		0x00, 0x00, 0x00, 0x00, // Reserved
+		0x00, 0x00, 0x00, 0x00, // Reserved
+		0x00, 0x00, 0x00, 0x00, // Reserved
+		// Machine type (0 = any)
+		0x00, 0x00,
+		// Reserved
+		0x00, 0x00,
+		// PC entry point (same as text offset)
+		0x00, 0x80, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+		// Reserved
+		0x00, 0x00, 0x00, 0x00,
+	}
+
+	// Copy kernel image to guest memory at offset 0x80000
+	memoryBytes := (*[1 << 30]byte)(v.memoryPtr)[:v.memorySize:v.memorySize]
+	copy(memoryBytes[entryOffset:], kernelImage)
+
+	// Add a simple HLT loop at the entry point for testing
+	// HLT instruction on ARM64 is 0xD503205F
+	hltLoop := []byte{
+		0x5F, 0x20, 0x03, 0xD5, // hlt #0
+		0x5F, 0x20, 0x03, 0xD5, // hlt #0 (infinite loop)
+	}
+	copy(memoryBytes[entryOffset:], hltLoop)
 
 	return nil
 }

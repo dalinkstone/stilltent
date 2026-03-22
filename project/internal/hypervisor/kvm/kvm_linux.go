@@ -127,11 +127,11 @@ func (v *VM) Start() error {
 		return fmt.Errorf("failed to create storage manager: %w", err)
 	}
 
-	// Find the rootfs path
-	rootfsPath := filepath.Join(v.backend.baseDir, "storage", "images", v.config.RootFS+".img")
+	// Find the rootfs path using the storage manager's convention
+	// The storage manager stores rootfs at: $baseDir/rootfs/$vmName/rootfs.img
+	rootfsPath := filepath.Join(v.backend.baseDir, "rootfs", v.config.Name, "rootfs.img")
 	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
-		// Try alternative path (VM-specific rootfs)
-		rootfsPath = filepath.Join(v.backend.baseDir, "storage", "rootfs", v.config.Name, "rootfs.img")
+		return fmt.Errorf("rootfs not found: %s", rootfsPath)
 	}
 
 	// Extract kernel information from the rootfs
