@@ -106,6 +106,7 @@ type SandboxConfig struct {
 	HealthCheck   *HealthCheckConf  `yaml:"health_check,omitempty"`
 	RestartPolicy string            `yaml:"restart,omitempty"` // "no", "on-failure", "always"
 	Hooks         *LifecycleHooks   `yaml:"hooks,omitempty"`
+	Watch         *WatchConfig      `yaml:"watch,omitempty"`
 }
 
 // LifecycleHooks defines commands to run at various stages of sandbox lifecycle.

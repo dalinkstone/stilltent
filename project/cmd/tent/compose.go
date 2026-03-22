@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"sync"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeHealthCmd())
 	cmd.AddCommand(composeHooksCmd())
 	cmd.AddCommand(composeProfilesCmd())
+	cmd.AddCommand(composeWatchCmd())
 
 	return cmd
 }
@@ -1694,5 +1696,168 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func composeWatchCmd() *cobra.Command {
+	var (
+		intervalSec int
+		services    []string
+		dryRun      bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "watch <file>",
+		Short: "Watch for file changes and restart affected sandboxes",
+		Long: `Monitor files and directories specified in sandbox watch configurations.
+When changes are detected, the affected sandbox is automatically restarted.
+
+Add a watch block to sandbox definitions in your compose file:
+
+  sandboxes:
+    agent:
+      from: ubuntu:22.04
+      watch:
+        paths:
+          - ./src
+          - ./config.yaml
+        ignore:
+          - "*.log"
+          - "*.tmp"
+        action: restart    # "restart" (default) or "rebuild"
+
+Examples:
+  tent compose watch tent-compose.yaml
+  tent compose watch tent-compose.yaml --interval 5
+  tent compose watch tent-compose.yaml --service agent
+  tent compose watch tent-compose.yaml --dry-run`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			// Extract watch configurations
+			watches := compose.ExtractWatchConfigs(config)
+			if len(watches) == 0 {
+				fmt.Println("No watch configurations found in compose file.")
+				fmt.Println("Add a 'watch' block to sandbox definitions to enable file watching.")
+				return nil
+			}
+
+			// Filter by --service flag
+			if len(services) > 0 {
+				filtered := make(map[string]*compose.WatchConfig)
+				for _, svc := range services {
+					if w, ok := watches[svc]; ok {
+						filtered[svc] = w
+					} else {
+						return fmt.Errorf("service %q has no watch configuration", svc)
+					}
+				}
+				watches = filtered
+			}
+
+			composeDir := filepath.Dir(filePath)
+			if abs, err := filepath.Abs(composeDir); err == nil {
+				composeDir = abs
+			}
+
+			groupName := composeGroupName(filePath)
+
+			fmt.Printf("Watching for changes in compose group '%s':\n", groupName)
+			fmt.Print(compose.FormatWatchSummary(watches))
+
+			if dryRun {
+				fmt.Println("\n(dry-run mode: changes will be detected but sandboxes will not be restarted)")
+			}
+
+			// Set up compose manager for restarts
+			var manager *compose.ComposeManager
+			if !dryRun {
+				var err error
+				manager, err = newComposeManager()
+				if err != nil {
+					return fmt.Errorf("failed to create compose manager: %w", err)
+				}
+			}
+
+			// Track debounce per service
+			var mu sync.Mutex
+			lastRestart := make(map[string]time.Time)
+			debounceDuration := time.Duration(intervalSec) * time.Second
+
+			interval := time.Duration(intervalSec) * time.Second
+			if interval < time.Second {
+				interval = 2 * time.Second
+			}
+
+			watcher := compose.NewFileWatcher(compose.FileWatcherOpts{
+				Interval:   interval,
+				ComposeDir: composeDir,
+				OnChange: func(event compose.WatchEvent) {
+					mu.Lock()
+					last, exists := lastRestart[event.Service]
+					if exists && time.Since(last) < debounceDuration {
+						mu.Unlock()
+						return
+					}
+					lastRestart[event.Service] = time.Now()
+					mu.Unlock()
+
+					rel, _ := filepath.Rel(composeDir, event.Path)
+					if rel == "" {
+						rel = event.Path
+					}
+
+					ts := event.Time.Format("15:04:05")
+					fmt.Printf("[%s] Change detected: %s (service: %s, action: %s)\n",
+						ts, rel, event.Service, event.Action)
+
+					if dryRun {
+						fmt.Printf("[%s] Would %s service %s\n", ts, event.Action, event.Service)
+						return
+					}
+
+					fmt.Printf("[%s] Restarting service %s...\n", ts, event.Service)
+					if err := manager.Restart(groupName, []string{event.Service}, 30); err != nil {
+						fmt.Printf("[%s] Error restarting %s: %v\n", ts, event.Service, err)
+					} else {
+						fmt.Printf("[%s] Service %s restarted successfully\n", ts, event.Service)
+					}
+				},
+			})
+
+			for name, cfg := range watches {
+				if err := watcher.AddService(name, cfg); err != nil {
+					return fmt.Errorf("failed to set up watch for %s: %w", name, err)
+				}
+			}
+
+			watcher.Start()
+			defer watcher.Stop()
+
+			fmt.Printf("\nWatching for changes (polling every %s, Ctrl+C to stop)...\n", interval)
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, os.Interrupt)
+			<-sigCh
+
+			fmt.Println("\nStopping file watcher...")
+			return nil
+		},
+	}
+
+	cmd.Flags().IntVar(&intervalSec, "interval", 2, "Polling interval in seconds")
+	cmd.Flags().StringSliceVar(&services, "service", nil, "Watch only specific services")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Detect changes without restarting sandboxes")
 	return cmd
 }
