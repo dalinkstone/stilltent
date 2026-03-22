@@ -3,6 +3,9 @@
 package vm
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -1064,6 +1067,230 @@ func dirSizeMB(path string) int64 {
 }
 
 // loadConfigFromState loads the VM config from the state file
+// ExportArchive represents the metadata stored in an export archive
+type ExportArchive struct {
+	Version   int              `json:"version"`
+	Name      string           `json:"name"`
+	State     *models.VMState  `json:"state"`
+	Config    *models.VMConfig `json:"config,omitempty"`
+	ExportedAt int64           `json:"exported_at"`
+}
+
+// Export exports a stopped sandbox to a tar.gz archive at the given output path.
+// The archive contains the sandbox config, state metadata, and rootfs.
+func (m *VMManager) Export(name string, outputPath string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("sandbox not found: %w", err)
+	}
+
+	if vmState.Status == models.VMStatusRunning {
+		return fmt.Errorf("cannot export running sandbox %q — stop it first", name)
+	}
+
+	// Load config if available
+	config, _ := m.loadConfigFromState(vmState)
+
+	archive := &ExportArchive{
+		Version:    1,
+		Name:       name,
+		State:      vmState,
+		Config:     config,
+		ExportedAt: time.Now().Unix(),
+	}
+
+	metaJSON, err := json.Marshal(archive)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	gw := gzip.NewWriter(outFile)
+	defer gw.Close()
+
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+
+	// Write metadata
+	if err := writeTarEntry(tw, "metadata.json", metaJSON); err != nil {
+		return fmt.Errorf("failed to write metadata: %w", err)
+	}
+
+	// Write config YAML if present
+	configPath := filepath.Join(m.baseDir, "configs", fmt.Sprintf("%s.yaml", name))
+	if data, err := os.ReadFile(configPath); err == nil {
+		if err := writeTarEntry(tw, "config.yaml", data); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+	}
+
+	// Write rootfs if it exists
+	if vmState.RootFSPath != "" {
+		if info, err := os.Stat(vmState.RootFSPath); err == nil {
+			if err := writeTarFile(tw, "rootfs.img", vmState.RootFSPath, info.Size()); err != nil {
+				return fmt.Errorf("failed to write rootfs: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Import imports a sandbox from a tar.gz archive. If newName is non-empty it overrides the original name.
+func (m *VMManager) Import(archivePath string, newName string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to open archive: %w", err)
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("failed to read gzip: %w", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+
+	var archive ExportArchive
+	var configData []byte
+	var rootfsData []byte
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read archive entry: %w", err)
+		}
+
+		switch hdr.Name {
+		case "metadata.json":
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				return fmt.Errorf("failed to read metadata: %w", err)
+			}
+			if err := json.Unmarshal(data, &archive); err != nil {
+				return fmt.Errorf("failed to parse metadata: %w", err)
+			}
+		case "config.yaml":
+			configData, err = io.ReadAll(tr)
+			if err != nil {
+				return fmt.Errorf("failed to read config: %w", err)
+			}
+		case "rootfs.img":
+			rootfsData, err = io.ReadAll(tr)
+			if err != nil {
+				return fmt.Errorf("failed to read rootfs: %w", err)
+			}
+		}
+	}
+
+	if archive.Version == 0 {
+		return fmt.Errorf("invalid archive: missing metadata")
+	}
+
+	name := archive.Name
+	if newName != "" {
+		name = newName
+	}
+
+	// Check if sandbox already exists
+	if _, err := m.stateManager.GetVM(name); err == nil {
+		return fmt.Errorf("sandbox %q already exists", name)
+	}
+
+	// Restore config file
+	if configData != nil {
+		configDir := filepath.Join(m.baseDir, "configs")
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return fmt.Errorf("failed to create config dir: %w", err)
+		}
+
+		// Update name in config if renamed
+		if newName != "" {
+			var cfg models.VMConfig
+			if err := yaml.Unmarshal(configData, &cfg); err == nil {
+				cfg.Name = newName
+				if updated, err := yaml.Marshal(&cfg); err == nil {
+					configData = updated
+				}
+			}
+		}
+
+		if err := os.WriteFile(filepath.Join(configDir, name+".yaml"), configData, 0644); err != nil {
+			return fmt.Errorf("failed to write config: %w", err)
+		}
+	}
+
+	// Restore rootfs
+	var rootfsPath string
+	if rootfsData != nil {
+		rootfsDir := filepath.Join(m.baseDir, "vms", name)
+		if err := os.MkdirAll(rootfsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create VM directory: %w", err)
+		}
+		rootfsPath = filepath.Join(rootfsDir, "rootfs.img")
+		if err := os.WriteFile(rootfsPath, rootfsData, 0644); err != nil {
+			return fmt.Errorf("failed to write rootfs: %w", err)
+		}
+	}
+
+	// Restore state
+	vmState := archive.State
+	vmState.Name = name
+	vmState.Status = models.VMStatusStopped
+	vmState.PID = 0
+	vmState.IP = ""
+	vmState.UpdatedAt = time.Now().Unix()
+	if rootfsPath != "" {
+		vmState.RootFSPath = rootfsPath
+	}
+
+	if err := m.stateManager.StoreVM(vmState); err != nil {
+		return fmt.Errorf("failed to store state: %w", err)
+	}
+
+	return nil
+}
+
+func writeTarEntry(tw *tar.Writer, name string, data []byte) error {
+	hdr := &tar.Header{
+		Name: name,
+		Mode: 0644,
+		Size: int64(len(data)),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err := tw.Write(data)
+	return err
+}
+
+func writeTarFile(tw *tar.Writer, name string, srcPath string, size int64) error {
+	hdr := &tar.Header{
+		Name: name,
+		Mode: 0644,
+		Size: size,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(tw, f)
+	return err
+}
+
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
 	// Load config from state file if present
 	configPath := filepath.Join(m.baseDir, "configs", fmt.Sprintf("%s.yaml", vmState.Name))

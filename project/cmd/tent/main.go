@@ -39,6 +39,8 @@ func main() {
 	rootCmd.AddCommand(updateCmd())
 	rootCmd.AddCommand(renameCmd())
 	rootCmd.AddCommand(pruneCmd())
+	rootCmd.AddCommand(exportCmd())
+	rootCmd.AddCommand(importCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
