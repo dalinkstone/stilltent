@@ -359,7 +359,7 @@ func (m *Manager) extractISO(imagePath string) (string, error) {
 }
 
 func (m *Manager) ListImages() ([]*models.ImageInfo, error) {
-	var images []*models.ImageInfo
+	images := make([]*models.ImageInfo, 0)
 	
 	entries, err := os.ReadDir(m.baseDir)
 	if err != nil {
