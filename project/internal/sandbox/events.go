@@ -152,3 +152,99 @@ func (el *EventLogger) Query(filter EventFilter) ([]Event, error) {
 
 	return events, nil
 }
+
+// WatchEvent represents an event delivered via the Watch channel
+type WatchEvent struct {
+	Event Event
+	Err   error
+}
+
+// Watch tails the event log file, sending new events on the returned channel.
+// It polls the file for new lines at the given interval. Close the done channel to stop.
+func (el *EventLogger) Watch(filter EventFilter, interval time.Duration, done <-chan struct{}) <-chan WatchEvent {
+	ch := make(chan WatchEvent, 16)
+
+	go func() {
+		defer close(ch)
+
+		var offset int64
+
+		// Start from end of file
+		if info, err := os.Stat(el.logPath); err == nil {
+			offset = info.Size()
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				newEvents, newOffset := el.readNewEvents(offset, filter)
+				if newOffset > offset {
+					offset = newOffset
+				}
+				for _, ev := range newEvents {
+					select {
+					case ch <- WatchEvent{Event: ev}:
+					case <-done:
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	return ch
+}
+
+// readNewEvents reads events appended after the given byte offset
+func (el *EventLogger) readNewEvents(offset int64, filter EventFilter) ([]Event, int64) {
+	f, err := os.Open(el.logPath)
+	if err != nil {
+		return nil, offset
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || info.Size() <= offset {
+		return nil, offset
+	}
+
+	if _, err := f.Seek(offset, 0); err != nil {
+		return nil, offset
+	}
+
+	buf := make([]byte, info.Size()-offset)
+	n, err := f.Read(buf)
+	if err != nil || n == 0 {
+		return nil, offset
+	}
+
+	var events []Event
+	start := 0
+	for i := 0; i < n; i++ {
+		if buf[i] == '\n' {
+			line := buf[start:i]
+			start = i + 1
+			if len(line) == 0 {
+				continue
+			}
+			var event Event
+			if err := json.Unmarshal(line, &event); err != nil {
+				continue
+			}
+			if filter.Sandbox != "" && event.Sandbox != filter.Sandbox {
+				continue
+			}
+			if filter.Type != "" && event.Type != filter.Type {
+				continue
+			}
+			events = append(events, event)
+		}
+	}
+
+	return events, offset + int64(start)
+}
