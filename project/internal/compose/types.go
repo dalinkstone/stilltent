@@ -107,6 +107,7 @@ type SandboxConfig struct {
 	RestartPolicy string            `yaml:"restart,omitempty"` // "no", "on-failure", "always"
 	Hooks         *LifecycleHooks   `yaml:"hooks,omitempty"`
 	Watch         *WatchConfig      `yaml:"watch,omitempty"`
+	Extends       string            `yaml:"extends,omitempty"` // name of another sandbox to inherit config from
 }
 
 // LifecycleHooks defines commands to run at various stages of sandbox lifecycle.

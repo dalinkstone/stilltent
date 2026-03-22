@@ -21,6 +21,11 @@ func ParseConfig(data []byte) (*ComposeConfig, error) {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
+	// Resolve extends inheritance before validation
+	if err := cfg.resolveExtends(); err != nil {
+		return nil, fmt.Errorf("failed to resolve extends: %w", err)
+	}
+
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid compose config: %w", err)
