@@ -205,7 +205,7 @@ func TestImageCommand(t *testing.T) {
 		subCmdNames[c.Use] = true
 	}
 	
-	requiredSubCmds := []string{"list", "pull <name> [url]"}
+	requiredSubCmds := []string{"list", "pull <image-ref>"}
 	for _, expected := range requiredSubCmds {
 		if !subCmdNames[expected] {
 			t.Errorf("Expected subcommand '%s' not found", expected)
@@ -965,7 +965,8 @@ func TestImagePullCommand_WithUrl(t *testing.T) {
 		t.Fatal("Image pull subcommand not found")
 	}
 	
-	err := pullCmd.ValidateArgs([]string{"ubuntu-22.04", "https://example.com/image.img"})
+	// URL can now be passed directly as the single argument
+	err := pullCmd.ValidateArgs([]string{"https://example.com/image.img"})
 	if err != nil {
 		t.Errorf("Expected no error for image pull with URL, got: %v", err)
 	}
