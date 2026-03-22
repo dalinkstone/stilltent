@@ -31,6 +31,7 @@ const (
 	EventClone           EventType = "clone"
 	EventPause           EventType = "pause"
 	EventUnpause         EventType = "unpause"
+	EventCommit          EventType = "commit"
 )
 
 // Event represents a single sandbox lifecycle event

@@ -1509,6 +1509,101 @@ func (m *VMManager) Import(archivePath string, newName string) error {
 	return nil
 }
 
+// Commit saves a sandbox's current rootfs as a reusable image.
+// The sandbox can be running or stopped. The resulting image can be used
+// with "tent create --from <image-name>" to create new sandboxes.
+func (m *VMManager) Commit(name string, imageName string, message string) (string, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("sandbox not found: %w", err)
+	}
+
+	if vmState.RootFSPath == "" {
+		return "", fmt.Errorf("sandbox %q has no rootfs", name)
+	}
+
+	if _, err := os.Stat(vmState.RootFSPath); err != nil {
+		return "", fmt.Errorf("rootfs not found at %s: %w", vmState.RootFSPath, err)
+	}
+
+	// Create the images directory
+	imagesDir := filepath.Join(m.baseDir, "images")
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create images directory: %w", err)
+	}
+
+	// Destination path for the committed image
+	destPath := filepath.Join(imagesDir, fmt.Sprintf("%s.img", imageName))
+
+	// Check if image already exists
+	if _, err := os.Stat(destPath); err == nil {
+		return "", fmt.Errorf("image %q already exists — use a different name or remove it first", imageName)
+	}
+
+	// Copy rootfs to images directory
+	srcFile, err := os.Open(vmState.RootFSPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to open rootfs: %w", err)
+	}
+	defer srcFile.Close()
+
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return "", fmt.Errorf("failed to stat rootfs: %w", err)
+	}
+
+	dstFile, err := os.Create(destPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create image file: %w", err)
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		os.Remove(destPath)
+		return "", fmt.Errorf("failed to copy rootfs to image: %w", err)
+	}
+
+	// Write commit metadata alongside the image
+	meta := CommitMetadata{
+		ImageName:   imageName,
+		SourceName:  name,
+		SourceImage: vmState.ImageRef,
+		Message:     message,
+		SizeBytes:   srcInfo.Size(),
+		CreatedAt:   time.Now().Unix(),
+		VCPUs:       vmState.VCPUs,
+		MemoryMB:    vmState.MemoryMB,
+		Labels:      vmState.Labels,
+	}
+
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err == nil {
+		metaPath := filepath.Join(imagesDir, fmt.Sprintf("%s.meta.json", imageName))
+		_ = os.WriteFile(metaPath, metaJSON, 0644)
+	}
+
+	m.logEvent(EventCommit, name, map[string]string{
+		"image":   imageName,
+		"message": message,
+		"size_mb": fmt.Sprintf("%d", srcInfo.Size()/(1024*1024)),
+	})
+
+	return destPath, nil
+}
+
+// CommitMetadata stores metadata about a committed image
+type CommitMetadata struct {
+	ImageName   string            `json:"image_name"`
+	SourceName  string            `json:"source_sandbox"`
+	SourceImage string            `json:"source_image,omitempty"`
+	Message     string            `json:"message,omitempty"`
+	SizeBytes   int64             `json:"size_bytes"`
+	CreatedAt   int64             `json:"created_at"`
+	VCPUs       int               `json:"vcpus,omitempty"`
+	MemoryMB    int               `json:"memory_mb,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+}
+
 func writeTarEntry(tw *tar.Writer, name string, data []byte) error {
 	hdr := &tar.Header{
 		Name: name,
