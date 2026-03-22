@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -25,6 +27,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageInspectCmd())
 	cmd.AddCommand(imageTagCmd())
 	cmd.AddCommand(imagePruneCmd())
+	cmd.AddCommand(imageBuildCmd())
 
 	return cmd
 }
@@ -432,5 +435,103 @@ Examples:
 	}
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation prompt")
+	return cmd
+}
+
+func imageBuildCmd() *cobra.Command {
+	var file string
+	var tag string
+
+	cmd := &cobra.Command{
+		Use:   "build <name>",
+		Short: "Build a custom image from a Tentfile",
+		Long: `Build a custom sandbox image from a Tentfile (similar to a Dockerfile).
+
+The Tentfile supports the following instructions:
+  FROM <base-image>       Base image (required, must be first)
+  RUN <command>           Shell command to run during build
+  COPY <src> <dst>        Copy files from host to image
+  ENV <key>=<value>       Set environment variable
+  WORKDIR <path>          Set working directory
+  EXPOSE <port>           Document exposed ports
+  LABEL <key>=<value>     Add metadata label
+
+RUN commands are recorded as a build script at /etc/tent/build.sh
+and executed inside the sandbox on first boot.
+
+Examples:
+  tent image build myimage
+  tent image build myimage -f custom.tentfile
+  tent image build myimage -t v1.0`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			// Find Tentfile
+			tentfilePath := file
+			if tentfilePath == "" {
+				// Look for Tentfile in current directory
+				for _, candidate := range []string{"Tentfile", "tentfile", "Tentfile.tent"} {
+					if _, err := os.Stat(candidate); err == nil {
+						tentfilePath = candidate
+						break
+					}
+				}
+				if tentfilePath == "" {
+					return fmt.Errorf("no Tentfile found in current directory (use -f to specify)")
+				}
+			}
+
+			// Resolve to absolute path
+			if !filepath.IsAbs(tentfilePath) {
+				abs, err := filepath.Abs(tentfilePath)
+				if err != nil {
+					return fmt.Errorf("failed to resolve Tentfile path: %w", err)
+				}
+				tentfilePath = abs
+			}
+
+			// Apply tag to name
+			imageName := name
+			if tag != "" {
+				imageName = name + "_" + tag
+			}
+
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			imgMgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			fmt.Printf("Building image '%s' from %s...\n", imageName, tentfilePath)
+
+			result, err := imgMgr.BuildImage(imageName, tentfilePath)
+			if err != nil {
+				return fmt.Errorf("build failed: %w", err)
+			}
+
+			fmt.Printf("\nBuild complete:\n")
+			fmt.Printf("  Image:  %s\n", result.ImageName)
+			fmt.Printf("  Base:   %s\n", result.BaseImage)
+			fmt.Printf("  Steps:  %d\n", result.Steps)
+			fmt.Printf("  Time:   %s\n", result.Duration.Round(time.Millisecond))
+			if len(result.Labels) > 0 {
+				fmt.Printf("  Labels:\n")
+				for k, v := range result.Labels {
+					fmt.Printf("    %s=%s\n", k, v)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&file, "file", "f", "", "Path to Tentfile (default: ./Tentfile)")
+	cmd.Flags().StringVarP(&tag, "tag", "t", "", "Tag for the built image")
 	return cmd
 }
