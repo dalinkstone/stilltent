@@ -82,6 +82,7 @@ func main() {
 	rootCmd.AddCommand(scheduleCmd())
 	rootCmd.AddCommand(metricsCmd())
 	rootCmd.AddCommand(signalCmd())
+	rootCmd.AddCommand(ttlCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

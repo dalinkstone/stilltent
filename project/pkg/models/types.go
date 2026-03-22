@@ -37,6 +37,7 @@ type VMConfig struct {
 	Hooks          *LifecycleHooks    `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 	Resources      *ResourceLimits    `yaml:"resources,omitempty" json:"resources,omitempty"`
 	Devices        []DeviceConfig     `yaml:"devices,omitempty" json:"devices,omitempty"`
+	TTL            string             `yaml:"ttl,omitempty" json:"ttl,omitempty"`
 }
 
 // DeviceType represents the type of device passthrough
@@ -283,6 +284,8 @@ type VMState struct {
 	RestartPolicy  RestartPolicy    `json:"restart_policy,omitempty"`
 	Health         *HealthState     `json:"health,omitempty"`
 	Devices        []DeviceState    `json:"devices,omitempty"`
+	TTL            string           `json:"ttl,omitempty"`
+	TTLExpiresAt   int64            `json:"ttl_expires_at,omitempty"`
 }
 
 // DeviceState tracks a passthrough device attached to a sandbox
