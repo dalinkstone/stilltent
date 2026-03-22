@@ -107,6 +107,15 @@ gh pr create --base main --head "$BRANCH_NAME" \
 ```
 **Merge rules:** confidence >= 0.7 + build passes + no protected files = `gh pr merge --merge --delete-branch`. 0.5-0.7 = merge + log. < 0.5 = leave open. Protected = `[HUMAN-REVIEW]`, no merge.
 
+**Issue tracking:** If this PR fixes an `agent-fix` issue, link it:
+```bash
+# Comment on the issue with what you did
+gh issue comment <ISSUE_NUMBER> --repo "$TARGET_REPO" --body "Fixed in PR #<PR_NUMBER>. Changes: <one-line summary>"
+# Close the issue
+gh issue close <ISSUE_NUMBER> --repo "$TARGET_REPO"
+```
+Always do this when your work addresses an open issue. The project owner tracks progress through issue comments.
+
 ## Phase 6b: REVIEW EXTERNAL PRs
 For each: `gh pr checkout <N>`, build the code, `gh pr diff <N>`.
 - Build passes = approve + merge. Build fails = request changes. Misaligned with spec = comment + close. Uncertain = comment + skip.
