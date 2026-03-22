@@ -767,6 +767,37 @@ func (m *VMManager) ListAllPortForwards() []network.ForwardStatus {
 	return m.portForwarder.ListAllForwards()
 }
 
+// ExecInVM runs a single command string inside a sandbox and returns the output.
+// Used by health checks to execute commands inside the guest.
+func (m *VMManager) ExecInVM(name string, command string, timeoutSec int) (string, error) {
+	output, exitCode, err := m.Exec(name, []string{"sh", "-c", command})
+	if err != nil {
+		return output, err
+	}
+	if exitCode != 0 {
+		return output, fmt.Errorf("command exited with code %d", exitCode)
+	}
+	return output, nil
+}
+
+// UpdateHealth persists the health state for a sandbox.
+func (m *VMManager) UpdateHealth(name string, health *models.HealthState) error {
+	return m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Health = health
+		s.UpdatedAt = time.Now().Unix()
+		return nil
+	})
+}
+
+// LoadConfig loads the persisted VMConfig for a sandbox.
+func (m *VMManager) LoadConfig(name string) (*models.VMConfig, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+	return m.loadConfigFromState(vmState)
+}
+
 // loadConfigFromState loads the VM config from the state file
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
 	// Load config from state file if present

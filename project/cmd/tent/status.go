@@ -88,6 +88,17 @@ func ConfigureStatusCmd(options ...CommonCmdOption) *cobra.Command {
 			if vmState.RestartPolicy != "" {
 				fmt.Printf("  Restart:   %s (count: %d)\n", vmState.RestartPolicy, vmState.RestartCount)
 			}
+
+			// Display health state if available
+			if vmState.Health != nil {
+				fmt.Printf("  Health:    %s\n", vmState.Health.Status)
+				if vmState.Health.LastOutput != "" {
+					fmt.Printf("    Output:  %s\n", vmState.Health.LastOutput)
+				}
+				if vmState.Health.LastError != "" {
+					fmt.Printf("    Error:   %s\n", vmState.Health.LastError)
+				}
+			}
 			fmt.Printf("  Created:   %d\n", vmState.CreatedAt)
 			fmt.Printf("  Updated:   %d\n", vmState.UpdatedAt)
 

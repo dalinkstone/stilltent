@@ -31,6 +31,7 @@ func main() {
 	rootCmd.AddCommand(composeCmd())
 	rootCmd.AddCommand(execCmd())
 	rootCmd.AddCommand(restartCmd())
+	rootCmd.AddCommand(healthCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

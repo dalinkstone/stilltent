@@ -27,8 +27,9 @@ type VMConfig struct {
 	DiskGB    int           `yaml:"disk_gb" json:"disk_gb"`
 	Network   NetworkConfig `yaml:"network" json:"network"`
 	Mounts    []MountConfig `yaml:"mounts" json:"mounts,omitempty"`
-	Env            map[string]string `yaml:"env" json:"env,omitempty"`
-	RestartPolicy  RestartPolicy     `yaml:"restart_policy" json:"restart_policy,omitempty"`
+	Env            map[string]string  `yaml:"env" json:"env,omitempty"`
+	RestartPolicy  RestartPolicy      `yaml:"restart_policy" json:"restart_policy,omitempty"`
+	HealthCheck    *HealthCheckConfig `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 }
 
 // RestartPolicy defines the restart behavior for a sandbox
@@ -65,6 +66,60 @@ type MountConfig struct {
 	Readonly bool   `yaml:"readonly"`
 }
 
+// HealthCheckConfig defines how to check if a sandbox is healthy
+type HealthCheckConfig struct {
+	// Type is the check type: "exec", "http", or "agent" (ping via guest agent)
+	Type string `yaml:"type" json:"type"`
+	// Command to execute inside the sandbox (for type=exec)
+	Command string `yaml:"command,omitempty" json:"command,omitempty"`
+	// URL to check (for type=http, checked from inside the guest)
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+	// IntervalSec is seconds between checks (default: 30)
+	IntervalSec int `yaml:"interval_sec,omitempty" json:"interval_sec,omitempty"`
+	// TimeoutSec is seconds before a check is considered failed (default: 5)
+	TimeoutSec int `yaml:"timeout_sec,omitempty" json:"timeout_sec,omitempty"`
+	// Retries is the number of consecutive failures before marking unhealthy (default: 3)
+	Retries int `yaml:"retries,omitempty" json:"retries,omitempty"`
+	// StartPeriodSec is grace period after start before health checks count (default: 0)
+	StartPeriodSec int `yaml:"start_period_sec,omitempty" json:"start_period_sec,omitempty"`
+}
+
+// HealthCheckDefaults fills in zero-value fields with defaults
+func (h *HealthCheckConfig) HealthCheckDefaults() {
+	if h.IntervalSec <= 0 {
+		h.IntervalSec = 30
+	}
+	if h.TimeoutSec <= 0 {
+		h.TimeoutSec = 5
+	}
+	if h.Retries <= 0 {
+		h.Retries = 3
+	}
+	if h.Type == "" {
+		h.Type = "agent"
+	}
+}
+
+// HealthStatus represents the current health of a sandbox
+type HealthStatus string
+
+const (
+	HealthStatusUnknown   HealthStatus = "unknown"
+	HealthStatusHealthy   HealthStatus = "healthy"
+	HealthStatusUnhealthy HealthStatus = "unhealthy"
+	HealthStatusStarting  HealthStatus = "starting"
+)
+
+// HealthState tracks the health check state for a sandbox
+type HealthState struct {
+	Status           HealthStatus `json:"status"`
+	FailCount        int          `json:"fail_count"`
+	SuccessCount     int          `json:"success_count"`
+	LastCheckAt      int64        `json:"last_check_at,omitempty"`
+	LastOutput       string       `json:"last_output,omitempty"`
+	LastError        string       `json:"last_error,omitempty"`
+}
+
 // VMState represents the runtime state of a microVM
 type VMState struct {
 	Name        string     `json:"name"`
@@ -81,8 +136,9 @@ type VMState struct {
 	DiskGB      int        `json:"disk_gb,omitempty"`
 	CreatedAt      int64         `json:"created_at"`
 	UpdatedAt      int64         `json:"updated_at"`
-	RestartCount   int           `json:"restart_count,omitempty"`
-	RestartPolicy  RestartPolicy `json:"restart_policy,omitempty"`
+	RestartCount   int              `json:"restart_count,omitempty"`
+	RestartPolicy  RestartPolicy    `json:"restart_policy,omitempty"`
+	Health         *HealthState     `json:"health,omitempty"`
 }
 
 // Snapshot represents a VM snapshot
