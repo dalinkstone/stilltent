@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -141,6 +142,28 @@ func (sm *StateManager) DeleteVM(name string) error {
 	}
 	
 	delete(sm.state, name)
+	return sm.save()
+}
+
+// RenameVM renames a VM in the state store
+func (sm *StateManager) RenameVM(oldName, newName string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	vm, ok := sm.state[oldName]
+	if !ok {
+		return os.ErrNotExist
+	}
+
+	if _, exists := sm.state[newName]; exists {
+		return fmt.Errorf("sandbox %q already exists", newName)
+	}
+
+	delete(sm.state, oldName)
+	vm.Name = newName
+	vm.UpdatedAt = sm.now()
+	sm.state[newName] = vm
+
 	return sm.save()
 }
 

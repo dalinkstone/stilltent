@@ -75,6 +75,23 @@ func (m *MockStateManager) ListVMs() ([]*models.VMState, error) {
 	return result, nil
 }
 
+func (m *MockStateManager) RenameVM(oldName, newName string) error {
+	if m.Err != nil {
+		return m.Err
+	}
+	vm, ok := m.VMs[oldName]
+	if !ok {
+		return fmt.Errorf("VM %q not found", oldName)
+	}
+	if _, exists := m.VMs[newName]; exists {
+		return fmt.Errorf("VM %q already exists", newName)
+	}
+	delete(m.VMs, oldName)
+	vm.Name = newName
+	m.VMs[newName] = vm
+	return nil
+}
+
 // MockVMInstance implements hypervisor.VM for testing
 type MockVMInstance struct {
 	config  *models.VMConfig

@@ -27,6 +27,7 @@ type StateManager interface {
 	UpdateVM(name string, updateFn func(*models.VMState) error) error
 	DeleteVM(name string) error
 	ListVMs() ([]*models.VMState, error)
+	RenameVM(oldName, newName string) error
 }
 
 // HypervisorBackend defines the interface for hypervisor VM operations
@@ -523,6 +524,67 @@ func (m *VMManager) Destroy(name string) error {
 	// Cleanup state
 	if err := m.stateManager.DeleteVM(name); err != nil {
 		return fmt.Errorf("failed to delete state: %w", err)
+	}
+
+	return nil
+}
+
+// RenameVM renames a sandbox. The sandbox must be stopped.
+func (m *VMManager) RenameVM(oldName, newName string) error {
+	// Validate the sandbox exists and is stopped
+	vmState, err := m.stateManager.GetVM(oldName)
+	if err != nil {
+		return fmt.Errorf("sandbox %q not found: %w", oldName, err)
+	}
+
+	if vmState.Status == models.VMStatusRunning {
+		return fmt.Errorf("cannot rename running sandbox %q — stop it first", oldName)
+	}
+
+	// Check that the new name doesn't already exist
+	if _, err := m.stateManager.GetVM(newName); err == nil {
+		return fmt.Errorf("sandbox %q already exists", newName)
+	}
+
+	// Rename config file if it exists
+	oldConfigPath := filepath.Join(m.baseDir, "configs", oldName+".yaml")
+	newConfigPath := filepath.Join(m.baseDir, "configs", newName+".yaml")
+	if _, err := os.Stat(oldConfigPath); err == nil {
+		// Read and update the config name field
+		data, err := os.ReadFile(oldConfigPath)
+		if err == nil {
+			var config models.VMConfig
+			if err := yaml.Unmarshal(data, &config); err == nil {
+				config.Name = newName
+				if newData, err := yaml.Marshal(&config); err == nil {
+					_ = os.WriteFile(newConfigPath, newData, 0644)
+					_ = os.Remove(oldConfigPath)
+				}
+			}
+		}
+	}
+
+	// Rename console log file if it exists
+	if m.consoleMgr != nil {
+		oldLogPath := filepath.Join(m.baseDir, "logs", oldName+".log")
+		newLogPath := filepath.Join(m.baseDir, "logs", newName+".log")
+		if _, err := os.Stat(oldLogPath); err == nil {
+			_ = os.Rename(oldLogPath, newLogPath)
+		}
+	}
+
+	// Rename mount state if it exists
+	if m.mountMgr != nil {
+		oldMountPath := filepath.Join(m.baseDir, "mounts", oldName+".json")
+		newMountPath := filepath.Join(m.baseDir, "mounts", newName+".json")
+		if _, err := os.Stat(oldMountPath); err == nil {
+			_ = os.Rename(oldMountPath, newMountPath)
+		}
+	}
+
+	// Rename in state store (this updates the name and persists)
+	if err := m.stateManager.RenameVM(oldName, newName); err != nil {
+		return fmt.Errorf("failed to rename sandbox state: %w", err)
 	}
 
 	return nil
