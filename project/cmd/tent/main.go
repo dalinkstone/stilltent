@@ -81,6 +81,7 @@ func main() {
 	rootCmd.AddCommand(webhookCmd())
 	rootCmd.AddCommand(scheduleCmd())
 	rootCmd.AddCommand(metricsCmd())
+	rootCmd.AddCommand(signalCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
