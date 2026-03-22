@@ -6,11 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
-
-	"strconv"
+	"gopkg.in/yaml.v3"
 
 	"github.com/dalinkstone/tent/internal/compose"
 	"github.com/dalinkstone/tent/internal/image"
@@ -36,6 +37,8 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composePullCmd())
 	cmd.AddCommand(composePauseCmd())
 	cmd.AddCommand(composeUnpauseCmd())
+	cmd.AddCommand(composeConfigCmd())
+	cmd.AddCommand(composeGraphCmd())
 
 	return cmd
 }
@@ -791,6 +794,244 @@ Examples:
 
 	cmd.Flags().StringSliceVar(&services, "service", nil, "Unpause only specific services")
 	return cmd
+}
+
+func composeConfigCmd() *cobra.Command {
+	var outputFormat string
+
+	cmd := &cobra.Command{
+		Use:   "config <file>",
+		Short: "Show resolved compose configuration",
+		Long: `Parse a compose file, expand environment variables, apply defaults,
+and display the fully resolved configuration. Useful for debugging
+variable expansion and verifying the final configuration.
+
+Examples:
+  tent compose config tent-compose.yaml
+  tent compose config tent-compose.yaml --format json
+  tent compose config tent-compose.yaml --format yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			// Apply defaults to make the resolved config complete
+			for name, sb := range config.Sandboxes {
+				if sb.VCPUs <= 0 {
+					sb.VCPUs = 2
+				}
+				if sb.MemoryMB <= 0 {
+					sb.MemoryMB = 1024
+				}
+				if sb.DiskGB <= 0 {
+					sb.DiskGB = 10
+				}
+				if sb.Name == "" {
+					sb.Name = name
+				}
+			}
+
+			switch outputFormat {
+			case "json":
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(config)
+			case "yaml":
+				out, err := yaml.Marshal(config)
+				if err != nil {
+					return fmt.Errorf("failed to marshal config: %w", err)
+				}
+				fmt.Print(string(out))
+			default:
+				order := config.TopologicalOrder()
+				fmt.Printf("# Resolved compose configuration from %s\n\n", filePath)
+				for _, name := range order {
+					sb := config.Sandboxes[name]
+					fmt.Printf("Sandbox: %s\n", name)
+					fmt.Printf("  from:      %s\n", sb.From)
+					fmt.Printf("  vcpus:     %d\n", sb.VCPUs)
+					fmt.Printf("  memory_mb: %d\n", sb.MemoryMB)
+					fmt.Printf("  disk_gb:   %d\n", sb.DiskGB)
+					if sb.Network != nil {
+						if len(sb.Network.Allow) > 0 {
+							fmt.Printf("  network.allow:\n")
+							for _, ep := range sb.Network.Allow {
+								fmt.Printf("    - %s\n", ep)
+							}
+						}
+						if len(sb.Network.Deny) > 0 {
+							fmt.Printf("  network.deny:\n")
+							for _, ep := range sb.Network.Deny {
+								fmt.Printf("    - %s\n", ep)
+							}
+						}
+						if sb.Network.Allow == nil && sb.Network.Deny == nil {
+							fmt.Printf("  network:   block-all (no allow/deny rules)\n")
+						}
+					} else {
+						fmt.Printf("  network:   block-all (default)\n")
+					}
+					if len(sb.Env) > 0 {
+						fmt.Printf("  env:\n")
+						envKeys := make([]string, 0, len(sb.Env))
+						for k := range sb.Env {
+							envKeys = append(envKeys, k)
+						}
+						sort.Strings(envKeys)
+						for _, k := range envKeys {
+							v := sb.Env[k]
+							// Mask potentially sensitive values
+							if isSensitiveKey(k) && len(v) > 4 {
+								fmt.Printf("    %s: %s...%s\n", k, v[:2], v[len(v)-2:])
+							} else {
+								fmt.Printf("    %s: %s\n", k, v)
+							}
+						}
+					}
+					if len(sb.Mounts) > 0 {
+						fmt.Printf("  mounts:\n")
+						for _, m := range sb.Mounts {
+							ro := ""
+							if m.Readonly {
+								ro = " (readonly)"
+							}
+							fmt.Printf("    - %s -> %s%s\n", m.Host, m.Guest, ro)
+						}
+					}
+					if len(sb.DependsOn) > 0 {
+						fmt.Printf("  depends_on: %s\n", strings.Join(sb.DependsOn, ", "))
+					}
+					fmt.Println()
+				}
+				fmt.Printf("Start order: %s\n", strings.Join(order, " -> "))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json, yaml")
+	return cmd
+}
+
+// isSensitiveKey returns true if the env var key likely contains a secret
+func isSensitiveKey(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, s := range []string{"KEY", "SECRET", "TOKEN", "PASSWORD", "CREDENTIAL"} {
+		if strings.Contains(upper, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func composeGraphCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "graph <file>",
+		Short: "Show dependency graph of compose services",
+		Long: `Display the dependency graph for sandboxes defined in a compose file.
+Shows which services depend on which, and the boot order.
+
+Examples:
+  tent compose graph tent-compose.yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			order := config.TopologicalOrder()
+
+			// Build reverse dependency map (what depends on each service)
+			dependedBy := make(map[string][]string)
+			for name, sb := range config.Sandboxes {
+				for _, dep := range sb.DependsOn {
+					dependedBy[dep] = append(dependedBy[dep], name)
+				}
+			}
+
+			// Find root nodes (no dependencies)
+			var roots []string
+			for _, name := range order {
+				sb := config.Sandboxes[name]
+				if len(sb.DependsOn) == 0 {
+					roots = append(roots, name)
+				}
+			}
+
+			fmt.Printf("Dependency graph for %s:\n\n", filePath)
+
+			// Print tree from each root
+			printed := make(map[string]bool)
+			for i, root := range roots {
+				isLast := i == len(roots)-1
+				printTree(root, "", isLast, dependedBy, config.Sandboxes, printed)
+			}
+
+			// Print any orphans (shouldn't happen after validation, but be safe)
+			for _, name := range order {
+				if !printed[name] {
+					fmt.Printf("[%s] %s\n", config.Sandboxes[name].From, name)
+				}
+			}
+
+			fmt.Printf("\nBoot order: %s\n", strings.Join(order, " -> "))
+			fmt.Printf("Total services: %d\n", len(config.Sandboxes))
+
+			return nil
+		},
+	}
+}
+
+// printTree prints a tree representation of the dependency graph
+func printTree(name string, prefix string, isLast bool, dependedBy map[string][]string, sandboxes map[string]*compose.SandboxConfig, printed map[string]bool) {
+	if printed[name] {
+		connector := "|-- "
+		if isLast {
+			connector = "`-- "
+		}
+		fmt.Printf("%s%s%s (already shown)\n", prefix, connector, name)
+		return
+	}
+	printed[name] = true
+
+	connector := "|-- "
+	childPrefix := "|   "
+	if isLast {
+		connector = "`-- "
+		childPrefix = "    "
+	}
+
+	sb := sandboxes[name]
+	if prefix == "" {
+		fmt.Printf("[%s] %s\n", sb.From, name)
+	} else {
+		fmt.Printf("%s%s[%s] %s\n", prefix, connector, sb.From, name)
+	}
+
+	children := dependedBy[name]
+	sort.Strings(children)
+	for i, child := range children {
+		childIsLast := i == len(children)-1
+		printTree(child, prefix+childPrefix, childIsLast, dependedBy, sandboxes, printed)
+	}
 }
 
 // resolveComposeTargets returns the list of sandbox names to operate on,
