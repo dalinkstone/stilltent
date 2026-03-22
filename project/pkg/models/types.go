@@ -1,5 +1,7 @@
 package models
 
+import "fmt"
+
 // VMStatus represents the current state of a microVM
 type VMStatus string
 
@@ -33,6 +35,71 @@ type VMConfig struct {
 	RestartPolicy  RestartPolicy      `yaml:"restart_policy" json:"restart_policy,omitempty"`
 	HealthCheck    *HealthCheckConfig `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	Hooks          *LifecycleHooks    `yaml:"hooks,omitempty" json:"hooks,omitempty"`
+	Resources      *ResourceLimits    `yaml:"resources,omitempty" json:"resources,omitempty"`
+}
+
+// ResourceLimits defines resource constraints for a sandbox VM.
+type ResourceLimits struct {
+	// CPUWeight is the relative CPU scheduling weight (1-10000, default 1024).
+	// Higher values get more CPU time when competing with other VMs.
+	CPUWeight int `yaml:"cpu_weight,omitempty" json:"cpu_weight,omitempty"`
+	// CPUMaxPercent caps CPU usage as a percentage of total host CPUs (1-100*nCPU).
+	// For example, 200 on a 4-core host allows 2 full cores of usage.
+	CPUMaxPercent int `yaml:"cpu_max_percent,omitempty" json:"cpu_max_percent,omitempty"`
+	// MemoryMaxMB sets a hard memory limit in MB. If 0, uses the VM's MemoryMB.
+	MemoryMaxMB int `yaml:"memory_max_mb,omitempty" json:"memory_max_mb,omitempty"`
+	// MemorySwapMaxMB sets the maximum swap usage in MB (0 = no swap).
+	MemorySwapMaxMB int `yaml:"memory_swap_max_mb,omitempty" json:"memory_swap_max_mb,omitempty"`
+	// IOReadBPS limits disk read bandwidth in bytes per second (0 = unlimited).
+	IOReadBPS int64 `yaml:"io_read_bps,omitempty" json:"io_read_bps,omitempty"`
+	// IOWriteBPS limits disk write bandwidth in bytes per second (0 = unlimited).
+	IOWriteBPS int64 `yaml:"io_write_bps,omitempty" json:"io_write_bps,omitempty"`
+	// IOReadIOPS limits disk read IOPS (0 = unlimited).
+	IOReadIOPS int64 `yaml:"io_read_iops,omitempty" json:"io_read_iops,omitempty"`
+	// IOWriteIOPS limits disk write IOPS (0 = unlimited).
+	IOWriteIOPS int64 `yaml:"io_write_iops,omitempty" json:"io_write_iops,omitempty"`
+	// NetworkBandwidthMbps limits network bandwidth in megabits per second (0 = unlimited).
+	NetworkBandwidthMbps int `yaml:"network_bandwidth_mbps,omitempty" json:"network_bandwidth_mbps,omitempty"`
+	// PidsMax limits the number of processes in the sandbox (0 = unlimited).
+	PidsMax int `yaml:"pids_max,omitempty" json:"pids_max,omitempty"`
+}
+
+// Validate checks resource limit values are within valid ranges.
+func (r *ResourceLimits) Validate() error {
+	if r == nil {
+		return nil
+	}
+	if r.CPUWeight < 0 || r.CPUWeight > 10000 {
+		return fmt.Errorf("cpu_weight must be between 0 and 10000, got %d", r.CPUWeight)
+	}
+	if r.CPUMaxPercent < 0 {
+		return fmt.Errorf("cpu_max_percent must be non-negative, got %d", r.CPUMaxPercent)
+	}
+	if r.MemoryMaxMB < 0 {
+		return fmt.Errorf("memory_max_mb must be non-negative, got %d", r.MemoryMaxMB)
+	}
+	if r.MemorySwapMaxMB < 0 {
+		return fmt.Errorf("memory_swap_max_mb must be non-negative, got %d", r.MemorySwapMaxMB)
+	}
+	if r.IOReadBPS < 0 {
+		return fmt.Errorf("io_read_bps must be non-negative, got %d", r.IOReadBPS)
+	}
+	if r.IOWriteBPS < 0 {
+		return fmt.Errorf("io_write_bps must be non-negative, got %d", r.IOWriteBPS)
+	}
+	if r.IOReadIOPS < 0 {
+		return fmt.Errorf("io_read_iops must be non-negative, got %d", r.IOReadIOPS)
+	}
+	if r.IOWriteIOPS < 0 {
+		return fmt.Errorf("io_write_iops must be non-negative, got %d", r.IOWriteIOPS)
+	}
+	if r.NetworkBandwidthMbps < 0 {
+		return fmt.Errorf("network_bandwidth_mbps must be non-negative, got %d", r.NetworkBandwidthMbps)
+	}
+	if r.PidsMax < 0 {
+		return fmt.Errorf("pids_max must be non-negative, got %d", r.PidsMax)
+	}
+	return nil
 }
 
 // LifecycleHooks defines commands to run at specific sandbox lifecycle points.
@@ -230,6 +297,12 @@ func ValidateVMConfig(cfg *VMConfig) error {
 
 	if cfg.DiskGB <= 0 {
 		errors = append(errors, ConfigError{Field: "disk_gb", Message: "disk_gb must be positive"})
+	}
+
+	if cfg.Resources != nil {
+		if err := cfg.Resources.Validate(); err != nil {
+			errors = append(errors, ConfigError{Field: "resources", Message: err.Error()})
+		}
 	}
 
 	if len(errors) > 0 {

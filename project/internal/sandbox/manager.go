@@ -84,6 +84,7 @@ type VMManager struct {
 	egressFirewall *network.EgressFirewall
 	mountMgr       *MountManager
 	eventLogger    *EventLogger
+	resourceLimiter *ResourceLimiter
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -142,6 +143,7 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		egressFirewall: egressFw,
 		mountMgr:       NewMountManager(baseDir),
 		eventLogger:    NewEventLogger(baseDir),
+		resourceLimiter: NewResourceLimiter(baseDir),
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -163,6 +165,11 @@ func (m *VMManager) logEvent(eventType EventType, sandbox string, details map[st
 // EventLogger returns the event logger for external use
 func (m *VMManager) EventLog() *EventLogger {
 	return m.eventLogger
+}
+
+// GetResourceLimits returns the applied resource limits for a sandbox.
+func (m *VMManager) GetResourceLimits(name string) (*AppliedLimits, error) {
+	return m.resourceLimiter.GetLimits(name)
 }
 
 // Create creates a new microVM
@@ -465,6 +472,19 @@ func (m *VMManager) Start(name string) error {
 	// Track running VM
 	m.runningVMs[name] = vm
 
+	// Apply resource limits
+	if config.Resources != nil {
+		applied, err := m.resourceLimiter.ApplyLimits(name, config)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to apply resource limits for %s: %v\n", name, err)
+		} else if applied != nil && vmState.PID > 0 {
+			// Assign VM process to the cgroup
+			if err := m.resourceLimiter.AssignProcess(name, vmState.PID); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to assign process to cgroup for %s: %v\n", name, err)
+			}
+		}
+	}
+
 	// Update state
 	vmState.Status = models.VMStatusRunning
 	vmState.IP = vm.GetIP()
@@ -554,6 +574,11 @@ func (m *VMManager) Stop(name string) error {
 
 	// Remove port forwarding
 	m.portForwarder.RemoveForwards(name)
+
+	// Remove resource limits
+	if err := m.resourceLimiter.RemoveLimits(name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to remove resource limits for %s: %v\n", name, err)
+	}
 
 	// Cleanup network resources
 	if vmState.TAPDevice != "" {

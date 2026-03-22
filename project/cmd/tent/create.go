@@ -38,8 +38,12 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 		mountSpecs  []string
 		portSpecs   []string
 		labelSpecs  []string
-		hookSpecs   []string
-		backendName string
+		hookSpecs    []string
+		backendName  string
+		cpuWeight    int
+		cpuMax       int
+		memMax       int
+		pidsMax      int
 	)
 
 	cmd := &cobra.Command{
@@ -169,6 +173,26 @@ Examples:
 				}
 			}
 
+			// Parse resource limit flags
+			if cmd.Flags().Changed("cpu-weight") || cmd.Flags().Changed("cpu-max") ||
+				cmd.Flags().Changed("memory-max") || cmd.Flags().Changed("pids-max") {
+				if cfg.Resources == nil {
+					cfg.Resources = &models.ResourceLimits{}
+				}
+				if cmd.Flags().Changed("cpu-weight") {
+					cfg.Resources.CPUWeight = cpuWeight
+				}
+				if cmd.Flags().Changed("cpu-max") {
+					cfg.Resources.CPUMaxPercent = cpuMax
+				}
+				if cmd.Flags().Changed("memory-max") {
+					cfg.Resources.MemoryMaxMB = memMax
+				}
+				if cmd.Flags().Changed("pids-max") {
+					cfg.Resources.PidsMax = pidsMax
+				}
+			}
+
 			// Validate config
 			if err := cfg.Validate(); err != nil {
 				return fmt.Errorf("invalid configuration: %w", err)
@@ -237,6 +261,10 @@ Examples:
 	cmd.Flags().StringSliceVar(&labelSpecs, "label", nil, "Labels in key=value format (can be repeated)")
 	cmd.Flags().StringSliceVar(&hookSpecs, "hook", nil, "Lifecycle hooks in phase:command format (e.g., pre_start:echo hello)")
 	cmd.Flags().StringVar(&backendName, "backend", "", "Hypervisor backend (e.g., kvm, hvf, firecracker)")
+	cmd.Flags().IntVar(&cpuWeight, "cpu-weight", 0, "CPU scheduling weight (1-10000)")
+	cmd.Flags().IntVar(&cpuMax, "cpu-max", 0, "Maximum CPU usage as percentage")
+	cmd.Flags().IntVar(&memMax, "memory-max", 0, "Hard memory limit in MB")
+	cmd.Flags().IntVar(&pidsMax, "pids-max", 0, "Maximum number of processes")
 
 	return cmd
 }
