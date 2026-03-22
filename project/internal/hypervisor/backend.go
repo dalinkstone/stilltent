@@ -39,6 +39,12 @@ type VM interface {
 	// GetIP returns the VM's network IP address
 	GetIP() string
 
+	// SetIP sets the VM's network IP address
+	SetIP(ip string)
+
+	// SetNetwork configures the VM's network interface
+	SetNetwork(tapDevice string, ip string)
+
 	// GetPID returns the VM process ID (if applicable)
 	GetPID() int
 
