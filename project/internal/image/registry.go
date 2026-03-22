@@ -575,6 +575,135 @@ func (g *gzipReadCloser) Close() error {
 	return g.underlying.Close()
 }
 
+// SearchResult represents a single image result from a registry search.
+type SearchResult struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Stars       int    `json:"star_count"`
+	Official    bool   `json:"is_official"`
+	Automated   bool   `json:"is_automated"`
+}
+
+// dockerHubSearchResponse is the Docker Hub v1 search API response.
+type dockerHubSearchResponse struct {
+	NumResults int            `json:"num_results"`
+	Results    []SearchResult `json:"results"`
+}
+
+// SearchImages searches a registry for images matching the given query.
+// For Docker Hub, uses the v1 search API. For other registries, uses the
+// OCI catalog endpoint with client-side filtering.
+func (c *RegistryClient) SearchImages(registry, query string, limit int) ([]SearchResult, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+
+	normalized := NormalizeRegistry(registry)
+	if normalized == "registry-1.docker.io" || normalized == "docker.io" || registry == "" {
+		return c.searchDockerHub(query, limit)
+	}
+
+	return c.searchCatalog(normalized, query, limit)
+}
+
+// searchDockerHub uses the Docker Hub search API.
+func (c *RegistryClient) searchDockerHub(query string, limit int) ([]SearchResult, error) {
+	url := fmt.Sprintf("https://hub.docker.com/v2/search/repositories/?query=%s&page_size=%d", query, limit)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating search request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("search request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("search returned status %d", resp.StatusCode)
+	}
+
+	var searchResp dockerHubSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+		return nil, fmt.Errorf("decoding search response: %w", err)
+	}
+
+	return searchResp.Results, nil
+}
+
+// searchCatalog searches a generic OCI registry using the catalog API with filtering.
+func (c *RegistryClient) searchCatalog(registry, query string, limit int) ([]SearchResult, error) {
+	catalogURL := fmt.Sprintf("https://%s/v2/_catalog?n=200", registry)
+
+	req, err := http.NewRequest("GET", catalogURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating catalog request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	c.applyBasicAuth(req, registry)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("catalog request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("catalog returned status %d", resp.StatusCode)
+	}
+
+	var catalog struct {
+		Repositories []string `json:"repositories"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		return nil, fmt.Errorf("decoding catalog: %w", err)
+	}
+
+	queryLower := strings.ToLower(query)
+	var results []SearchResult
+	for _, repo := range catalog.Repositories {
+		if strings.Contains(strings.ToLower(repo), queryLower) {
+			results = append(results, SearchResult{
+				Name: repo,
+			})
+			if len(results) >= limit {
+				break
+			}
+		}
+	}
+
+	return results, nil
+}
+
+// ListTags retrieves all tags for a repository from a registry.
+func (c *RegistryClient) ListTags(registry, repo string) ([]string, error) {
+	normalized := NormalizeRegistry(registry)
+	if normalized == "" {
+		normalized = "registry-1.docker.io"
+	}
+
+	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", normalized, repo)
+
+	body, _, err := c.registryGet(normalized, repo, tagsURL, "application/json")
+	if err != nil {
+		return nil, fmt.Errorf("fetching tags: %w", err)
+	}
+	defer body.Close()
+
+	var tagsResp struct {
+		Name string   `json:"name"`
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(body).Decode(&tagsResp); err != nil {
+		return nil, fmt.Errorf("decoding tags response: %w", err)
+	}
+
+	return tagsResp.Tags, nil
+}
+
 // applyBasicAuth adds Basic auth to a request if credentials exist for the registry.
 func (c *RegistryClient) applyBasicAuth(req *http.Request, registry string) {
 	if c.credStore == nil {

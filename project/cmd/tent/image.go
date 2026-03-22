@@ -35,6 +35,8 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageCacheCmd())
 	cmd.AddCommand(imageVerifyCmd())
 	cmd.AddCommand(imageConvertCmd())
+	cmd.AddCommand(imageSearchCmd())
+	cmd.AddCommand(imageTagsCmd())
 
 	return cmd
 }
@@ -1106,4 +1108,149 @@ func parseCacheDuration(s string) (time.Duration, error) {
 		return time.Duration(days * 24 * float64(time.Hour)), nil
 	}
 	return time.ParseDuration(s)
+}
+
+func imageSearchCmd() *cobra.Command {
+	var (
+		registry   string
+		limit      int
+		jsonOutput bool
+		official   bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "search <query>",
+		Short: "Search a registry for images",
+		Long: `Search Docker Hub or another OCI registry for images matching a query.
+
+By default searches Docker Hub. Use --registry to search a different registry.
+
+Examples:
+  tent image search ubuntu
+  tent image search python --limit 10
+  tent image search nginx --official
+  tent image search myimage --registry ghcr.io
+  tent image search alpine --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			query := args[0]
+
+			client := image.NewRegistryClient()
+			results, err := client.SearchImages(registry, query, limit)
+			if err != nil {
+				return fmt.Errorf("search failed: %w", err)
+			}
+
+			if official {
+				var filtered []image.SearchResult
+				for _, r := range results {
+					if r.Official {
+						filtered = append(filtered, r)
+					}
+				}
+				results = filtered
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(results)
+			}
+
+			if len(results) == 0 {
+				fmt.Println("No images found.")
+				return nil
+			}
+
+			// Print table header
+			fmt.Printf("%-40s %-8s %-10s %s\n", "NAME", "STARS", "OFFICIAL", "DESCRIPTION")
+			for _, r := range results {
+				officialStr := ""
+				if r.Official {
+					officialStr = "[OK]"
+				}
+				desc := r.Description
+				if len(desc) > 50 {
+					desc = desc[:47] + "..."
+				}
+				fmt.Printf("%-40s %-8d %-10s %s\n", r.Name, r.Stars, officialStr, desc)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&registry, "registry", "", "Registry to search (default: Docker Hub)")
+	cmd.Flags().IntVar(&limit, "limit", 25, "Maximum number of results")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	cmd.Flags().BoolVar(&official, "official", false, "Show only official images")
+
+	return cmd
+}
+
+func imageTagsCmd() *cobra.Command {
+	var (
+		registry   string
+		limit      int
+		jsonOutput bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "tags <repository>",
+		Short: "List tags for a repository",
+		Long: `List available tags for an image repository in a registry.
+
+By default queries Docker Hub. Use --registry to query a different registry.
+
+Examples:
+  tent image tags ubuntu
+  tent image tags python
+  tent image tags library/nginx --limit 10
+  tent image tags myorg/myimage --registry ghcr.io
+  tent image tags alpine --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := args[0]
+
+			// For Docker Hub, prepend "library/" for official images
+			reg := registry
+			if reg == "" && !strings.Contains(repo, "/") {
+				repo = "library/" + repo
+			}
+
+			client := image.NewRegistryClient()
+			tags, err := client.ListTags(reg, repo)
+			if err != nil {
+				return fmt.Errorf("failed to list tags: %w", err)
+			}
+
+			if limit > 0 && len(tags) > limit {
+				tags = tags[len(tags)-limit:]
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(tags)
+			}
+
+			if len(tags) == 0 {
+				fmt.Println("No tags found.")
+				return nil
+			}
+
+			fmt.Printf("Tags for %s (%d total):\n", args[0], len(tags))
+			for _, tag := range tags {
+				fmt.Printf("  %s\n", tag)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&registry, "registry", "", "Registry to query (default: Docker Hub)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "Show only the last N tags")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+
+	return cmd
 }
