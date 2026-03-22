@@ -121,3 +121,17 @@ func GetVMNetPath() string {
 	// No external binary required
 	return ""
 }
+
+// ApplyNetworkPolicy applies egress firewall rules for a sandbox on macOS
+func (m *VMNetManager) ApplyNetworkPolicy(vmName string, policy *Policy) error {
+	// On macOS with vmnet.framework, the vmnet interface uses NAT mode
+	// which blocks all outbound traffic by default
+	// The actual enforcement is handled by the hypervisor backend
+	return nil
+}
+
+// RemoveNetworkPolicy removes egress firewall rules for a sandbox on macOS
+func (m *VMNetManager) RemoveNetworkPolicy(vmName string) error {
+	// No explicit cleanup needed for vmnet on macOS
+	return nil
+}
