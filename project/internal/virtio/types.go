@@ -12,6 +12,7 @@ const (
 	DeviceTypeConsole DeviceType = 3
 	DeviceTypeRng     DeviceType = 4
 	DeviceTypeMem     DeviceType = 5 // Memory balloon
+	DeviceTypeGPU     DeviceType = 16
 )
 
 // VirtioDevice defines the interface for a virtio device
