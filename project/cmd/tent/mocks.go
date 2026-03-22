@@ -4,12 +4,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
-	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/hypervisor"
 	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 // Mock implementations for testing CLI e2e tests
@@ -122,6 +123,15 @@ func (v *MockVMInstance) GetIP() string {
 
 func (v *MockVMInstance) GetPID() int {
 	return 0
+}
+
+func (v *MockVMInstance) SetIP(ip string) {
+}
+
+func (v *MockVMInstance) SetNetwork(tapDevice string, ip string) {
+}
+
+func (v *MockVMInstance) SetConsoleOutput(w io.Writer) {
 }
 
 func (v *MockVMInstance) Cleanup() error {

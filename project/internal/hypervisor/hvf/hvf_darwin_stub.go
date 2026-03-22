@@ -7,9 +7,10 @@ package hvf
 
 import (
 	"fmt"
+	"io"
 
-	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/hypervisor"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 // Backend implements hypervisor.Backend for macOS/Hypervisor.framework
@@ -85,6 +86,10 @@ func (v *VM) SetNetwork(tapDevice string, ip string) {
 // GetPID returns the VM process ID
 func (v *VM) GetPID() int {
 	return 0
+}
+
+// SetConsoleOutput sets the writer for capturing console/serial output
+func (v *VM) SetConsoleOutput(w io.Writer) {
 }
 
 // Cleanup releases all VM resources

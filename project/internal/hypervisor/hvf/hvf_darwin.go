@@ -17,6 +17,7 @@ package hvf
 import "C"
 import (
 	"fmt"
+	"io"
 	"sync"
 	"unsafe"
 
@@ -33,15 +34,16 @@ type Backend struct {
 
 // VM represents a Hypervisor.framework virtual machine
 type VM struct {
-	config     *models.VMConfig
-	backend    *Backend
-	vcpuID     C.hv_vcpu_t
-	vcpuExit   *C.hv_vcpu_exit_t
-	running    bool
-	ip         string
-	tapDevice  string
-	memoryPtr  unsafe.Pointer
-	memorySize uint64
+	config        *models.VMConfig
+	backend       *Backend
+	vcpuID        C.hv_vcpu_t
+	vcpuExit      *C.hv_vcpu_exit_t
+	running       bool
+	ip            string
+	tapDevice     string
+	memoryPtr     unsafe.Pointer
+	memorySize    uint64
+	consoleOutput io.Writer
 }
 
 // NewBackend creates a new Hypervisor.framework backend
@@ -382,6 +384,11 @@ func (v *VM) SetNetwork(tapDevice string, ip string) {
 // GetPID returns the VM process ID (HVF runs in-process)
 func (v *VM) GetPID() int {
 	return 0
+}
+
+// SetConsoleOutput sets the writer for capturing console/serial output
+func (v *VM) SetConsoleOutput(w io.Writer) {
+	v.consoleOutput = w
 }
 
 // Cleanup releases all VM resources (implements hypervisor.VM interface)

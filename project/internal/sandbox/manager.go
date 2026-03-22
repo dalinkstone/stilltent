@@ -4,6 +4,7 @@ package vm
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,11 +12,12 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/dalinkstone/tent/pkg/models"
-	"github.com/dalinkstone/tent/internal/state"
+	"github.com/dalinkstone/tent/internal/console"
 	"github.com/dalinkstone/tent/internal/hypervisor"
 	"github.com/dalinkstone/tent/internal/network"
+	"github.com/dalinkstone/tent/internal/state"
 	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 // StateManager defines the interface for state persistence
@@ -68,6 +70,7 @@ type VMManager struct {
 	networkMgr     NetworkManager
 	storageMgr     StorageManager
 	portForwarder  PortForwarder
+	consoleMgr     *console.Manager
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -103,12 +106,18 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		storageMgr = sm
 	}
 
+	consoleMgr, err := console.NewManager(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create console manager: %w", err)
+	}
+
 	return &VMManager{
 		stateManager:   stateManager,
 		hypervisor:     hv,
 		networkMgr:     networkMgr,
 		storageMgr:     storageMgr,
 		portForwarder:  network.NewPortForwarder(),
+		consoleMgr:     consoleMgr,
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -227,8 +236,19 @@ func (m *VMManager) Start(name string) error {
 	// Configure network for the VM
 	vm.SetNetwork(vmState.TAPDevice, vmState.IP)
 
+	// Set up console log capture
+	consoleLogger, err := m.consoleMgr.CreateLogger(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to create console logger for %s: %v\n", name, err)
+	} else {
+		vm.SetConsoleOutput(consoleLogger)
+	}
+
 	// Start the VM
 	if err := vm.Start(); err != nil {
+		if consoleLogger != nil {
+			consoleLogger.Close()
+		}
 		return fmt.Errorf("failed to start VM: %w", err)
 	}
 
@@ -283,6 +303,9 @@ func (m *VMManager) Stop(name string) error {
 	if err := vm.Stop(); err != nil {
 		return fmt.Errorf("failed to stop VM: %w", err)
 	}
+
+	// Close console logger
+	m.consoleMgr.CloseLogger(name)
 
 	// Remove port forwarding
 	m.portForwarder.RemoveForwards(name)
@@ -394,21 +417,53 @@ func (m *VMManager) List() ([]*models.VMState, error) {
 	return m.stateManager.ListVMs()
 }
 
-// Logs returns console logs for a microVM
+// Logs returns console logs for a microVM.
 func (m *VMManager) Logs(name string) (string, error) {
 	_, err := m.stateManager.GetVM(name)
 	if err != nil {
 		return "", fmt.Errorf("VM not found: %w", err)
 	}
 
-	// For now, return placeholder - in production, this would read
-	// from the hypervisor log or capture output
-	logPath := filepath.Join(m.baseDir, "logs", fmt.Sprintf("%s.log", name))
-	if data, err := os.ReadFile(logPath); err == nil {
-		return string(data), nil
+	logs, err := m.consoleMgr.ReadLogs(name)
+	if err != nil {
+		return "", err
+	}
+	if logs == "" {
+		return fmt.Sprintf("No logs available for VM %s", name), nil
+	}
+	return logs, nil
+}
+
+// TailLogs returns the last n lines of console logs for a VM.
+func (m *VMManager) TailLogs(name string, n int) (string, error) {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("VM not found: %w", err)
 	}
 
-	return fmt.Sprintf("No logs available for VM %s", name), nil
+	logs, err := m.consoleMgr.TailLogs(name, n)
+	if err != nil {
+		return "", err
+	}
+	if logs == "" {
+		return fmt.Sprintf("No logs available for VM %s", name), nil
+	}
+	return logs, nil
+}
+
+// FollowLogs streams console logs to the given writer until done is closed.
+func (m *VMManager) FollowLogs(name string, tailLines int, out io.Writer, done <-chan struct{}) error {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	return m.consoleMgr.FollowLogs(name, tailLines, out, done)
+}
+
+// ClearLogs removes console logs for a VM.
+func (m *VMManager) ClearLogs(name string) error {
+	return m.consoleMgr.ClearLogs(name)
 }
 
 // CreateSnapshot creates a snapshot of a VM's rootfs

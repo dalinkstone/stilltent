@@ -3,15 +3,16 @@ package kvm
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
-	"github.com/dalinkstone/tent/pkg/models"
-	"github.com/dalinkstone/tent/internal/hypervisor"
-	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/c35s/hype/os/linux"
 	"github.com/c35s/hype/virtio"
 	"github.com/c35s/hype/vmm"
-	"github.com/c35s/hype/os/linux"
+	"github.com/dalinkstone/tent/internal/hypervisor"
+	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 // Backend implements hypervisor.Backend for Linux/KVM
@@ -22,14 +23,15 @@ type Backend struct {
 
 // VM represents a KVM virtual machine managed by tent
 type VM struct {
-	config    *models.VMConfig
-	backend   *Backend
-	vm        *vmm.VM
-	ctx       context.Context
-	cancel    context.CancelFunc
-	running   bool
-	ip        string
-	tapDevice string
+	config        *models.VMConfig
+	backend       *Backend
+	vm            *vmm.VM
+	ctx           context.Context
+	cancel        context.CancelFunc
+	running       bool
+	ip            string
+	tapDevice     string
+	consoleOutput io.Writer
 }
 
 // SetNetwork configures the VM's network interface
@@ -242,6 +244,11 @@ func (v *VM) SetIP(ip string) {
 func (v *VM) GetPID() int {
 	// KVM doesn't create separate processes - returns 0
 	return 0
+}
+
+// SetConsoleOutput sets the writer for capturing console/serial output
+func (v *VM) SetConsoleOutput(w io.Writer) {
+	v.consoleOutput = w
 }
 
 // Cleanup releases all VM resources

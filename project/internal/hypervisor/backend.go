@@ -3,6 +3,8 @@
 package hypervisor
 
 import (
+	"io"
+
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
@@ -47,6 +49,9 @@ type VM interface {
 
 	// GetPID returns the VM process ID (if applicable)
 	GetPID() int
+
+	// SetConsoleOutput sets the writer for capturing console/serial output
+	SetConsoleOutput(w io.Writer)
 
 	// Cleanup releases all VM resources
 	Cleanup() error

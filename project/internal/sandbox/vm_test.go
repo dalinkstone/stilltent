@@ -2,13 +2,14 @@ package vm
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/dalinkstone/tent/pkg/models"
 	"github.com/dalinkstone/tent/internal/hypervisor"
 	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 // Mock implementations for testing
@@ -146,6 +147,10 @@ func (v *mockVMInstance) SetIP(ip string) {
 }
 
 func (v *mockVMInstance) SetNetwork(tapDevice string, ip string) {
+	// Mock implementation
+}
+
+func (v *mockVMInstance) SetConsoleOutput(w io.Writer) {
 	// Mock implementation
 }
 

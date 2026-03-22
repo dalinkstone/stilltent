@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/spf13/cobra"
 
-	"github.com/dalinkstone/tent/internal/sandbox"
+	vm "github.com/dalinkstone/tent/internal/sandbox"
 )
 
 // ConfigureLogsCmd creates a new logs command with optional dependencies
@@ -18,11 +19,19 @@ func ConfigureLogsCmd(options ...CommonCmdOption) *cobra.Command {
 		opt(opts)
 	}
 
+	var follow bool
+	var tail int
+	var clear bool
+
 	cmd := &cobra.Command{
 		Use:   "logs <name>",
 		Short: "View microVM console/boot logs",
-		Long:  `View microVM console/boot logs.`,
-		Args:  cobra.ExactArgs(1),
+		Long: `View microVM console/boot logs.
+
+Use --follow (-f) to stream logs in real time.
+Use --tail (-n) to show only the last N lines.
+Use --clear to remove all logs for a sandbox.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 
@@ -53,18 +62,53 @@ func ConfigureLogsCmd(options ...CommonCmdOption) *cobra.Command {
 				return fmt.Errorf("failed to setup VM manager: %w", err)
 			}
 
-			// Get VM logs
+			// Handle --clear flag
+			if clear {
+				if err := manager.ClearLogs(name); err != nil {
+					return fmt.Errorf("failed to clear logs: %w", err)
+				}
+				fmt.Printf("Cleared logs for VM: %s\n", name)
+				return nil
+			}
+
+			// Handle --follow flag
+			if follow {
+				done := make(chan struct{})
+				sig := make(chan os.Signal, 1)
+				signal.Notify(sig, os.Interrupt)
+				go func() {
+					<-sig
+					close(done)
+				}()
+
+				fmt.Printf("Following logs for VM: %s (Ctrl+C to stop)\n", name)
+				return manager.FollowLogs(name, tail, os.Stdout, done)
+			}
+
+			// Handle --tail flag
+			if tail > 0 {
+				logs, err := manager.TailLogs(name, tail)
+				if err != nil {
+					return fmt.Errorf("failed to get VM logs: %w", err)
+				}
+				fmt.Print(logs)
+				return nil
+			}
+
+			// Default: show all logs
 			logs, err := manager.Logs(name)
 			if err != nil {
 				return fmt.Errorf("failed to get VM logs: %w", err)
 			}
 
-			fmt.Printf("Logs for VM: %s\n", name)
-			fmt.Println(logs)
-
+			fmt.Print(logs)
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow log output in real time")
+	cmd.Flags().IntVarP(&tail, "tail", "n", 0, "Show only the last N lines")
+	cmd.Flags().BoolVar(&clear, "clear", false, "Clear all logs for the sandbox")
 
 	return cmd
 }
