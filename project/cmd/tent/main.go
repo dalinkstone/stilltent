@@ -36,6 +36,7 @@ func main() {
 	rootCmd.AddCommand(cpCmd())
 	rootCmd.AddCommand(configCmd())
 	rootCmd.AddCommand(statsCmd())
+	rootCmd.AddCommand(updateCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

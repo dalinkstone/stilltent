@@ -821,6 +821,27 @@ func (m *VMManager) LoadConfig(name string) (*models.VMConfig, error) {
 	return m.loadConfigFromState(vmState)
 }
 
+// UpdateConfig updates the persisted VMConfig and state for a stopped sandbox.
+func (m *VMManager) UpdateConfig(name string, config *models.VMConfig) error {
+	// Save the updated config to disk
+	config.Name = name
+	if err := m.saveConfig(config); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	// Update state to reflect resource changes
+	if err := m.stateManager.UpdateVM(name, func(vmState *models.VMState) error {
+		vmState.VCPUs = config.VCPUs
+		vmState.MemoryMB = config.MemoryMB
+		vmState.DiskGB = config.DiskGB
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+
+	return nil
+}
+
 // CopyToGuest copies a file or directory from the host to a running sandbox using SCP.
 func (m *VMManager) CopyToGuest(name, hostPath, guestPath string) error {
 	vmState, err := m.stateManager.GetVM(name)
