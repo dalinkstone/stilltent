@@ -184,6 +184,15 @@ type NetworkConfig struct {
 	Allow  []string      `yaml:"allow" json:"allow,omitempty"`
 	Deny   []string      `yaml:"deny" json:"deny,omitempty"`
 	Ports  []PortForward `yaml:"ports" json:"ports,omitempty"`
+	Proxy  *ProxyConfig  `yaml:"proxy,omitempty" json:"proxy,omitempty"`
+}
+
+// ProxyConfig represents HTTP/HTTPS/SOCKS proxy settings for a sandbox
+type ProxyConfig struct {
+	HTTPProxy  string   `yaml:"http_proxy,omitempty" json:"http_proxy,omitempty"`
+	HTTPSProxy string   `yaml:"https_proxy,omitempty" json:"https_proxy,omitempty"`
+	NoProxy    []string `yaml:"no_proxy,omitempty" json:"no_proxy,omitempty"`
+	Enabled    bool     `yaml:"enabled" json:"enabled"`
 }
 
 // PortForward represents port forwarding configuration

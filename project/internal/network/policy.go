@@ -169,8 +169,17 @@ type Policy struct {
 	Denied    []string          `yaml:"denied"`
 	Bandwidth *BandwidthLimit   `yaml:"bandwidth,omitempty"`
 	Condition *NetworkCondition `yaml:"condition,omitempty"`
+	Proxy     *ProxySettings    `yaml:"proxy,omitempty"`
 	CreatedAt int64             `yaml:"created_at"`
 	UpdatedAt int64             `yaml:"updated_at"`
+}
+
+// ProxySettings stores HTTP/HTTPS proxy configuration for a sandbox
+type ProxySettings struct {
+	HTTPProxy  string   `yaml:"http_proxy,omitempty"`
+	HTTPSProxy string   `yaml:"https_proxy,omitempty"`
+	NoProxy    []string `yaml:"no_proxy,omitempty"`
+	Enabled    bool     `yaml:"enabled"`
 }
 
 // PolicyManager manages network policies for sandboxes
@@ -627,4 +636,87 @@ func (pm *PolicyManager) IsEndpointAllowed(name, endpoint string) (bool, error) 
 
 	// Default: blocked (security by default)
 	return false, nil
+}
+
+// SetProxy configures proxy settings for a sandbox.
+func (pm *PolicyManager) SetProxy(name string, proxy *ProxySettings) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		policy = &Policy{
+			Name:      name,
+			Allowed:   []string{},
+			Denied:    []string{},
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		}
+		pm.policies[name] = policy
+	}
+
+	policy.Proxy = proxy
+	policy.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+// GetProxy returns the proxy settings for a sandbox.
+func (pm *PolicyManager) GetProxy(name string) (*ProxySettings, error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		return nil, fmt.Errorf("no policy found for sandbox %s", name)
+	}
+
+	if policy.Proxy == nil {
+		return &ProxySettings{}, nil
+	}
+	return policy.Proxy, nil
+}
+
+// RemoveProxy clears proxy settings for a sandbox.
+func (pm *PolicyManager) RemoveProxy(name string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		return fmt.Errorf("no policy found for sandbox %s", name)
+	}
+
+	policy.Proxy = nil
+	policy.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+// ProxyEnvVars returns environment variables for the proxy configuration.
+// These can be injected into the sandbox guest environment.
+func (ps *ProxySettings) ProxyEnvVars() map[string]string {
+	if ps == nil || !ps.Enabled {
+		return nil
+	}
+
+	vars := make(map[string]string)
+	if ps.HTTPProxy != "" {
+		vars["http_proxy"] = ps.HTTPProxy
+		vars["HTTP_PROXY"] = ps.HTTPProxy
+	}
+	if ps.HTTPSProxy != "" {
+		vars["https_proxy"] = ps.HTTPSProxy
+		vars["HTTPS_PROXY"] = ps.HTTPSProxy
+	}
+	if len(ps.NoProxy) > 0 {
+		noProxy := ""
+		for i, np := range ps.NoProxy {
+			if i > 0 {
+				noProxy += ","
+			}
+			noProxy += np
+		}
+		vars["no_proxy"] = noProxy
+		vars["NO_PROXY"] = noProxy
+	}
+	return vars
 }
