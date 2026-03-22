@@ -37,6 +37,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageConvertCmd())
 	cmd.AddCommand(imageSearchCmd())
 	cmd.AddCommand(imageTagsCmd())
+	cmd.AddCommand(imageHistoryCmd())
 
 	return cmd
 }
@@ -1252,5 +1253,82 @@ Examples:
 	cmd.Flags().IntVar(&limit, "limit", 0, "Show only the last N tags")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 
+	return cmd
+}
+
+func imageHistoryCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "history <name>",
+		Short: "Show the build history of an image",
+		Long: `Show the build history and layer instructions for an image built with
+'tent image build'. Displays the FROM base, RUN commands, COPY operations,
+ENV variables, and other instructions that were used to create the image.
+
+Examples:
+  tent image history myimage
+  tent image history myimage --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			mgr, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			history, err := mgr.ImageHistory(name)
+			if err != nil {
+				return fmt.Errorf("failed to get image history: %w", err)
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(history)
+			}
+
+			fmt.Printf("Image: %s\n", history.Name)
+			if history.BaseImage != "" {
+				fmt.Printf("Base:  %s\n", history.BaseImage)
+			}
+			if history.BuiltAt != "" {
+				fmt.Printf("Built: %s\n", history.BuiltAt)
+			}
+			if len(history.Labels) > 0 {
+				fmt.Println("Labels:")
+				for k, v := range history.Labels {
+					fmt.Printf("  %s = %s\n", k, v)
+				}
+			}
+			fmt.Println()
+
+			if len(history.Entries) == 0 {
+				fmt.Println("No build history available (image may not have been built with 'tent image build').")
+				return nil
+			}
+
+			fmt.Printf("%-6s %-10s %s\n", "STEP", "COMMAND", "INSTRUCTION")
+			fmt.Println(strings.Repeat("-", 70))
+			for _, entry := range history.Entries {
+				instruction := entry.Args
+				if len(instruction) > 50 {
+					instruction = instruction[:47] + "..."
+				}
+				fmt.Printf("%-6d %-10s %s\n", entry.Step, entry.Command, instruction)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
 }
