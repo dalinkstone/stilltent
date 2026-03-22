@@ -73,6 +73,7 @@ func main() {
 	rootCmd.AddCommand(kernelCmd())
 	rootCmd.AddCommand(migrateCmd())
 	rootCmd.AddCommand(quotaCmd())
+	rootCmd.AddCommand(auditCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
