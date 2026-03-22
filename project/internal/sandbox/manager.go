@@ -560,6 +560,79 @@ func (m *VMManager) Stop(name string) error {
 	return nil
 }
 
+// Pause freezes a running sandbox's vCPUs without tearing it down.
+// The sandbox retains its memory, network, and disk state.
+func (m *VMManager) Pause(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning && vmState.Status != models.VMStatusPaused {
+		return fmt.Errorf("VM %s is not running (status: %s)", name, vmState.Status)
+	}
+
+	vm, ok := m.runningVMs[name]
+	if !ok {
+		return fmt.Errorf("VM %s not found in running VMs", name)
+	}
+
+	if err := vm.Pause(); err != nil {
+		return fmt.Errorf("failed to pause VM: %w", err)
+	}
+
+	vmState.Status = models.VMStatusPaused
+	vmState.UpdatedAt = time.Now().Unix()
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Status = vmState.Status
+		s.UpdatedAt = vmState.UpdatedAt
+		return nil
+	}); err != nil {
+		// Best-effort rollback
+		vm.Unpause()
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+
+	m.logEvent(EventPause, name, nil)
+	return nil
+}
+
+// Unpause resumes a paused sandbox's vCPU execution.
+func (m *VMManager) Unpause(name string) error {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusPaused {
+		return fmt.Errorf("VM %s is not paused (status: %s)", name, vmState.Status)
+	}
+
+	vm, ok := m.runningVMs[name]
+	if !ok {
+		return fmt.Errorf("VM %s not found in running VMs", name)
+	}
+
+	if err := vm.Unpause(); err != nil {
+		return fmt.Errorf("failed to unpause VM: %w", err)
+	}
+
+	vmState.Status = models.VMStatusRunning
+	vmState.UpdatedAt = time.Now().Unix()
+
+	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.Status = vmState.Status
+		s.UpdatedAt = vmState.UpdatedAt
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+
+	m.logEvent(EventUnpause, name, nil)
+	return nil
+}
+
 // Restart stops and starts a running microVM, incrementing the restart count
 func (m *VMManager) Restart(name string, timeoutSec int) error {
 	vmState, err := m.stateManager.GetVM(name)

@@ -29,6 +29,7 @@ type VM struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	running       bool
+	paused        bool
 	ip            string
 	tapDevice     string
 	consoleOutput io.Writer
@@ -184,6 +185,43 @@ func (v *VM) Start() error {
 	}()
 
 	v.running = true
+	return nil
+}
+
+// Pause freezes vCPU execution by cancelling the VM context.
+// The VM process stays alive but stops executing guest code.
+func (v *VM) Pause() error {
+	if !v.running {
+		return fmt.Errorf("VM %s is not running", v.config.Name)
+	}
+	if v.paused {
+		return fmt.Errorf("VM %s is already paused", v.config.Name)
+	}
+	// Cancel the context to stop the vCPU run loop
+	if v.cancel != nil {
+		v.cancel()
+	}
+	v.paused = true
+	return nil
+}
+
+// Unpause resumes vCPU execution by creating a new context and restarting the run loop.
+func (v *VM) Unpause() error {
+	if !v.running {
+		return fmt.Errorf("VM %s is not running", v.config.Name)
+	}
+	if !v.paused {
+		return fmt.Errorf("VM %s is not paused", v.config.Name)
+	}
+	if v.vm != nil {
+		v.ctx, v.cancel = context.WithCancel(context.Background())
+		go func() {
+			if err := v.vm.Run(v.ctx); err != nil {
+				v.running = false
+			}
+		}()
+	}
+	v.paused = false
 	return nil
 }
 

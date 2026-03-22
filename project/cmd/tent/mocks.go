@@ -96,6 +96,7 @@ func (m *MockStateManager) RenameVM(oldName, newName string) error {
 type MockVMInstance struct {
 	config  *models.VMConfig
 	running bool
+	paused  bool
 	errStop error
 }
 
@@ -115,6 +116,28 @@ func (v *MockVMInstance) Stop() error {
 		return fmt.Errorf("VM not running")
 	}
 	v.running = false
+	return nil
+}
+
+func (v *MockVMInstance) Pause() error {
+	if !v.running {
+		return fmt.Errorf("VM not running")
+	}
+	if v.paused {
+		return fmt.Errorf("VM already paused")
+	}
+	v.paused = true
+	return nil
+}
+
+func (v *MockVMInstance) Unpause() error {
+	if !v.running {
+		return fmt.Errorf("VM not running")
+	}
+	if !v.paused {
+		return fmt.Errorf("VM not paused")
+	}
+	v.paused = false
 	return nil
 }
 
@@ -149,6 +172,9 @@ func (v *MockVMInstance) SetNetwork(tapDevice string, ip string) {
 }
 
 func (v *MockVMInstance) SetConsoleOutput(w io.Writer) {
+}
+
+func (v *MockVMInstance) AddMounts(mounts []hypervisor.MountTag) {
 }
 
 func (v *MockVMInstance) Cleanup() error {

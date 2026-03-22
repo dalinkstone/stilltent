@@ -7,6 +7,7 @@ const (
 	VMStatusUnknown VMStatus = "unknown"
 	VMStatusStopped VMStatus = "stopped"
 	VMStatusRunning VMStatus = "running"
+	VMStatusPaused  VMStatus = "paused"
 	VMStatusCreated VMStatus = "created"
 	VMStatusError   VMStatus = "error"
 )

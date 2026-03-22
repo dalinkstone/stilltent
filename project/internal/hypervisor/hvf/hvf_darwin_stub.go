@@ -55,6 +55,16 @@ func (v *VM) Stop() error {
 	return nil
 }
 
+// Pause freezes vCPU execution (stub)
+func (v *VM) Pause() error {
+	return fmt.Errorf("Hypervisor.framework backend requires CGO and macOS C compiler (clang)")
+}
+
+// Unpause resumes vCPU execution (stub)
+func (v *VM) Unpause() error {
+	return fmt.Errorf("Hypervisor.framework backend requires CGO and macOS C compiler (clang)")
+}
+
 // Kill forcefully terminates the VM
 func (v *VM) Kill() error {
 	return nil

@@ -29,6 +29,8 @@ const (
 	EventNetworkAllow    EventType = "network.allow"
 	EventNetworkDeny     EventType = "network.deny"
 	EventClone           EventType = "clone"
+	EventPause           EventType = "pause"
+	EventUnpause         EventType = "unpause"
 )
 
 // Event represents a single sandbox lifecycle event

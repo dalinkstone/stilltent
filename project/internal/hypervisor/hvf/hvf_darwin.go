@@ -39,6 +39,7 @@ type VM struct {
 	vcpuID        C.hv_vcpu_t
 	vcpuExit      *C.hv_vcpu_exit_t
 	running       bool
+	paused        bool
 	ip            string
 	tapDevice     string
 	memoryPtr     unsafe.Pointer
@@ -312,6 +313,34 @@ func (v *VM) RunVCPU() error {
 		}
 	}
 
+	return nil
+}
+
+// Pause freezes vCPU execution without tearing down the VM.
+// Uses hv_vcpus_exit to force the vCPU out of its run loop.
+func (v *VM) Pause() error {
+	if !v.running {
+		return fmt.Errorf("VM %s is not running", v.config.Name)
+	}
+	if v.paused {
+		return fmt.Errorf("VM %s is already paused", v.config.Name)
+	}
+	// Force the vCPU out of its run loop
+	vcpus := []C.hv_vcpu_t{v.vcpuID}
+	C.hv_vcpus_exit(&vcpus[0], 1)
+	v.paused = true
+	return nil
+}
+
+// Unpause resumes vCPU execution after a pause.
+func (v *VM) Unpause() error {
+	if !v.running {
+		return fmt.Errorf("VM %s is not running", v.config.Name)
+	}
+	if !v.paused {
+		return fmt.Errorf("VM %s is not paused", v.config.Name)
+	}
+	v.paused = false
 	return nil
 }
 

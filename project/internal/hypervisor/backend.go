@@ -29,6 +29,12 @@ type VM interface {
 	// Stop gracefully shuts down the VM
 	Stop() error
 
+	// Pause freezes vCPU execution without tearing down the VM
+	Pause() error
+
+	// Unpause resumes vCPU execution after a pause
+	Unpause() error
+
 	// Kill forcefully terminates the VM
 	Kill() error
 

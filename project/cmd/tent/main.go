@@ -47,6 +47,8 @@ func main() {
 	rootCmd.AddCommand(runCmd())
 	rootCmd.AddCommand(cloneCmd())
 	rootCmd.AddCommand(labelCmd())
+	rootCmd.AddCommand(pauseCmd())
+	rootCmd.AddCommand(unpauseCmd())
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(completionCmd())
 
