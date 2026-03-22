@@ -20,15 +20,13 @@ func ConfigureExecCmd(options ...CommonCmdOption) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "exec <name> <command> [args...]",
+		Use:   "exec <name> -- <command> [args...]",
 		Short: "Execute a command inside a running microVM",
-		Long:  `Execute a command inside a running microVM. The command runs in the VM's default shell.`,
+		Long:  `Execute a command inside a running microVM via SSH. Use -- to separate the sandbox name from the command.`,
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			command := args[1:]
-			// Join all remaining args into a single command string
-			cmdStr := fmt.Sprintf("%s", command)
 
 			// Create VM manager
 			baseDir := os.Getenv("TENT_BASE_DIR")
@@ -60,12 +58,15 @@ func ConfigureExecCmd(options ...CommonCmdOption) *cobra.Command {
 			}
 
 			// Execute the command in the VM
-			output, err := manager.Exec(name, cmdStr)
+			output, exitCode, err := manager.Exec(name, command)
 			if err != nil {
 				return fmt.Errorf("failed to execute command: %w", err)
 			}
 
 			fmt.Print(output)
+			if exitCode != 0 {
+				os.Exit(exitCode)
+			}
 			return nil
 		},
 	}

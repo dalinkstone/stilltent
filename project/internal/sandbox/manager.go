@@ -447,37 +447,57 @@ func (m *VMManager) ListSnapshots(name string) ([]*models.Snapshot, error) {
 }
 
 // Exec executes a command inside a running microVM
-func (m *VMManager) Exec(name string, command string) (string, error) {
+func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 	// Check if VM exists
 	vmState, err := m.stateManager.GetVM(name)
 	if err != nil {
-		return "", fmt.Errorf("VM not found: %w", err)
+		return "", 1, fmt.Errorf("VM not found: %w", err)
 	}
 
 	if vmState.Status != models.VMStatusRunning {
-		return "", fmt.Errorf("VM %s is not running", name)
+		return "", 1, fmt.Errorf("VM %s is not running", name)
 	}
 
-	// Get running VM instance
-	vm, ok := m.runningVMs[name]
-	if !ok {
-		return "", fmt.Errorf("VM %s not found in running VMs", name)
+	// Resolve the guest IP
+	vmIP := vmState.IP
+	if vm, ok := m.runningVMs[name]; ok {
+		if ip := vm.GetIP(); ip != "" {
+			vmIP = ip
+		}
 	}
 
-	// For now, return a placeholder - in production, this would:
-	// 1. Use the hypervisor backend's exec capability
-	// 2. Execute the command inside the VM's shell
-	// 3. Capture and return the output
-
-	// Get VM's IP for SSH/exec connection
-	vmIP := vm.GetIP()
 	if vmIP == "" {
-		vmIP = vmState.IP
+		return "", 1, fmt.Errorf("VM %s has no IP address", name)
 	}
 
-	// Placeholder implementation - would need hypervisor-specific exec support
-	// For now, return a message indicating the command would run
-	return fmt.Sprintf("Command '%s' would execute in VM %s (IP: %s)\n", command, name, vmIP), nil
+	return m.execSSH(vmIP, command)
+}
+
+// execSSH runs a command inside the guest VM over SSH and returns
+// the combined output and exit code.
+func (m *VMManager) execSSH(ip string, command []string) (string, int, error) {
+	sshArgs := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=10",
+		"root@" + ip,
+		"--",
+	}
+	sshArgs = append(sshArgs, command...)
+
+	cmd := m.execCommand("ssh", sshArgs...)
+	output, err := cmd.CombinedOutput()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return string(output), 1, fmt.Errorf("SSH exec failed: %w", err)
+		}
+	}
+
+	return string(output), exitCode, nil
 }
 
 // ListPortForwards returns port forwarding status for a specific VM
