@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dalinkstone/tent/internal/network"
+	vm "github.com/dalinkstone/tent/internal/sandbox"
 )
 
 func networkCmd() *cobra.Command {
@@ -20,6 +21,7 @@ func networkCmd() *cobra.Command {
 	cmd.AddCommand(networkAllowCmd())
 	cmd.AddCommand(networkDenyCmd())
 	cmd.AddCommand(networkStatusCmd())
+	cmd.AddCommand(networkPortsCmd())
 
 	return cmd
 }
@@ -198,6 +200,62 @@ func networkStatusCmd() *cobra.Command {
 	}
 
 	return cmd
+}
+
+func networkPortsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "ports [sandbox]",
+		Short: "Show port forwarding rules",
+		Long:  `Show active port forwarding rules. Optionally filter by sandbox name.`,
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+
+			manager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+
+			if len(args) == 1 {
+				forwards, err := manager.ListPortForwards(args[0])
+				if err != nil {
+					return err
+				}
+				if len(forwards) == 0 {
+					fmt.Printf("No port forwarding rules for sandbox '%s'\n", args[0])
+					return nil
+				}
+				fmt.Printf("Port forwarding for '%s':\n", args[0])
+				for _, f := range forwards {
+					status := "inactive"
+					if f.Active {
+						status = "active"
+					}
+					fmt.Printf("  :%d -> %s:%d (%s)\n", f.HostPort, f.GuestIP, f.GuestPort, status)
+				}
+			} else {
+				forwards := manager.ListAllPortForwards()
+				if len(forwards) == 0 {
+					fmt.Println("No port forwarding rules configured.")
+					return nil
+				}
+				fmt.Println("Port forwarding rules:")
+				for _, f := range forwards {
+					status := "inactive"
+					if f.Active {
+						status = "active"
+					}
+					fmt.Printf("  %s: :%d -> %s:%d (%s)\n", f.VMName, f.HostPort, f.GuestIP, f.GuestPort, status)
+				}
+			}
+			return nil
+		},
+	}
 }
 
 // getBaseDir gets the base directory, respecting TENT_BASE_DIR env var

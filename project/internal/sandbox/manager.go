@@ -52,12 +52,22 @@ type StorageManager interface {
 	ListSnapshots(name string) ([]*storage.SnapshotInfo, error)
 }
 
+// PortForwarder defines the interface for port forwarding operations
+type PortForwarder interface {
+	SetupForwards(vmName string, ports []models.PortForward) error
+	ActivateForwards(vmName string, guestIP string) error
+	RemoveForwards(vmName string) error
+	ListForwards(vmName string) []network.ForwardStatus
+	ListAllForwards() []network.ForwardStatus
+}
+
 // VMManager manages microVM lifecycle operations
 type VMManager struct {
 	stateManager   StateManager
 	hypervisor     HypervisorBackend
 	networkMgr     NetworkManager
 	storageMgr     StorageManager
+	portForwarder  PortForwarder
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -98,6 +108,7 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		hypervisor:     hv,
 		networkMgr:     networkMgr,
 		storageMgr:     storageMgr,
+		portForwarder:  network.NewPortForwarder(),
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -131,6 +142,13 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 	tapDevice, err := m.networkMgr.SetupVMNetwork(name, config)
 	if err != nil {
 		return fmt.Errorf("failed to setup network: %w", err)
+	}
+
+	// Setup port forwarding rules (but don't activate until VM starts)
+	if len(config.Network.Ports) > 0 {
+		if err := m.portForwarder.SetupForwards(name, config.Network.Ports); err != nil {
+			return fmt.Errorf("failed to setup port forwarding: %w", err)
+		}
 	}
 
 	// Create VM state
@@ -190,6 +208,14 @@ func (m *VMManager) Start(name string) error {
 	vmState.IP = vm.GetIP()
 	vmState.UpdatedAt = time.Now().Unix()
 
+	// Activate port forwarding now that VM has an IP
+	if vmState.IP != "" {
+		if err := m.portForwarder.ActivateForwards(name, vmState.IP); err != nil {
+			// Port forwarding failure is non-fatal - log but continue
+			fmt.Fprintf(os.Stderr, "warning: failed to activate port forwarding for %s: %v\n", name, err)
+		}
+	}
+
 	if err := m.stateManager.UpdateVM(name, func(s *models.VMState) error {
 		s.Status = vmState.Status
 		s.IP = vmState.IP
@@ -225,6 +251,9 @@ func (m *VMManager) Stop(name string) error {
 	if err := vm.Stop(); err != nil {
 		return fmt.Errorf("failed to stop VM: %w", err)
 	}
+
+	// Remove port forwarding
+	m.portForwarder.RemoveForwards(name)
 
 	// Cleanup network resources
 	if vmState.TAPDevice != "" {
@@ -266,6 +295,9 @@ func (m *VMManager) Destroy(name string) error {
 			return fmt.Errorf("failed to stop VM before destroy: %w", err)
 		}
 	}
+
+	// Remove port forwarding rules (for created/never-started VMs)
+	m.portForwarder.RemoveForwards(name)
 
 	// Cleanup network resources (for created/never-started VMs)
 	if vmState.TAPDevice != "" {
@@ -421,6 +453,20 @@ func (m *VMManager) Exec(name string, command string) (string, error) {
 	// Placeholder implementation - would need hypervisor-specific exec support
 	// For now, return a message indicating the command would run
 	return fmt.Sprintf("Command '%s' would execute in VM %s (IP: %s)\n", command, name, vmIP), nil
+}
+
+// ListPortForwards returns port forwarding status for a specific VM
+func (m *VMManager) ListPortForwards(name string) ([]network.ForwardStatus, error) {
+	_, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+	return m.portForwarder.ListForwards(name), nil
+}
+
+// ListAllPortForwards returns port forwarding status for all VMs
+func (m *VMManager) ListAllPortForwards() []network.ForwardStatus {
+	return m.portForwarder.ListAllForwards()
 }
 
 // loadConfigFromState loads the VM config from the state file
