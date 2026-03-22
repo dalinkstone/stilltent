@@ -5,21 +5,26 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	tentconfig "github.com/dalinkstone/tent/internal/config"
 )
 
 // ParseConfig parses a compose YAML file and returns a ComposeConfig
 func ParseConfig(data []byte) (*ComposeConfig, error) {
-	var config ComposeConfig
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	// Expand environment variable references before parsing
+	data = tentconfig.ExpandEnvBytes(data)
+
+	var cfg ComposeConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse YAML: %w", err)
 	}
 
 	// Validate the configuration
-	if err := config.Validate(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid compose config: %w", err)
 	}
 
-	return &config, nil
+	return &cfg, nil
 }
 
 // Validate checks if the compose configuration is valid

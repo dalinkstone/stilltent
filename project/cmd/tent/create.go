@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/dalinkstone/tent/internal/config"
 	"github.com/dalinkstone/tent/internal/image"
 	"github.com/dalinkstone/tent/internal/sandbox"
 	"github.com/dalinkstone/tent/pkg/models"
@@ -253,6 +254,9 @@ func loadConfigFromFile(path string) (*models.VMConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
+
+	// Expand environment variable references (e.g., ${ANTHROPIC_API_KEY})
+	data = config.ExpandEnvBytes(data)
 
 	var cfg models.VMConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {

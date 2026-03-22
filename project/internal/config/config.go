@@ -39,7 +39,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
+	// Expand environment variable references (e.g., ${VAR}, ${VAR:-default})
+	data = ExpandEnvBytes(data)
+
 	var config Config
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
