@@ -4,19 +4,98 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
+// BandwidthLimit defines rate limits for sandbox network traffic.
+// Rates are specified in bits per second. A value of 0 means unlimited.
+type BandwidthLimit struct {
+	IngressRate  uint64 `yaml:"ingress_rate,omitempty"`  // max inbound bits/sec (0 = unlimited)
+	EgressRate   uint64 `yaml:"egress_rate,omitempty"`   // max outbound bits/sec (0 = unlimited)
+	IngressBurst uint64 `yaml:"ingress_burst,omitempty"` // burst size in bytes for inbound (0 = auto)
+	EgressBurst  uint64 `yaml:"egress_burst,omitempty"`  // burst size in bytes for outbound (0 = auto)
+}
+
+// HasLimits returns true if any rate limit is configured.
+func (b *BandwidthLimit) HasLimits() bool {
+	return b != nil && (b.IngressRate > 0 || b.EgressRate > 0)
+}
+
+// FormatRate formats a bits-per-second value as a human-readable string.
+func FormatRate(bps uint64) string {
+	switch {
+	case bps == 0:
+		return "unlimited"
+	case bps >= 1_000_000_000:
+		return fmt.Sprintf("%.1f Gbps", float64(bps)/1_000_000_000)
+	case bps >= 1_000_000:
+		return fmt.Sprintf("%.1f Mbps", float64(bps)/1_000_000)
+	case bps >= 1_000:
+		return fmt.Sprintf("%.1f Kbps", float64(bps)/1_000)
+	default:
+		return fmt.Sprintf("%d bps", bps)
+	}
+}
+
+// ParseRate parses a human-readable rate string (e.g., "10mbps", "1gbps", "500kbps")
+// into bits per second.
+func ParseRate(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" || strings.EqualFold(s, "unlimited") {
+		return 0, nil
+	}
+
+	lower := strings.ToLower(s)
+
+	// Try suffixes from longest to shortest
+	suffixes := []struct {
+		suffix     string
+		multiplier uint64
+	}{
+		{"gbps", 1_000_000_000},
+		{"mbps", 1_000_000},
+		{"kbps", 1_000},
+		{"bps", 1},
+		{"g", 1_000_000_000},
+		{"m", 1_000_000},
+		{"k", 1_000},
+	}
+
+	for _, sf := range suffixes {
+		if strings.HasSuffix(lower, sf.suffix) {
+			numStr := strings.TrimSpace(s[:len(s)-len(sf.suffix)])
+			val, err := strconv.ParseFloat(numStr, 64)
+			if err != nil {
+				return 0, fmt.Errorf("invalid rate value %q: %w", numStr, err)
+			}
+			if val < 0 {
+				return 0, fmt.Errorf("rate cannot be negative: %s", s)
+			}
+			return uint64(val * float64(sf.multiplier)), nil
+		}
+	}
+
+	// Try plain number (interpreted as bps)
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid rate %q: expected number with optional suffix (kbps, mbps, gbps)", s)
+	}
+	return val, nil
+}
+
 // Policy represents network policy for a sandbox
 type Policy struct {
-	Name      string   `yaml:"name"`
-	Allowed   []string `yaml:"allowed"`
-	Denied    []string `yaml:"denied"`
-	CreatedAt int64    `yaml:"created_at"`
-	UpdatedAt int64    `yaml:"updated_at"`
+	Name      string          `yaml:"name"`
+	Allowed   []string        `yaml:"allowed"`
+	Denied    []string        `yaml:"denied"`
+	Bandwidth *BandwidthLimit `yaml:"bandwidth,omitempty"`
+	CreatedAt int64           `yaml:"created_at"`
+	UpdatedAt int64           `yaml:"updated_at"`
 }
 
 // PolicyManager manages network policies for sandboxes
@@ -327,6 +406,59 @@ func (pm *PolicyManager) EnsureDefaultPolicy(name string) (*Policy, error) {
 	}
 	pm.policies[name] = policy
 	return policy, nil
+}
+
+// SetBandwidthLimit configures bandwidth limits for a sandbox.
+func (pm *PolicyManager) SetBandwidthLimit(name string, limit *BandwidthLimit) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		policy = &Policy{
+			Name:      name,
+			Allowed:   []string{},
+			Denied:    []string{},
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		}
+		pm.policies[name] = policy
+	}
+
+	policy.Bandwidth = limit
+	policy.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+// GetBandwidthLimit returns the bandwidth limit for a sandbox.
+func (pm *PolicyManager) GetBandwidthLimit(name string) (*BandwidthLimit, error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		return nil, fmt.Errorf("no policy found for sandbox %s", name)
+	}
+
+	if policy.Bandwidth == nil {
+		return &BandwidthLimit{}, nil
+	}
+	return policy.Bandwidth, nil
+}
+
+// RemoveBandwidthLimit clears bandwidth limits for a sandbox.
+func (pm *PolicyManager) RemoveBandwidthLimit(name string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		return fmt.Errorf("no policy found for sandbox %s", name)
+	}
+
+	policy.Bandwidth = nil
+	policy.UpdatedAt = time.Now().Unix()
+	return nil
 }
 
 // IsEndpointAllowed checks if an endpoint is allowed for a sandbox

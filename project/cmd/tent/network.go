@@ -33,6 +33,7 @@ func networkCmd() *cobra.Command {
 	cmd.AddCommand(networkConnectCmd())
 	cmd.AddCommand(networkDisconnectCmd())
 	cmd.AddCommand(networkLsCmd())
+	cmd.AddCommand(networkBandwidthCmd())
 
 	return cmd
 }
@@ -608,6 +609,297 @@ Examples:
 
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Only show network names")
 	return cmd
+}
+
+func networkBandwidthCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "bandwidth",
+		Short: "Manage per-sandbox network bandwidth limits",
+		Long: `Set, view, or remove network bandwidth rate limits for sandboxes.
+
+Bandwidth limits control the maximum ingress (download) and egress (upload)
+rates for a sandbox's network interface. Rates are specified in human-readable
+format: bps, kbps, mbps, or gbps.
+
+Examples:
+  tent network bandwidth set mybox --ingress 100mbps --egress 50mbps
+  tent network bandwidth get mybox
+  tent network bandwidth remove mybox`,
+	}
+
+	cmd.AddCommand(networkBandwidthSetCmd())
+	cmd.AddCommand(networkBandwidthGetCmd())
+	cmd.AddCommand(networkBandwidthRemoveCmd())
+	cmd.AddCommand(networkBandwidthListCmd())
+
+	return cmd
+}
+
+func networkBandwidthSetCmd() *cobra.Command {
+	var (
+		ingress      string
+		egress       string
+		ingressBurst string
+		egressBurst  string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "set <sandbox>",
+		Short: "Set bandwidth limits for a sandbox",
+		Long: `Configure ingress and/or egress rate limits for a sandbox's network traffic.
+
+Rates can be specified with suffixes: bps, kbps, mbps, gbps.
+Use "unlimited" or "0" to remove a specific limit.
+
+Examples:
+  tent network bandwidth set mybox --ingress 100mbps --egress 50mbps
+  tent network bandwidth set mybox --ingress 1gbps
+  tent network bandwidth set mybox --egress 10mbps --egress-burst 65536`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+
+			if ingress == "" && egress == "" {
+				return fmt.Errorf("at least one of --ingress or --egress must be specified")
+			}
+
+			baseDir := getBaseDir()
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			// Get existing limit if any
+			existing, _ := pm.GetBandwidthLimit(sandboxName)
+			limit := &network.BandwidthLimit{}
+			if existing != nil && existing.HasLimits() {
+				*limit = *existing
+			}
+
+			if ingress != "" {
+				rate, err := network.ParseRate(ingress)
+				if err != nil {
+					return fmt.Errorf("invalid ingress rate: %w", err)
+				}
+				limit.IngressRate = rate
+			}
+
+			if egress != "" {
+				rate, err := network.ParseRate(egress)
+				if err != nil {
+					return fmt.Errorf("invalid egress rate: %w", err)
+				}
+				limit.EgressRate = rate
+			}
+
+			if ingressBurst != "" {
+				burst, err := parseBytes(ingressBurst)
+				if err != nil {
+					return fmt.Errorf("invalid ingress burst: %w", err)
+				}
+				limit.IngressBurst = burst
+			}
+
+			if egressBurst != "" {
+				burst, err := parseBytes(egressBurst)
+				if err != nil {
+					return fmt.Errorf("invalid egress burst: %w", err)
+				}
+				limit.EgressBurst = burst
+			}
+
+			if err := pm.SetBandwidthLimit(sandboxName, limit); err != nil {
+				return fmt.Errorf("failed to set bandwidth limit: %w", err)
+			}
+
+			policy, err := pm.GetPolicy(sandboxName)
+			if err != nil {
+				// Create a minimal policy with just bandwidth
+				policy = &network.Policy{Name: sandboxName}
+			}
+			policy.Bandwidth = limit
+			if err := pm.SavePolicy(policy); err != nil {
+				return fmt.Errorf("failed to save policy: %w", err)
+			}
+
+			fmt.Printf("Bandwidth limits for '%s':\n", sandboxName)
+			fmt.Printf("  Ingress: %s\n", network.FormatRate(limit.IngressRate))
+			fmt.Printf("  Egress:  %s\n", network.FormatRate(limit.EgressRate))
+			if limit.IngressBurst > 0 {
+				fmt.Printf("  Ingress burst: %d bytes\n", limit.IngressBurst)
+			}
+			if limit.EgressBurst > 0 {
+				fmt.Printf("  Egress burst:  %d bytes\n", limit.EgressBurst)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&ingress, "ingress", "", "Max inbound rate (e.g. 100mbps, 1gbps)")
+	cmd.Flags().StringVar(&egress, "egress", "", "Max outbound rate (e.g. 50mbps, 500kbps)")
+	cmd.Flags().StringVar(&ingressBurst, "ingress-burst", "", "Ingress burst size in bytes")
+	cmd.Flags().StringVar(&egressBurst, "egress-burst", "", "Egress burst size in bytes")
+
+	return cmd
+}
+
+func networkBandwidthGetCmd() *cobra.Command {
+	var outputFormat string
+
+	cmd := &cobra.Command{
+		Use:   "get <sandbox>",
+		Short: "Show bandwidth limits for a sandbox",
+		Long: `Display the current bandwidth rate limits for a sandbox.
+
+Examples:
+  tent network bandwidth get mybox
+  tent network bandwidth get mybox --format json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+			baseDir := getBaseDir()
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			limit, err := pm.GetBandwidthLimit(sandboxName)
+			if err != nil {
+				return fmt.Errorf("failed to get bandwidth limit: %w", err)
+			}
+
+			if !limit.HasLimits() {
+				fmt.Printf("No bandwidth limits set for '%s'\n", sandboxName)
+				return nil
+			}
+
+			if outputFormat == "json" {
+				data, err := json.MarshalIndent(limit, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+
+			fmt.Printf("Bandwidth limits for '%s':\n", sandboxName)
+			fmt.Printf("  Ingress: %s\n", network.FormatRate(limit.IngressRate))
+			fmt.Printf("  Egress:  %s\n", network.FormatRate(limit.EgressRate))
+			if limit.IngressBurst > 0 {
+				fmt.Printf("  Ingress burst: %d bytes\n", limit.IngressBurst)
+			}
+			if limit.EgressBurst > 0 {
+				fmt.Printf("  Egress burst:  %d bytes\n", limit.EgressBurst)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json")
+	return cmd
+}
+
+func networkBandwidthRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <sandbox>",
+		Short: "Remove bandwidth limits from a sandbox",
+		Long: `Clear all bandwidth rate limits for a sandbox, restoring unlimited throughput.
+
+Examples:
+  tent network bandwidth remove mybox`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+			baseDir := getBaseDir()
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			if err := pm.RemoveBandwidthLimit(sandboxName); err != nil {
+				return fmt.Errorf("failed to remove bandwidth limit: %w", err)
+			}
+
+			policy, err := pm.GetPolicy(sandboxName)
+			if err != nil {
+				return fmt.Errorf("failed to get policy: %w", err)
+			}
+
+			if err := pm.SavePolicy(policy); err != nil {
+				return fmt.Errorf("failed to save policy: %w", err)
+			}
+
+			fmt.Printf("Removed bandwidth limits for '%s'\n", sandboxName)
+			return nil
+		},
+	}
+}
+
+func networkBandwidthListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List all sandboxes with bandwidth limits",
+		Long: `Show bandwidth limits for all sandboxes that have rate limiting configured.
+
+Examples:
+  tent network bandwidth list`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			policies, err := pm.ListPolicies()
+			if err != nil {
+				return fmt.Errorf("failed to list policies: %w", err)
+			}
+
+			found := false
+			fmt.Printf("%-20s %-15s %-15s %-12s %-12s\n",
+				"SANDBOX", "INGRESS", "EGRESS", "IN-BURST", "OUT-BURST")
+			for _, p := range policies {
+				if p.Bandwidth == nil || !p.Bandwidth.HasLimits() {
+					continue
+				}
+				found = true
+				inBurst := "-"
+				outBurst := "-"
+				if p.Bandwidth.IngressBurst > 0 {
+					inBurst = fmt.Sprintf("%d", p.Bandwidth.IngressBurst)
+				}
+				if p.Bandwidth.EgressBurst > 0 {
+					outBurst = fmt.Sprintf("%d", p.Bandwidth.EgressBurst)
+				}
+				fmt.Printf("%-20s %-15s %-15s %-12s %-12s\n",
+					p.Name,
+					network.FormatRate(p.Bandwidth.IngressRate),
+					network.FormatRate(p.Bandwidth.EgressRate),
+					inBurst,
+					outBurst,
+				)
+			}
+
+			if !found {
+				fmt.Println("No sandboxes with bandwidth limits configured.")
+			}
+			return nil
+		},
+	}
+}
+
+// parseBytes parses a byte count string (plain number)
+func parseBytes(s string) (uint64, error) {
+	s = strings.TrimSpace(s)
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid byte count %q: %w", s, err)
+	}
+	return val, nil
 }
 
 // parsePortMapping parses "host:guest" port mapping string
