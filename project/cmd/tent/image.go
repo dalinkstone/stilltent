@@ -22,6 +22,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageExtractCmd())
 	cmd.AddCommand(imageRmCmd())
 	cmd.AddCommand(imageInspectCmd())
+	cmd.AddCommand(imageTagCmd())
 
 	return cmd
 }
@@ -230,6 +231,43 @@ func imageRmCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Ignore errors for missing images")
+	return cmd
+}
+
+func imageTagCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "tag <source> <target>",
+		Short: "Create an alias for an existing image",
+		Long: `Tag an existing image with a new name, creating an alias.
+The original image is preserved. If the target name already exists, it is replaced.
+
+Examples:
+  tent image tag ubuntu_22.04 my-base
+  tent image tag my-base production-image`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			source := args[0]
+			target := args[1]
+
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			if err := manager.TagImage(source, target); err != nil {
+				return fmt.Errorf("failed to tag image: %w", err)
+			}
+
+			fmt.Printf("Tagged image '%s' as '%s'\n", source, target)
+			return nil
+		},
+	}
 	return cmd
 }
 

@@ -673,6 +673,49 @@ type ImageDetail struct {
 	RootfsPath string `json:"rootfs_path,omitempty"`
 }
 
+// TagImage creates an alias for an existing image by linking it under a new name.
+// If the source and target names resolve to the same image, it returns an error.
+func (m *Manager) TagImage(source, target string) error {
+	srcPath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", source))
+	dstPath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", target))
+
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		return fmt.Errorf("source image not found: %s", source)
+	}
+
+	if source == target {
+		return fmt.Errorf("source and target names are the same")
+	}
+
+	// If target already exists, remove it first
+	if _, err := os.Stat(dstPath); err == nil {
+		if err := os.Remove(dstPath); err != nil {
+			return fmt.Errorf("failed to remove existing target image: %w", err)
+		}
+	}
+
+	// Try hard link first (no extra disk space), fall back to copy
+	if err := os.Link(srcPath, dstPath); err != nil {
+		if err := m.copyFile(srcPath, dstPath); err != nil {
+			return fmt.Errorf("failed to create image tag: %w", err)
+		}
+	}
+
+	// Also link/copy the rootfs directory if it exists
+	srcRootfs := filepath.Join(m.baseDir, source+"_rootfs")
+	dstRootfs := filepath.Join(m.baseDir, target+"_rootfs")
+	if stat, err := os.Stat(srcRootfs); err == nil && stat.IsDir() {
+		// For directories, create a symlink
+		os.RemoveAll(dstRootfs)
+		if err := os.Symlink(srcRootfs, dstRootfs); err != nil {
+			// Ignore symlink failures — the image file is the important part
+			_ = err
+		}
+	}
+
+	return nil
+}
+
 // copyFile copies a file
 func (m *Manager) copyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
