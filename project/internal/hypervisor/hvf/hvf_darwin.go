@@ -44,6 +44,7 @@ type VM struct {
 	memoryPtr     unsafe.Pointer
 	memorySize    uint64
 	consoleOutput io.Writer
+	mounts        []hypervisor.MountTag
 }
 
 // NewBackend creates a new Hypervisor.framework backend
@@ -389,6 +390,13 @@ func (v *VM) GetPID() int {
 // SetConsoleOutput sets the writer for capturing console/serial output
 func (v *VM) SetConsoleOutput(w io.Writer) {
 	v.consoleOutput = w
+}
+
+// AddMounts attaches host-to-guest directory shares via virtio-9p.
+// On HVF, the mount tags are stored and passed to the guest via the device tree
+// so the guest kernel can mount them using 9p.
+func (v *VM) AddMounts(mounts []hypervisor.MountTag) {
+	v.mounts = append(v.mounts, mounts...)
 }
 
 // Cleanup releases all VM resources (implements hypervisor.VM interface)

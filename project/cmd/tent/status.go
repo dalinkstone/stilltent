@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dalinkstone/tent/internal/sandbox"
+	vm "github.com/dalinkstone/tent/internal/sandbox"
 )
 
 // ConfigureStatusCmd creates a new status command with optional dependencies
@@ -71,6 +71,20 @@ func ConfigureStatusCmd(options ...CommonCmdOption) *cobra.Command {
 			fmt.Printf("  TAP:       %s\n", vmState.TAPDevice)
 			fmt.Printf("  Socket:    %s\n", vmState.SocketPath)
 			fmt.Printf("  SSH Key:   %s\n", vmState.SSHKeyPath)
+
+			// Display mount shares
+			mountMgr := vm.NewMountManager(baseDir)
+			if shares, err := mountMgr.LoadMounts(name); err == nil && len(shares) > 0 {
+				fmt.Printf("  Mounts:\n")
+				for _, s := range shares {
+					mode := "rw"
+					if s.ReadOnly {
+						mode = "ro"
+					}
+					fmt.Printf("    %s -> %s (%s, tag=%s)\n", s.HostPath, s.GuestPath, mode, s.Tag)
+				}
+			}
+
 			if vmState.RestartPolicy != "" {
 				fmt.Printf("  Restart:   %s (count: %d)\n", vmState.RestartPolicy, vmState.RestartCount)
 			}

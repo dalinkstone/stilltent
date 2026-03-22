@@ -92,6 +92,10 @@ func (v *VM) GetPID() int {
 func (v *VM) SetConsoleOutput(w io.Writer) {
 }
 
+// AddMounts attaches host-to-guest directory shares via virtio-9p (stub).
+func (v *VM) AddMounts(mounts []hypervisor.MountTag) {
+}
+
 // Cleanup releases all VM resources
 func (v *VM) Cleanup() error {
 	return nil

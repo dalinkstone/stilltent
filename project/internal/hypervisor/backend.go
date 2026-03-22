@@ -53,8 +53,22 @@ type VM interface {
 	// SetConsoleOutput sets the writer for capturing console/serial output
 	SetConsoleOutput(w io.Writer)
 
+	// AddMounts attaches host-to-guest directory shares via virtio-9p.
+	// Each MountTag maps a 9p tag to a host directory path.
+	AddMounts(mounts []MountTag)
+
 	// Cleanup releases all VM resources
 	Cleanup() error
+}
+
+// MountTag represents a virtio-9p mount share descriptor.
+type MountTag struct {
+	// Tag is the 9p tag the guest uses to mount this share
+	Tag string
+	// HostPath is the absolute path on the host to share
+	HostPath string
+	// ReadOnly indicates whether the share is read-only
+	ReadOnly bool
 }
 
 // ErrUnsupportedPlatform indicates the current OS is not supported

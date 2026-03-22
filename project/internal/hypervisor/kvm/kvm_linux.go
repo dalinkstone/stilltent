@@ -32,6 +32,7 @@ type VM struct {
 	ip            string
 	tapDevice     string
 	consoleOutput io.Writer
+	mounts        []hypervisor.MountTag
 }
 
 // SetNetwork configures the VM's network interface
@@ -249,6 +250,13 @@ func (v *VM) GetPID() int {
 // SetConsoleOutput sets the writer for capturing console/serial output
 func (v *VM) SetConsoleOutput(w io.Writer) {
 	v.consoleOutput = w
+}
+
+// AddMounts attaches host-to-guest directory shares via virtio-9p.
+// On KVM, the mount tags are stored and will be passed to the guest
+// as virtio-9p devices when the VM starts.
+func (v *VM) AddMounts(mounts []hypervisor.MountTag) {
+	v.mounts = append(v.mounts, mounts...)
 }
 
 // Cleanup releases all VM resources

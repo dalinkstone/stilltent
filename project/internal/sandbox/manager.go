@@ -73,6 +73,7 @@ type VMManager struct {
 	consoleMgr     *console.Manager
 	policyMgr      *network.PolicyManager
 	egressFirewall *network.EgressFirewall
+	mountMgr       *MountManager
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -129,6 +130,7 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		consoleMgr:     consoleMgr,
 		policyMgr:      policyMgr,
 		egressFirewall: egressFw,
+		mountMgr:       NewMountManager(baseDir),
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -195,6 +197,17 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 	keyPair, err := GenerateSSHKeys(m.baseDir, name)
 	if err != nil {
 		return fmt.Errorf("failed to generate SSH keys: %w", err)
+	}
+
+	// Validate and persist mount shares if configured
+	if len(config.Mounts) > 0 {
+		shares, err := m.mountMgr.PrepareMounts(name, config.Mounts)
+		if err != nil {
+			return fmt.Errorf("failed to prepare mounts: %w", err)
+		}
+		if err := m.mountMgr.SaveMounts(name, shares); err != nil {
+			return fmt.Errorf("failed to save mount state: %w", err)
+		}
 	}
 
 	// Persist the full config so it survives stop/start cycles
@@ -270,6 +283,19 @@ func (m *VMManager) Start(name string) error {
 
 	// Configure network for the VM
 	vm.SetNetwork(vmState.TAPDevice, vmState.IP)
+
+	// Attach host-to-guest mounts via virtio-9p
+	if shares, err := m.mountMgr.LoadMounts(name); err == nil && len(shares) > 0 {
+		mountTags := make([]hypervisor.MountTag, len(shares))
+		for i, s := range shares {
+			mountTags[i] = hypervisor.MountTag{
+				Tag:      s.Tag,
+				HostPath: s.HostPath,
+				ReadOnly: s.ReadOnly,
+			}
+		}
+		vm.AddMounts(mountTags)
+	}
 
 	// Set up console log capture
 	consoleLogger, err := m.consoleMgr.CreateLogger(name)
@@ -480,6 +506,11 @@ func (m *VMManager) Destroy(name string) error {
 	if err := RemoveSSHKeys(m.baseDir, name); err != nil {
 		// Non-fatal — keys might not exist for older sandboxes
 		fmt.Fprintf(os.Stderr, "warning: failed to remove SSH keys for %s: %v\n", name, err)
+	}
+
+	// Cleanup mount state
+	if err := m.mountMgr.RemoveMounts(name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to remove mount state for %s: %v\n", name, err)
 	}
 
 	// Cleanup storage
