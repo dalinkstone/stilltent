@@ -13,6 +13,7 @@ import (
 	"strconv"
 
 	"github.com/dalinkstone/tent/internal/compose"
+	"github.com/dalinkstone/tent/internal/image"
 	"github.com/dalinkstone/tent/internal/sandbox"
 )
 
@@ -32,6 +33,9 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeListCmd())
 	cmd.AddCommand(composeValidateCmd())
 	cmd.AddCommand(composeScaleCmd())
+	cmd.AddCommand(composePullCmd())
+	cmd.AddCommand(composePauseCmd())
+	cmd.AddCommand(composeUnpauseCmd())
 
 	return cmd
 }
@@ -547,4 +551,264 @@ Examples:
 			return nil
 		},
 	}
+}
+
+func composePullCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "pull <file>",
+		Short: "Pull all images referenced in a compose file",
+		Long: `Pre-pull all images referenced by sandboxes in a compose file.
+This is useful for staging images before running 'tent compose up',
+especially in environments with slow or unreliable network access.
+
+Duplicate image references are only pulled once.
+
+Examples:
+  tent compose pull tent-compose.yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			// Collect unique image references
+			seen := make(map[string]bool)
+			var imageRefs []string
+			for _, sb := range config.Sandboxes {
+				if sb.From != "" && !seen[sb.From] {
+					seen[sb.From] = true
+					imageRefs = append(imageRefs, sb.From)
+				}
+			}
+
+			if len(imageRefs) == 0 {
+				fmt.Println("No images to pull.")
+				return nil
+			}
+
+			baseDir := getBaseDir()
+			imgMgr, err := image.NewManager(baseDir, image.WithProgressCallback(func(bytes, total int64) {
+				if total > 0 {
+					percent := float64(bytes) / float64(total) * 100
+					fmt.Printf("\r  Downloading: %.1f%% (%.1f MB / %.1f MB)",
+						percent, float64(bytes)/(1024*1024), float64(total)/(1024*1024))
+				} else {
+					fmt.Printf("\r  Downloading: %.1f MB", float64(bytes)/(1024*1024))
+				}
+				if bytes >= total && total > 0 {
+					fmt.Println()
+				}
+			}))
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			fmt.Printf("Pulling %d image(s) for compose file '%s'...\n", len(imageRefs), filePath)
+
+			var pullErrors []string
+			for _, ref := range imageRefs {
+				fmt.Printf("Pulling '%s'...\n", ref)
+				var pullErr error
+				if isDockerReference(ref) {
+					_, pullErr = imgMgr.PullOCI(sanitizeImageName(ref), ref)
+				} else {
+					name := sanitizeImageName(ref)
+					_, pullErr = imgMgr.Pull(name, ref)
+				}
+				if pullErr != nil {
+					pullErrors = append(pullErrors, fmt.Sprintf("%s: %v", ref, pullErr))
+					fmt.Printf("  Failed: %v\n", pullErr)
+				} else {
+					fmt.Printf("  Done.\n")
+				}
+			}
+
+			if len(pullErrors) > 0 {
+				fmt.Printf("\n%d of %d image(s) failed to pull:\n", len(pullErrors), len(imageRefs))
+				for _, e := range pullErrors {
+					fmt.Printf("  - %s\n", e)
+				}
+				return fmt.Errorf("%d image pull(s) failed", len(pullErrors))
+			}
+
+			fmt.Printf("\nAll %d image(s) pulled successfully.\n", len(imageRefs))
+			return nil
+		},
+	}
+}
+
+// sanitizeImageName derives a short name from an image reference for storage.
+func sanitizeImageName(ref string) string {
+	// Strip tag
+	name := ref
+	if idx := strings.LastIndex(name, ":"); idx >= 0 {
+		name = name[:idx]
+	}
+	// Use last path component
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+	if name == "" {
+		name = "image"
+	}
+	return name
+}
+
+func composePauseCmd() *cobra.Command {
+	var services []string
+
+	cmd := &cobra.Command{
+		Use:   "pause <file>",
+		Short: "Pause sandboxes in a compose group",
+		Long: `Pause (freeze) all or selected sandboxes in a compose group.
+Paused sandboxes retain their memory state but stop executing.
+
+Examples:
+  tent compose pause tent-compose.yaml
+  tent compose pause tent-compose.yaml --service agent`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+			status, err := manager.Status(groupName)
+			if err != nil {
+				return fmt.Errorf("failed to get compose status: %w", err)
+			}
+
+			targets := resolveComposeTargets(status, services)
+			if len(targets) == 0 {
+				fmt.Println("No sandboxes to pause.")
+				return nil
+			}
+
+			baseDir := getBaseDir()
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+			vmManager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+			if err := vmManager.Setup(); err != nil {
+				return fmt.Errorf("failed to setup VM manager: %w", err)
+			}
+
+			var pauseErrors []string
+			for _, name := range targets {
+				if err := vmManager.Pause(name); err != nil {
+					pauseErrors = append(pauseErrors, fmt.Sprintf("%s: %v", name, err))
+				} else {
+					fmt.Printf("Paused %s\n", name)
+				}
+			}
+
+			if len(pauseErrors) > 0 {
+				return fmt.Errorf("errors pausing sandboxes: %s", strings.Join(pauseErrors, "; "))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&services, "service", nil, "Pause only specific services")
+	return cmd
+}
+
+func composeUnpauseCmd() *cobra.Command {
+	var services []string
+
+	cmd := &cobra.Command{
+		Use:   "unpause <file>",
+		Short: "Unpause sandboxes in a compose group",
+		Long: `Resume execution of paused sandboxes in a compose group.
+
+Examples:
+  tent compose unpause tent-compose.yaml
+  tent compose unpause tent-compose.yaml --service agent`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+			status, err := manager.Status(groupName)
+			if err != nil {
+				return fmt.Errorf("failed to get compose status: %w", err)
+			}
+
+			targets := resolveComposeTargets(status, services)
+			if len(targets) == 0 {
+				fmt.Println("No sandboxes to unpause.")
+				return nil
+			}
+
+			baseDir := getBaseDir()
+			hvBackend, err := vm.NewPlatformBackend(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create hypervisor backend: %w", err)
+			}
+			vmManager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+			if err != nil {
+				return fmt.Errorf("failed to create VM manager: %w", err)
+			}
+			if err := vmManager.Setup(); err != nil {
+				return fmt.Errorf("failed to setup VM manager: %w", err)
+			}
+
+			var unpauseErrors []string
+			for _, name := range targets {
+				if err := vmManager.Unpause(name); err != nil {
+					unpauseErrors = append(unpauseErrors, fmt.Sprintf("%s: %v", name, err))
+				} else {
+					fmt.Printf("Unpaused %s\n", name)
+				}
+			}
+
+			if len(unpauseErrors) > 0 {
+				return fmt.Errorf("errors unpausing sandboxes: %s", strings.Join(unpauseErrors, "; "))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringSliceVar(&services, "service", nil, "Unpause only specific services")
+	return cmd
+}
+
+// resolveComposeTargets returns the list of sandbox names to operate on,
+// filtered by the given service names. If services is empty, all sandboxes
+// in the group are returned.
+func resolveComposeTargets(status *compose.ComposeStatus, services []string) []string {
+	if len(services) > 0 {
+		var targets []string
+		for _, svc := range services {
+			if _, ok := status.Sandboxes[svc]; ok {
+				targets = append(targets, svc)
+			}
+		}
+		return targets
+	}
+	targets := make([]string, 0, len(status.Sandboxes))
+	for name := range status.Sandboxes {
+		targets = append(targets, name)
+	}
+	return targets
 }
