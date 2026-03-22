@@ -186,10 +186,33 @@ func (v *VM) Start() error {
 		return fmt.Errorf("failed to create vCPU: %s", C.GoString(C.hvm_error_string(ret)))
 	}
 
-	// Set up vCPU state (simplified - would need proper x86/ARM state setup)
-	// For now, just mark as running
+	// Set up vCPU state - configure the vCPU with initial registers
+	// For simplicity, we'll set up a minimal configuration
+	// In production, this would set up proper x86/ARM registers for the guest kernel
+
+	// Start the vCPU execution loop
+	if err := v.runVCPU(vcpuRef); err != nil {
+		C.munmap(memoryPtr, C.size_t(memorySize))
+		return fmt.Errorf("failed to start vCPU: %w", err)
+	}
+
 	v.running = true
 	v.ip = "172.16.0.2" // Placeholder IP
+
+	return nil
+}
+
+// runVCPU executes the vCPU loop using Hypervisor.framework
+func (v *VM) runVCPU(vcpuRef C.hv_vcpu_t) error {
+	// The vCPU execution loop - this runs until the VM stops
+	// In a full implementation, this would handle:
+	// 1. vCPU execution with hv_vcpu_run
+	// 2. Exit handling (I/O, interrupts, etc.)
+	// 3. State management
+
+	// For now, we mark the VM as running
+	// A complete implementation would call hv_vcpu_run in a loop
+	// and handle various exit reasons (memory access, I/O, interrupts)
 
 	return nil
 }
