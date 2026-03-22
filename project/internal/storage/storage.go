@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -345,4 +347,409 @@ func (m *Manager) ExtractKernel(rootfsPath string) (*KernelInfo, error) {
 		InitrdPath: "/boot/initrd.img",
 		Cmdline:    "root=/dev/vda console=hvc0 rw ip=dhcp init=/sbin/init",
 	}, nil
+}
+
+// DiskInfo contains detailed information about a sandbox's disk image
+type DiskInfo struct {
+	Path        string  `json:"path"`
+	Format      string  `json:"format"` // "raw" or "qcow2"
+	VirtualSize uint64  `json:"virtual_size_bytes"`
+	ActualSize  uint64  `json:"actual_size_bytes"`
+	ClusterSize int     `json:"cluster_size,omitempty"`
+	BackingFile string  `json:"backing_file,omitempty"`
+	Efficiency  float64 `json:"efficiency_pct"` // actual/virtual ratio
+}
+
+// InspectDisk returns detailed info about a sandbox's disk image
+func (m *Manager) InspectDisk(vmName string) (*DiskInfo, error) {
+	rootfsPath := filepath.Join(m.baseDir, "rootfs", vmName, "rootfs.img")
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("disk not found for sandbox %s", vmName)
+	}
+
+	fi, err := os.Stat(rootfsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat disk: %w", err)
+	}
+
+	info := &DiskInfo{
+		Path:       rootfsPath,
+		ActualSize: uint64(fi.Size()),
+	}
+
+	if IsQCOW2(rootfsPath) {
+		info.Format = "qcow2"
+		qinfo, err := InspectQCOW2(rootfsPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect qcow2: %w", err)
+		}
+		info.VirtualSize = uint64(qinfo.VirtualSizeMB) * 1024 * 1024
+		info.ClusterSize = qinfo.ClusterSize
+		info.BackingFile = qinfo.BackingFile
+	} else {
+		info.Format = "raw"
+		info.VirtualSize = uint64(fi.Size())
+	}
+
+	if info.VirtualSize > 0 {
+		info.Efficiency = float64(info.ActualSize) / float64(info.VirtualSize) * 100
+	}
+
+	return info, nil
+}
+
+// ResizeDisk resizes a sandbox's disk image to the given size in bytes
+func (m *Manager) ResizeDisk(vmName string, newSizeBytes uint64) error {
+	rootfsPath := filepath.Join(m.baseDir, "rootfs", vmName, "rootfs.img")
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return fmt.Errorf("disk not found for sandbox %s", vmName)
+	}
+
+	if IsQCOW2(rootfsPath) {
+		return m.resizeQCOW2(rootfsPath, newSizeBytes)
+	}
+
+	// For raw images, truncate to new size
+	f, err := os.OpenFile(rootfsPath, os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open disk: %w", err)
+	}
+	defer f.Close()
+
+	if err := f.Truncate(int64(newSizeBytes)); err != nil {
+		return fmt.Errorf("failed to resize disk: %w", err)
+	}
+
+	return nil
+}
+
+// resizeQCOW2 updates the virtual size in a QCOW2 header
+func (m *Manager) resizeQCOW2(path string, newSizeBytes uint64) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open qcow2: %w", err)
+	}
+	defer f.Close()
+
+	var header QCOW2Header
+	if err := binary.Read(f, binary.BigEndian, &header); err != nil {
+		return fmt.Errorf("failed to read header: %w", err)
+	}
+
+	if header.Magic != qcow2Magic {
+		return fmt.Errorf("not a valid qcow2 file")
+	}
+
+	if newSizeBytes < header.Size {
+		return fmt.Errorf("cannot shrink qcow2 image (current: %d bytes, requested: %d bytes)", header.Size, newSizeBytes)
+	}
+
+	// Write new size at offset 24 (the Size field in QCOW2 header)
+	if _, err := f.Seek(24, io.SeekStart); err != nil {
+		return err
+	}
+	if err := binary.Write(f, binary.BigEndian, newSizeBytes); err != nil {
+		return fmt.Errorf("failed to write new size: %w", err)
+	}
+
+	return nil
+}
+
+// ConvertDisk converts a disk image between raw and qcow2 formats
+func (m *Manager) ConvertDisk(vmName string, targetFormat string) (string, error) {
+	rootfsPath := filepath.Join(m.baseDir, "rootfs", vmName, "rootfs.img")
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("disk not found for sandbox %s", vmName)
+	}
+
+	currentIsQCOW2 := IsQCOW2(rootfsPath)
+
+	switch targetFormat {
+	case "qcow2":
+		if currentIsQCOW2 {
+			return rootfsPath, fmt.Errorf("disk is already in qcow2 format")
+		}
+		return m.convertRawToQCOW2(vmName, rootfsPath)
+	case "raw":
+		if !currentIsQCOW2 {
+			return rootfsPath, fmt.Errorf("disk is already in raw format")
+		}
+		return m.convertQCOW2ToRaw(vmName, rootfsPath)
+	default:
+		return "", fmt.Errorf("unsupported format: %s (use 'raw' or 'qcow2')", targetFormat)
+	}
+}
+
+// convertRawToQCOW2 converts a raw disk image to qcow2
+func (m *Manager) convertRawToQCOW2(_ string, rawPath string) (string, error) {
+	fi, err := os.Stat(rawPath)
+	if err != nil {
+		return "", err
+	}
+
+	tmpPath := rawPath + ".qcow2.tmp"
+	if err := CreateQCOW2(tmpPath, uint64(fi.Size()), ""); err != nil {
+		return "", fmt.Errorf("failed to create qcow2: %w", err)
+	}
+
+	// Open the new qcow2 image and copy data from raw
+	dst, err := OpenQCOW2(tmpPath)
+	if err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to open new qcow2: %w", err)
+	}
+
+	src, err := os.Open(rawPath)
+	if err != nil {
+		dst.Close()
+		os.Remove(tmpPath)
+		return "", err
+	}
+
+	// Copy in cluster-sized chunks, skip zero clusters
+	buf := make([]byte, defaultClusterSize)
+	clusterIdx := uint64(0)
+	for {
+		n, err := io.ReadFull(src, buf)
+		if n > 0 {
+			// Check if cluster is all zeros (sparse optimization)
+			isZero := true
+			for i := 0; i < n; i++ {
+				if buf[i] != 0 {
+					isZero = false
+					break
+				}
+			}
+			if !isZero {
+				data := buf[:n]
+				if n < defaultClusterSize {
+					padded := make([]byte, defaultClusterSize)
+					copy(padded, buf[:n])
+					data = padded
+				}
+				if writeErr := dst.WriteCluster(clusterIdx, data); writeErr != nil {
+					src.Close()
+					dst.Close()
+					os.Remove(tmpPath)
+					return "", fmt.Errorf("failed to write cluster %d: %w", clusterIdx, writeErr)
+				}
+			}
+		}
+		clusterIdx++
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			src.Close()
+			dst.Close()
+			os.Remove(tmpPath)
+			return "", fmt.Errorf("read error: %w", err)
+		}
+	}
+	src.Close()
+	dst.Close()
+
+	// Replace original with converted
+	backupPath := rawPath + ".raw.bak"
+	if err := os.Rename(rawPath, backupPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to backup original: %w", err)
+	}
+	if err := os.Rename(tmpPath, rawPath); err != nil {
+		os.Rename(backupPath, rawPath)
+		return "", fmt.Errorf("failed to replace original: %w", err)
+	}
+	os.Remove(backupPath)
+
+	return rawPath, nil
+}
+
+// convertQCOW2ToRaw converts a qcow2 disk image to raw
+func (m *Manager) convertQCOW2ToRaw(_ string, qcow2Path string) (string, error) {
+	img, err := OpenQCOW2(qcow2Path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open qcow2: %w", err)
+	}
+
+	virtualSize := img.VirtualSize()
+	tmpPath := qcow2Path + ".raw.tmp"
+
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		img.Close()
+		return "", err
+	}
+
+	// Truncate to virtual size
+	if err := dst.Truncate(int64(virtualSize)); err != nil {
+		dst.Close()
+		img.Close()
+		os.Remove(tmpPath)
+		return "", err
+	}
+
+	// Read each cluster and write to raw
+	numClusters := virtualSize / uint64(defaultClusterSize)
+	if virtualSize%uint64(defaultClusterSize) != 0 {
+		numClusters++
+	}
+
+	for i := uint64(0); i < numClusters; i++ {
+		data, err := img.ReadCluster(i)
+		if err != nil {
+			continue // Unallocated clusters stay zero
+		}
+
+		offset := int64(i) * int64(defaultClusterSize)
+		if _, err := dst.WriteAt(data, offset); err != nil {
+			dst.Close()
+			img.Close()
+			os.Remove(tmpPath)
+			return "", fmt.Errorf("failed to write at offset %d: %w", offset, err)
+		}
+	}
+
+	dst.Close()
+	img.Close()
+
+	// Replace original
+	backupPath := qcow2Path + ".qcow2.bak"
+	if err := os.Rename(qcow2Path, backupPath); err != nil {
+		os.Remove(tmpPath)
+		return "", fmt.Errorf("failed to backup original: %w", err)
+	}
+	if err := os.Rename(tmpPath, qcow2Path); err != nil {
+		os.Rename(backupPath, qcow2Path)
+		return "", fmt.Errorf("failed to replace original: %w", err)
+	}
+	os.Remove(backupPath)
+
+	return qcow2Path, nil
+}
+
+// CompactDisk reclaims unused space from a qcow2 disk image
+func (m *Manager) CompactDisk(vmName string) (uint64, error) {
+	rootfsPath := filepath.Join(m.baseDir, "rootfs", vmName, "rootfs.img")
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return 0, fmt.Errorf("disk not found for sandbox %s", vmName)
+	}
+
+	if !IsQCOW2(rootfsPath) {
+		return 0, fmt.Errorf("compact is only supported for qcow2 images")
+	}
+
+	// Get original size
+	origFi, err := os.Stat(rootfsPath)
+	if err != nil {
+		return 0, err
+	}
+	origSize := uint64(origFi.Size())
+
+	// Open the original and create a new compacted copy
+	src, err := OpenQCOW2(rootfsPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open qcow2: %w", err)
+	}
+
+	virtualSize := src.VirtualSize()
+	tmpPath := rootfsPath + ".compact.tmp"
+
+	if err := CreateQCOW2(tmpPath, virtualSize, ""); err != nil {
+		src.Close()
+		return 0, fmt.Errorf("failed to create compacted image: %w", err)
+	}
+
+	dst, err := OpenQCOW2(tmpPath)
+	if err != nil {
+		src.Close()
+		os.Remove(tmpPath)
+		return 0, err
+	}
+
+	// Copy only non-zero clusters
+	numClusters := virtualSize / uint64(defaultClusterSize)
+	if virtualSize%uint64(defaultClusterSize) != 0 {
+		numClusters++
+	}
+
+	for i := uint64(0); i < numClusters; i++ {
+		data, err := src.ReadCluster(i)
+		if err != nil {
+			continue // Skip unallocated
+		}
+
+		// Check if all zeros
+		allZero := true
+		for _, b := range data {
+			if b != 0 {
+				allZero = false
+				break
+			}
+		}
+		if allZero {
+			continue
+		}
+
+		if err := dst.WriteCluster(i, data); err != nil {
+			src.Close()
+			dst.Close()
+			os.Remove(tmpPath)
+			return 0, fmt.Errorf("failed to write cluster: %w", err)
+		}
+	}
+
+	src.Close()
+	dst.Close()
+
+	// Replace
+	backupPath := rootfsPath + ".precompact.bak"
+	if err := os.Rename(rootfsPath, backupPath); err != nil {
+		os.Remove(tmpPath)
+		return 0, err
+	}
+	if err := os.Rename(tmpPath, rootfsPath); err != nil {
+		os.Rename(backupPath, rootfsPath)
+		return 0, err
+	}
+	os.Remove(backupPath)
+
+	// Get new size
+	newFi, err := os.Stat(rootfsPath)
+	if err != nil {
+		return 0, err
+	}
+
+	saved := uint64(0)
+	if origSize > uint64(newFi.Size()) {
+		saved = origSize - uint64(newFi.Size())
+	}
+
+	return saved, nil
+}
+
+// ListDisks lists all sandbox disk images
+func (m *Manager) ListDisks() ([]*DiskInfo, error) {
+	rootfsDir := filepath.Join(m.baseDir, "rootfs")
+	if _, err := os.Stat(rootfsDir); os.IsNotExist(err) {
+		return []*DiskInfo{}, nil
+	}
+
+	entries, err := os.ReadDir(rootfsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read rootfs directory: %w", err)
+	}
+
+	var disks []*DiskInfo
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := m.InspectDisk(entry.Name())
+		if err != nil {
+			continue
+		}
+		disks = append(disks, info)
+	}
+
+	return disks, nil
 }
