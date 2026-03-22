@@ -83,12 +83,12 @@ BUDGET_LIMIT = float(os.environ.get("BUDGET_LIMIT", "40"))
 DAILY_BUDGET_LIMIT = float(os.environ.get("DAILY_BUDGET_LIMIT", "5.0"))  # legacy fallback
 MAX_ITERATIONS = int(os.environ.get("MAX_ITERATIONS", "0"))  # 0 = unlimited
 
-# Idle detection settings — reduces token waste by 30-40% during periods with
-# no work (no open issues, no PRs to review, no failing CI).
-IDLE_BASE_WAIT = 60              # seconds — base wait when first entering idle mode
-IDLE_MAX_WAIT = 900              # seconds — cap idle wait at 15 minutes
-IDLE_MAX_EXPONENT = 4            # 2^4 = 16x multiplier max (60s -> 960s capped to 900s)
-IDLE_FORCE_CHECK_INTERVAL = 900  # seconds — always try one iteration every 15 min in idle
+# Idle detection settings — DISABLED: agent should always be working on the
+# next roadmap feature, never truly idle. All waits set to cooldown interval.
+IDLE_BASE_WAIT = int(os.environ.get("COOLDOWN_SECONDS", "30"))
+IDLE_MAX_WAIT = int(os.environ.get("COOLDOWN_SECONDS", "30"))
+IDLE_MAX_EXPONENT = 0            # no exponential backoff
+IDLE_FORCE_CHECK_INTERVAL = int(os.environ.get("COOLDOWN_SECONDS", "30"))
 
 # HTTP retry settings for the OpenClaw gateway call
 HTTP_RETRY_COUNT = 3
