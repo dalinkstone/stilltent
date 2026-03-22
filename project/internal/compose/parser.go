@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -59,6 +60,13 @@ func (c *ComposeConfig) Validate() error {
 		// Validate restart policy
 		if err := ValidateRestartPolicy(sandbox.RestartPolicy); err != nil {
 			return fmt.Errorf("sandbox %s: %w", name, err)
+		}
+
+		// Validate env_file entries are not empty
+		for i, ef := range sandbox.EnvFile {
+			if strings.TrimSpace(ef) == "" {
+				return fmt.Errorf("sandbox %s: env_file[%d] is empty", name, i)
+			}
 		}
 
 		// Validate depends_on references

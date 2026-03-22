@@ -75,7 +75,9 @@ func (m *ComposeManager) ParseConfig(filePath string) (*ComposeConfig, error) {
 	return ParseConfigFile(filePath)
 }
 
-// Up starts all sandboxes in a compose group
+// Up starts all sandboxes in a compose group.
+// composeDir is the directory containing the compose file (used to resolve relative env_file paths).
+// If empty, the current working directory is used.
 func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus, error) {
 	startOrder := config.TopologicalOrder()
 	status := &ComposeStatus{
@@ -106,8 +108,15 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 	// Start sandboxes in dependency order (dependencies first)
 	for _, sandboxName := range startOrder {
 		sandboxConfig := config.Sandboxes[sandboxName]
+
+		// Resolve env_file entries, merging with inline env (inline takes precedence)
+		resolvedEnv, err := ResolveEnvFiles(sandboxConfig, m.baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox %s: %w", sandboxName, err)
+		}
+
 		// Expand environment variable references from host env
-		expandedEnv := expandSandboxEnv(sandboxConfig.Env)
+		expandedEnv := expandSandboxEnv(resolvedEnv)
 
 		// Build network config with allow/deny from compose
 		netConfig := models.NetworkConfig{}
@@ -662,8 +671,12 @@ func (m *ComposeManager) Scale(groupName string, service string, replicas int, c
 				continue
 			}
 
-			// Build config for this replica
-			expandedEnv := expandSandboxEnv(svcConfig.Env)
+			// Build config for this replica — resolve env_file + inline env
+			resolvedEnv, err := ResolveEnvFiles(svcConfig, m.baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to resolve env files for replica %s: %w", replicaName, err)
+			}
+			expandedEnv := expandSandboxEnv(resolvedEnv)
 			netConfig := models.NetworkConfig{}
 			if svcConfig.Network != nil {
 				netConfig.Allow = svcConfig.Network.Allow

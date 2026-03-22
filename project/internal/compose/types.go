@@ -100,6 +100,7 @@ type SandboxConfig struct {
 	Mounts        []Mount           `yaml:"mounts,omitempty"`
 	Volumes       []VolumeMount     `yaml:"volumes,omitempty"`
 	Env           map[string]string `yaml:"env,omitempty"`
+	EnvFile       []string          `yaml:"env_file,omitempty"` // paths to .env files loaded before inline env
 	DependsOn     []string          `yaml:"depends_on,omitempty"`
 	Profiles      []string          `yaml:"profiles,omitempty"`
 	HealthCheck   *HealthCheckConf  `yaml:"health_check,omitempty"`
