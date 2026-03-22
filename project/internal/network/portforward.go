@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -213,7 +214,7 @@ func (pf *PortForwarder) acceptLoop(ln net.Listener, rule *forwardRule) {
 func (pf *PortForwarder) handleConnection(hostConn net.Conn, rule *forwardRule) {
 	defer hostConn.Close()
 
-	guestAddr := fmt.Sprintf("%s:%d", rule.GuestIP, rule.GuestPort)
+	guestAddr := net.JoinHostPort(rule.GuestIP, strconv.Itoa(rule.GuestPort))
 
 	// Connect to guest with timeout
 	guestConn, err := net.DialTimeout("tcp", guestAddr, 5*time.Second)
