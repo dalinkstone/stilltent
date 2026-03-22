@@ -158,7 +158,7 @@ func (v *VM) Start() error {
 		C.size_t(memorySize),
 		C.PROT_READ|C.PROT_WRITE,
 		C.MAP_ANON|C.MAP_PRIVATE,
-		C.-1,
+		-1,
 		0,
 	)
 	if memoryPtr == C.MAP_FAILED {
