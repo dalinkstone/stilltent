@@ -36,6 +36,47 @@ type VMConfig struct {
 	HealthCheck    *HealthCheckConfig `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 	Hooks          *LifecycleHooks    `yaml:"hooks,omitempty" json:"hooks,omitempty"`
 	Resources      *ResourceLimits    `yaml:"resources,omitempty" json:"resources,omitempty"`
+	Devices        []DeviceConfig     `yaml:"devices,omitempty" json:"devices,omitempty"`
+}
+
+// DeviceType represents the type of device passthrough
+type DeviceType string
+
+const (
+	DeviceTypePCI  DeviceType = "pci"
+	DeviceTypeUSB  DeviceType = "usb"
+	DeviceTypeGPU  DeviceType = "gpu"
+	DeviceTypeVFIO DeviceType = "vfio"
+)
+
+// DeviceConfig represents a host device to pass through to the sandbox
+type DeviceConfig struct {
+	// Name is an optional human-readable label for the device
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
+	// Type is the device type: "pci", "usb", "gpu", "vfio"
+	Type DeviceType `yaml:"type" json:"type"`
+	// Address is the device address (e.g., "0000:01:00.0" for PCI, "1234:5678" for USB vendor:product)
+	Address string `yaml:"address" json:"address"`
+	// Readonly mounts the device in read-only mode if supported
+	Readonly bool `yaml:"readonly,omitempty" json:"readonly,omitempty"`
+	// Options contains device-specific options
+	Options map[string]string `yaml:"options,omitempty" json:"options,omitempty"`
+}
+
+// Validate checks that the device configuration is valid
+func (d *DeviceConfig) Validate() error {
+	switch d.Type {
+	case DeviceTypePCI, DeviceTypeUSB, DeviceTypeGPU, DeviceTypeVFIO:
+		// valid
+	case "":
+		return fmt.Errorf("device type is required")
+	default:
+		return fmt.Errorf("unsupported device type: %s (must be pci, usb, gpu, or vfio)", d.Type)
+	}
+	if d.Address == "" {
+		return fmt.Errorf("device address is required")
+	}
+	return nil
 }
 
 // ResourceLimits defines resource constraints for a sandbox VM.
@@ -232,6 +273,17 @@ type VMState struct {
 	RestartCount   int              `json:"restart_count,omitempty"`
 	RestartPolicy  RestartPolicy    `json:"restart_policy,omitempty"`
 	Health         *HealthState     `json:"health,omitempty"`
+	Devices        []DeviceState    `json:"devices,omitempty"`
+}
+
+// DeviceState tracks a passthrough device attached to a sandbox
+type DeviceState struct {
+	Name     string            `json:"name,omitempty"`
+	Type     DeviceType        `json:"type"`
+	Address  string            `json:"address"`
+	Status   string            `json:"status"` // "attached", "detached", "error"
+	Readonly bool              `json:"readonly,omitempty"`
+	Options  map[string]string `json:"options,omitempty"`
 }
 
 // Snapshot represents a VM snapshot
@@ -314,6 +366,12 @@ func ValidateVMConfig(cfg *VMConfig) error {
 	if cfg.Resources != nil {
 		if err := cfg.Resources.Validate(); err != nil {
 			errors = append(errors, ConfigError{Field: "resources", Message: err.Error()})
+		}
+	}
+
+	for i, dev := range cfg.Devices {
+		if err := dev.Validate(); err != nil {
+			errors = append(errors, ConfigError{Field: fmt.Sprintf("devices[%d]", i), Message: err.Error()})
 		}
 	}
 

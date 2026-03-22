@@ -77,6 +77,7 @@ func main() {
 	rootCmd.AddCommand(pluginCmd())
 	rootCmd.AddCommand(benchCmd())
 	rootCmd.AddCommand(secProfileCmd())
+	rootCmd.AddCommand(deviceCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
