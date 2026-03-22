@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,7 @@ func systemCmd() *cobra.Command {
 	cmd.AddCommand(systemInfoCmd())
 	cmd.AddCommand(systemDfCmd())
 	cmd.AddCommand(systemPruneCmd())
+	cmd.AddCommand(systemDoctorCmd())
 
 	return cmd
 }
@@ -613,4 +616,460 @@ func humanSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
+}
+
+// DoctorCheck represents a single diagnostic check result
+type DoctorCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"` // "pass", "fail", "warn"
+	Message string `json:"message"`
+}
+
+// DoctorReport contains the full doctor report
+type DoctorReport struct {
+	Platform string        `json:"platform"`
+	Arch     string        `json:"arch"`
+	Checks   []DoctorCheck `json:"checks"`
+	Summary  DoctorSummary `json:"summary"`
+}
+
+// DoctorSummary counts check results
+type DoctorSummary struct {
+	Total int `json:"total"`
+	Pass  int `json:"pass"`
+	Fail  int `json:"fail"`
+	Warn  int `json:"warn"`
+}
+
+func systemDoctorCmd() *cobra.Command {
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check system prerequisites and diagnose issues",
+		Long: `Run diagnostic checks to verify that the host system meets all requirements
+for running tent sandboxes. Checks hypervisor availability, network configuration,
+disk space, required tools, and base directory health.
+
+Examples:
+  tent system doctor
+  tent system doctor --json`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			report := DoctorReport{
+				Platform: runtime.GOOS,
+				Arch:     runtime.GOARCH,
+			}
+
+			baseDir := getBaseDir()
+
+			// Run all checks
+			report.Checks = append(report.Checks, checkHypervisor()...)
+			report.Checks = append(report.Checks, checkArchitecture())
+			report.Checks = append(report.Checks, checkBaseDir(baseDir))
+			report.Checks = append(report.Checks, checkDiskSpace(baseDir))
+			report.Checks = append(report.Checks, checkNetworkTools()...)
+			report.Checks = append(report.Checks, checkSSHKeygen())
+			report.Checks = append(report.Checks, checkGitAvailable())
+			report.Checks = append(report.Checks, checkBaseDirSubdirs(baseDir)...)
+
+			// Compute summary
+			for _, c := range report.Checks {
+				report.Summary.Total++
+				switch c.Status {
+				case "pass":
+					report.Summary.Pass++
+				case "fail":
+					report.Summary.Fail++
+				case "warn":
+					report.Summary.Warn++
+				}
+			}
+
+			if jsonOutput {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(report)
+			}
+
+			// Print human-readable output
+			fmt.Printf("tent doctor — %s/%s\n\n", report.Platform, report.Arch)
+
+			for _, c := range report.Checks {
+				var icon string
+				switch c.Status {
+				case "pass":
+					icon = "[PASS]"
+				case "fail":
+					icon = "[FAIL]"
+				case "warn":
+					icon = "[WARN]"
+				}
+				fmt.Printf("  %-6s %-35s %s\n", icon, c.Name, c.Message)
+			}
+
+			fmt.Printf("\nSummary: %d passed, %d failed, %d warnings (out of %d checks)\n",
+				report.Summary.Pass, report.Summary.Fail, report.Summary.Warn, report.Summary.Total)
+
+			if report.Summary.Fail > 0 {
+				fmt.Println("\nSome checks failed. Fix the issues above before running sandboxes.")
+				return fmt.Errorf("%d check(s) failed", report.Summary.Fail)
+			}
+			if report.Summary.Warn > 0 {
+				fmt.Println("\nAll critical checks passed, but there are warnings to review.")
+			} else {
+				fmt.Println("\nAll checks passed. System is ready to run tent sandboxes.")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	return cmd
+}
+
+func checkHypervisor() []DoctorCheck {
+	var checks []DoctorCheck
+
+	switch runtime.GOOS {
+	case "darwin":
+		// Check for Hypervisor.framework via sysctl
+		out, err := exec.Command("sysctl", "-n", "kern.hv_support").Output()
+		if err != nil {
+			checks = append(checks, DoctorCheck{
+				Name:    "Hypervisor.framework",
+				Status:  "fail",
+				Message: "Could not query kern.hv_support — hypervisor may not be available",
+			})
+		} else {
+			val := strings.TrimSpace(string(out))
+			if val == "1" {
+				checks = append(checks, DoctorCheck{
+					Name:    "Hypervisor.framework",
+					Status:  "pass",
+					Message: "Apple Hypervisor.framework is available",
+				})
+			} else {
+				checks = append(checks, DoctorCheck{
+					Name:    "Hypervisor.framework",
+					Status:  "fail",
+					Message: "kern.hv_support=0 — hardware virtualization not enabled",
+				})
+			}
+		}
+
+		// Check for Virtualization.framework entitlement availability
+		checks = append(checks, DoctorCheck{
+			Name:    "Virtualization.framework",
+			Status:  "pass",
+			Message: "Available on macOS (used for vmnet and VZ backend)",
+		})
+
+	case "linux":
+		// Check /dev/kvm
+		if info, err := os.Stat("/dev/kvm"); err == nil {
+			// Check if readable/writable
+			mode := info.Mode()
+			if mode&0660 != 0 {
+				checks = append(checks, DoctorCheck{
+					Name:    "KVM (/dev/kvm)",
+					Status:  "pass",
+					Message: "KVM device is available",
+				})
+			} else {
+				checks = append(checks, DoctorCheck{
+					Name:    "KVM (/dev/kvm)",
+					Status:  "warn",
+					Message: "KVM device exists but may not be accessible — check permissions",
+				})
+			}
+		} else {
+			checks = append(checks, DoctorCheck{
+				Name:    "KVM (/dev/kvm)",
+				Status:  "fail",
+				Message: "KVM device not found — ensure kvm kernel module is loaded",
+			})
+		}
+
+		// Check for nested virtualization if running inside a VM
+		out, err := exec.Command("cat", "/proc/cpuinfo").Output()
+		if err == nil {
+			cpuinfo := string(out)
+			if strings.Contains(cpuinfo, "vmx") || strings.Contains(cpuinfo, "svm") {
+				checks = append(checks, DoctorCheck{
+					Name:    "CPU virtualization",
+					Status:  "pass",
+					Message: "Hardware virtualization extensions detected",
+				})
+			} else {
+				checks = append(checks, DoctorCheck{
+					Name:    "CPU virtualization",
+					Status:  "warn",
+					Message: "No vmx/svm flags in /proc/cpuinfo — may be nested or masked",
+				})
+			}
+		}
+
+	default:
+		checks = append(checks, DoctorCheck{
+			Name:    "Hypervisor",
+			Status:  "fail",
+			Message: fmt.Sprintf("Unsupported platform: %s", runtime.GOOS),
+		})
+	}
+
+	return checks
+}
+
+func checkArchitecture() DoctorCheck {
+	arch := runtime.GOARCH
+	switch arch {
+	case "arm64", "amd64":
+		return DoctorCheck{
+			Name:    "CPU architecture",
+			Status:  "pass",
+			Message: fmt.Sprintf("%s — supported", arch),
+		}
+	default:
+		return DoctorCheck{
+			Name:    "CPU architecture",
+			Status:  "fail",
+			Message: fmt.Sprintf("%s — not supported (need amd64 or arm64)", arch),
+		}
+	}
+}
+
+func checkBaseDir(baseDir string) DoctorCheck {
+	info, err := os.Stat(baseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DoctorCheck{
+				Name:    "Base directory",
+				Status:  "warn",
+				Message: fmt.Sprintf("%s does not exist (will be created on first use)", baseDir),
+			}
+		}
+		return DoctorCheck{
+			Name:    "Base directory",
+			Status:  "fail",
+			Message: fmt.Sprintf("Cannot access %s: %v", baseDir, err),
+		}
+	}
+	if !info.IsDir() {
+		return DoctorCheck{
+			Name:    "Base directory",
+			Status:  "fail",
+			Message: fmt.Sprintf("%s exists but is not a directory", baseDir),
+		}
+	}
+
+	// Check writability by attempting to create a temp file
+	tmpFile := filepath.Join(baseDir, ".doctor-check-"+strconv.FormatInt(time.Now().UnixNano(), 36))
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return DoctorCheck{
+			Name:    "Base directory",
+			Status:  "fail",
+			Message: fmt.Sprintf("%s is not writable: %v", baseDir, err),
+		}
+	}
+	f.Close()
+	os.Remove(tmpFile)
+
+	return DoctorCheck{
+		Name:    "Base directory",
+		Status:  "pass",
+		Message: fmt.Sprintf("%s exists and is writable", baseDir),
+	}
+}
+
+func checkDiskSpace(baseDir string) DoctorCheck {
+	// Use the parent directory if baseDir doesn't exist yet
+	checkPath := baseDir
+	if _, err := os.Stat(checkPath); err != nil {
+		checkPath = filepath.Dir(baseDir)
+	}
+
+	out, err := exec.Command("df", "-k", checkPath).Output()
+	if err != nil {
+		return DoctorCheck{
+			Name:    "Disk space",
+			Status:  "warn",
+			Message: "Could not determine available disk space",
+		}
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return DoctorCheck{
+			Name:    "Disk space",
+			Status:  "warn",
+			Message: "Could not parse df output",
+		}
+	}
+
+	// Parse the last line — df columns: Filesystem 1K-blocks Used Available Use% Mounted
+	fields := strings.Fields(lines[len(lines)-1])
+	if len(fields) < 4 {
+		return DoctorCheck{
+			Name:    "Disk space",
+			Status:  "warn",
+			Message: "Could not parse df output fields",
+		}
+	}
+
+	availKB, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return DoctorCheck{
+			Name:    "Disk space",
+			Status:  "warn",
+			Message: "Could not parse available disk space",
+		}
+	}
+
+	availGB := availKB / (1024 * 1024)
+	availHuman := humanSize(availKB * 1024)
+
+	if availGB < 2 {
+		return DoctorCheck{
+			Name:    "Disk space",
+			Status:  "fail",
+			Message: fmt.Sprintf("Only %s available — need at least 2 GB for sandbox images", availHuman),
+		}
+	}
+	if availGB < 10 {
+		return DoctorCheck{
+			Name:    "Disk space",
+			Status:  "warn",
+			Message: fmt.Sprintf("%s available — consider freeing space for large images", availHuman),
+		}
+	}
+	return DoctorCheck{
+		Name:    "Disk space",
+		Status:  "pass",
+		Message: fmt.Sprintf("%s available", availHuman),
+	}
+}
+
+func checkNetworkTools() []DoctorCheck {
+	var checks []DoctorCheck
+
+	switch runtime.GOOS {
+	case "darwin":
+		// Check pfctl for egress firewall
+		if _, err := exec.LookPath("pfctl"); err != nil {
+			checks = append(checks, DoctorCheck{
+				Name:    "PF firewall (pfctl)",
+				Status:  "warn",
+				Message: "pfctl not found — egress firewall rules may not work",
+			})
+		} else {
+			checks = append(checks, DoctorCheck{
+				Name:    "PF firewall (pfctl)",
+				Status:  "pass",
+				Message: "pfctl available for egress firewall management",
+			})
+		}
+
+	case "linux":
+		// Check iptables
+		if _, err := exec.LookPath("iptables"); err != nil {
+			checks = append(checks, DoctorCheck{
+				Name:    "iptables",
+				Status:  "warn",
+				Message: "iptables not found — egress firewall rules may not work",
+			})
+		} else {
+			checks = append(checks, DoctorCheck{
+				Name:    "iptables",
+				Status:  "pass",
+				Message: "iptables available for egress firewall management",
+			})
+		}
+
+		// Check ip command for TAP/bridge management
+		if _, err := exec.LookPath("ip"); err != nil {
+			checks = append(checks, DoctorCheck{
+				Name:    "iproute2 (ip)",
+				Status:  "warn",
+				Message: "ip command not found — TAP/bridge setup may fail",
+			})
+		} else {
+			checks = append(checks, DoctorCheck{
+				Name:    "iproute2 (ip)",
+				Status:  "pass",
+				Message: "ip command available for network device management",
+			})
+		}
+	}
+
+	return checks
+}
+
+func checkSSHKeygen() DoctorCheck {
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		return DoctorCheck{
+			Name:    "ssh-keygen",
+			Status:  "warn",
+			Message: "ssh-keygen not found — SSH key generation for sandboxes will fail",
+		}
+	}
+	return DoctorCheck{
+		Name:    "ssh-keygen",
+		Status:  "pass",
+		Message: "Available for sandbox SSH key generation",
+	}
+}
+
+func checkGitAvailable() DoctorCheck {
+	if _, err := exec.LookPath("git"); err != nil {
+		return DoctorCheck{
+			Name:    "git",
+			Status:  "warn",
+			Message: "git not found — some image operations may be limited",
+		}
+	}
+	return DoctorCheck{
+		Name:    "git",
+		Status:  "pass",
+		Message: "Available",
+	}
+}
+
+func checkBaseDirSubdirs(baseDir string) []DoctorCheck {
+	var checks []DoctorCheck
+
+	if _, err := os.Stat(baseDir); err != nil {
+		// Base dir doesn't exist yet, skip subdirectory checks
+		return checks
+	}
+
+	expectedDirs := []struct {
+		name string
+		desc string
+	}{
+		{"sandboxes", "Sandbox root filesystems and configs"},
+		{"images", "Cached base images"},
+		{"state", "Sandbox state tracking"},
+		{"snapshots", "Sandbox snapshots"},
+	}
+
+	for _, d := range expectedDirs {
+		path := filepath.Join(baseDir, d.name)
+		if _, err := os.Stat(path); err == nil {
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("Directory: %s", d.name),
+				Status:  "pass",
+				Message: d.desc,
+			})
+		} else {
+			checks = append(checks, DoctorCheck{
+				Name:    fmt.Sprintf("Directory: %s", d.name),
+				Status:  "warn",
+				Message: fmt.Sprintf("Not found (will be created: %s)", d.desc),
+			})
+		}
+	}
+
+	return checks
 }
