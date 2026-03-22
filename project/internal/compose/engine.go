@@ -123,7 +123,39 @@ func (m *ComposeManager) Status(name string) (*ComposeStatus, error) {
 			Sandboxes: make(map[string]*SandboxStatus),
 		}
 
-		// TODO: Query running VMs and build status
+		// Query running VMs and build status
+		// Load the compose config to get the list of sandboxes
+		config, err := m.ParseConfig(filepath.Join(m.baseDir, "compose", name, "config.yaml"))
+		if err == nil && config != nil {
+			// Query running VMs
+			allVMs, err := m.vmManager.List()
+			if err == nil {
+				// Build a map of running VM names for quick lookup
+				runningVMs := make(map[string]*models.VMState)
+				for _, vmState := range allVMs {
+					runningVMs[vmState.Name] = vmState
+				}
+
+				// For each sandbox in the compose config, check if it's running
+				for sandboxName := range config.Sandboxes {
+					if vmState, exists := runningVMs[sandboxName]; exists {
+						status.Sandboxes[sandboxName] = &SandboxStatus{
+							Name:   sandboxName,
+							Status: vmState.Status.String(),
+							IP:     vmState.IP,
+							PID:    vmState.PID,
+						}
+					} else {
+						// Sandbox not running
+						status.Sandboxes[sandboxName] = &SandboxStatus{
+							Name:   sandboxName,
+							Status: "stopped",
+						}
+					}
+				}
+			}
+		}
+
 		return status, nil
 	}
 
