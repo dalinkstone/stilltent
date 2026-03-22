@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dalinkstone/tent/internal/vm"
+	"github.com/dalinkstone/tent/internal/sandbox"
 )
 
 // ConfigureListCmd creates a new list command with optional dependencies
