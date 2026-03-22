@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/dalinkstone/tent/internal/sandbox"
+	"github.com/dalinkstone/tent/pkg/models"
 )
 
 // ConfigureListCmd creates a new list command with optional dependencies
@@ -18,10 +20,16 @@ func ConfigureListCmd(options ...CommonCmdOption) *cobra.Command {
 		opt(opts)
 	}
 
+	var filterLabels []string
+
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all microVMs",
-		Long:  `List all microVMs with status, IP, resource usage.`,
+		Long: `List all microVMs with status, IP, resource usage.
+
+Use --filter to show only sandboxes with matching labels:
+  tent list --filter project=api
+  tent list --filter env=staging --filter team=ml`,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Create VM manager
@@ -57,6 +65,28 @@ func ConfigureListCmd(options ...CommonCmdOption) *cobra.Command {
 				return fmt.Errorf("failed to list VMs: %w", err)
 			}
 
+			// Parse label filters
+			labelFilters := make(map[string]string)
+			for _, f := range filterLabels {
+				parts := strings.SplitN(f, "=", 2)
+				if len(parts) == 2 {
+					labelFilters[parts[0]] = parts[1]
+				} else {
+					labelFilters[parts[0]] = ""
+				}
+			}
+
+			// Apply label filters
+			if len(labelFilters) > 0 {
+				var filtered []*models.VMState
+				for _, v := range vms {
+					if matchVMLabels(v.Labels, labelFilters) {
+						filtered = append(filtered, v)
+					}
+				}
+				vms = filtered
+			}
+
 			if len(vms) == 0 {
 				fmt.Println("No VMs found.")
 				return nil
@@ -89,7 +119,23 @@ func ConfigureListCmd(options ...CommonCmdOption) *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringSliceVar(&filterLabels, "filter", nil, "Filter by label (key=value or key)")
+
 	return cmd
+}
+
+// matchVMLabels checks if VM labels match all filter criteria.
+func matchVMLabels(labels map[string]string, filters map[string]string) bool {
+	for k, v := range filters {
+		labelVal, ok := labels[k]
+		if !ok {
+			return false
+		}
+		if v != "" && labelVal != v {
+			return false
+		}
+	}
+	return true
 }
 
 // listCmd is a convenience function that uses default dependencies

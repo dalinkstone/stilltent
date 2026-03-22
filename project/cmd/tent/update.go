@@ -24,6 +24,8 @@ func updateCmd() *cobra.Command {
 		removeMount []string
 		addPort    []string
 		removePort []string
+		addLabel   []string
+		removeLabel []string
 	)
 
 	cmd := &cobra.Command{
@@ -215,6 +217,27 @@ Examples:
 				changed = true
 			}
 
+			// Update labels
+			if len(addLabel) > 0 {
+				if config.Labels == nil {
+					config.Labels = make(map[string]string)
+				}
+				for _, l := range addLabel {
+					parts := strings.SplitN(l, "=", 2)
+					if len(parts) != 2 {
+						return fmt.Errorf("invalid label format %q, expected key=value", l)
+					}
+					config.Labels[parts[0]] = parts[1]
+				}
+				changed = true
+			}
+			if len(removeLabel) > 0 {
+				for _, key := range removeLabel {
+					delete(config.Labels, key)
+				}
+				changed = true
+			}
+
 			if !changed {
 				fmt.Println("No changes specified.")
 				return nil
@@ -278,6 +301,8 @@ Examples:
 	cmd.Flags().StringSliceVar(&removeMount, "remove-mount", nil, "Remove mounts by guest or host path")
 	cmd.Flags().StringSliceVar(&addPort, "add-port", nil, "Add port forwards (hostPort:guestPort)")
 	cmd.Flags().StringSliceVar(&removePort, "remove-port", nil, "Remove port forwards (hostPort:guestPort)")
+	cmd.Flags().StringSliceVar(&addLabel, "add-label", nil, "Add/update labels (key=value)")
+	cmd.Flags().StringSliceVar(&removeLabel, "remove-label", nil, "Remove labels by key")
 
 	return cmd
 }

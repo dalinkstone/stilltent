@@ -249,6 +249,7 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		VCPUs:       config.VCPUs,
 		MemoryMB:    config.MemoryMB,
 		DiskGB:      config.DiskGB,
+		Labels:      config.Labels,
 		CreatedAt:   time.Now().Unix(),
 		UpdatedAt:   time.Now().Unix(),
 	}
@@ -1515,4 +1516,67 @@ func (m *VMManager) WriteToConsole(name string, data []byte) error {
 
 	_, err = f.Write(data)
 	return err
+}
+
+// SetLabels sets labels on a sandbox, merging with existing labels.
+func (m *VMManager) SetLabels(name string, labels map[string]string) error {
+	if err := m.stateManager.UpdateVM(name, func(vmState *models.VMState) error {
+		if vmState.Labels == nil {
+			vmState.Labels = make(map[string]string)
+		}
+		for k, v := range labels {
+			vmState.Labels[k] = v
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update labels: %w", err)
+	}
+
+	// Also update saved config
+	cfg, err := m.LoadConfig(name)
+	if err == nil {
+		if cfg.Labels == nil {
+			cfg.Labels = make(map[string]string)
+		}
+		for k, v := range labels {
+			cfg.Labels[k] = v
+		}
+		_ = m.saveConfig(cfg)
+	}
+
+	return nil
+}
+
+// RemoveLabels removes labels from a sandbox by key.
+func (m *VMManager) RemoveLabels(name string, keys []string) error {
+	if err := m.stateManager.UpdateVM(name, func(vmState *models.VMState) error {
+		for _, k := range keys {
+			delete(vmState.Labels, k)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to update labels: %w", err)
+	}
+
+	cfg, err := m.LoadConfig(name)
+	if err == nil {
+		for _, k := range keys {
+			delete(cfg.Labels, k)
+		}
+		_ = m.saveConfig(cfg)
+	}
+
+	return nil
+}
+
+// GetLabels returns the labels for a sandbox.
+func (m *VMManager) GetLabels(name string) (map[string]string, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return nil, fmt.Errorf("VM not found: %w", err)
+	}
+	if vmState.Labels == nil {
+		return map[string]string{}, nil
+	}
+	return vmState.Labels, nil
 }

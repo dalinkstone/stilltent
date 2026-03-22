@@ -37,6 +37,7 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 		envVars    []string
 		mountSpecs []string
 		portSpecs  []string
+		labelSpecs []string
 	)
 
 	cmd := &cobra.Command{
@@ -116,6 +117,20 @@ Examples:
 				}
 			}
 
+			// Parse --label key=value pairs
+			if len(labelSpecs) > 0 {
+				if cfg.Labels == nil {
+					cfg.Labels = make(map[string]string)
+				}
+				for _, l := range labelSpecs {
+					parts := strings.SplitN(l, "=", 2)
+					if len(parts) != 2 {
+						return fmt.Errorf("invalid label format %q, expected key=value", l)
+					}
+					cfg.Labels[parts[0]] = parts[1]
+				}
+			}
+
 			// Parse --port hostPort:guestPort specs
 			if len(portSpecs) > 0 {
 				for _, spec := range portSpecs {
@@ -188,6 +203,7 @@ Examples:
 	cmd.Flags().StringSliceVar(&envVars, "env", nil, "Environment variables in KEY=VALUE format (can be repeated)")
 	cmd.Flags().StringSliceVar(&mountSpecs, "mount", nil, "Host-to-guest directory mounts in host:guest[:ro] format (can be repeated)")
 	cmd.Flags().StringSliceVar(&portSpecs, "port", nil, "Port forwarding in hostPort:guestPort format (can be repeated)")
+	cmd.Flags().StringSliceVar(&labelSpecs, "label", nil, "Labels in key=value format (can be repeated)")
 
 	return cmd
 }

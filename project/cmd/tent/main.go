@@ -46,6 +46,7 @@ func main() {
 	rootCmd.AddCommand(attachCmd())
 	rootCmd.AddCommand(runCmd())
 	rootCmd.AddCommand(cloneCmd())
+	rootCmd.AddCommand(labelCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

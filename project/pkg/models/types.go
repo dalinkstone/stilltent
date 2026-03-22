@@ -28,6 +28,7 @@ type VMConfig struct {
 	Network   NetworkConfig `yaml:"network" json:"network"`
 	Mounts    []MountConfig `yaml:"mounts" json:"mounts,omitempty"`
 	Env            map[string]string  `yaml:"env" json:"env,omitempty"`
+	Labels         map[string]string  `yaml:"labels" json:"labels,omitempty"`
 	RestartPolicy  RestartPolicy      `yaml:"restart_policy" json:"restart_policy,omitempty"`
 	HealthCheck    *HealthCheckConfig `yaml:"healthcheck,omitempty" json:"healthcheck,omitempty"`
 }
@@ -134,6 +135,7 @@ type VMState struct {
 	VCPUs       int        `json:"vcpus,omitempty"`
 	MemoryMB    int        `json:"memory_mb,omitempty"`
 	DiskGB      int        `json:"disk_gb,omitempty"`
+	Labels         map[string]string    `json:"labels,omitempty"`
 	CreatedAt      int64         `json:"created_at"`
 	UpdatedAt      int64         `json:"updated_at"`
 	RestartCount   int              `json:"restart_count,omitempty"`
