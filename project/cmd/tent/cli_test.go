@@ -544,7 +544,7 @@ func TestEnvironmentVariableFallback(t *testing.T) {
 			}
 			defer os.Unsetenv("TENT_BASE_DIR")
 
-			result := getBaseDir()
+			result := getBaseDirForTest()
 			// Note: This won't match exactly due to home directory detection
 			// This test verifies the function can be called without panic
 			if result == "" {
@@ -628,8 +628,8 @@ func validateConfigPath(path string) bool {
 	return path != ""
 }
 
-// getBaseDir gets the base directory, respecting TENT_BASE_DIR env var
-func getBaseDir() string {
+// getBaseDirForTest gets the base directory, respecting TENT_BASE_DIR env var
+func getBaseDirForTest() string {
 	if baseDir := os.Getenv("TENT_BASE_DIR"); baseDir != "" {
 		return baseDir
 	}
