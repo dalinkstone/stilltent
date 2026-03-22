@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -66,23 +67,14 @@ func imageListCmd() *cobra.Command {
 
 func imagePullCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "pull <name> [url]",
-		Short: "Download a base rootfs image",
-		Long:  `Download a base rootfs image from a URL.`,
-		Args:  cobra.RangeArgs(1, 2),
+		Use:   "pull <image-ref>",
+		Short: "Download an image from a registry or URL",
+		Long:  `Download an image from a Docker/OCI registry (Docker Hub, GCR, ECR, etc.) or URL.`,
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			url := ""
-			if len(args) > 1 {
-				url = args[1]
-			}
+			imageRef := args[0]
 
-			// Default URLs for common images
-			if url == "" {
-				url = fmt.Sprintf("https://github.com/dalinkstone/tent/releases/download/images/%s.img", name)
-			}
-
-			fmt.Printf("Pulling image '%s' from %s...\n", name, url)
+			fmt.Printf("Pulling image '%s'...\n", imageRef)
 
 			// Create image manager
 			baseDir := os.Getenv("TENT_BASE_DIR")
@@ -96,17 +88,56 @@ func imagePullCmd() *cobra.Command {
 				return fmt.Errorf("failed to create image manager: %w", err)
 			}
 
-			// Pull the image
-			imagePath, err := manager.Pull(name, url)
+			// Determine if this is a Docker-style reference or a URL
+			// Docker references contain '/' (namespace/image), ':' (tag), or both
+			// URLs contain '://' or start with 'http'
+			var imagePath string
+			if isDockerReference(imageRef) {
+				imagePath, err = manager.PullOCI("image", imageRef)
+			} else {
+				// Treat as URL - pull with default name
+				name := "image"
+				if strings.Contains(imageRef, "/") {
+					// Extract name from URL path
+					parts := strings.Split(imageRef, "/")
+					name = strings.TrimSuffix(parts[len(parts)-1], ".img")
+				}
+				imagePath, err = manager.Pull(name, imageRef)
+			}
+
 			if err != nil {
 				return fmt.Errorf("failed to pull image: %w", err)
 			}
 
-			fmt.Printf("Image '%s' pulled successfully to %s\n", name, imagePath)
+			fmt.Printf("Image '%s' pulled successfully to %s\n", imageRef, imagePath)
 			return nil
 		},
 	}
 	return cmd
+}
+
+// isDockerReference checks if the string looks like a Docker/OCI image reference
+// Examples: "ubuntu:22.04", "gcr.io/project/image:tag", "registry.com:5000/repo/image"
+func isDockerReference(ref string) bool {
+	// URLs with http/https protocol
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		return false
+	}
+	// Contains ':' (tag specification) - common in Docker refs
+	if strings.Contains(ref, ":") {
+		return true
+	}
+	// Contains '/' (namespace/repo) - indicates registry or namespace
+	if strings.Contains(ref, "/") {
+		// But check if it's a local file path (contains '..' or starts with './' or '/')
+		if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "/") || strings.Contains(ref, "..") {
+			return false
+		}
+		return true
+	}
+	// Simple name without separators - likely just a repo name, treat as Docker ref
+	// Default registry will be used (Docker Hub)
+	return true
 }
 
 func imageExtractCmd() *cobra.Command {
