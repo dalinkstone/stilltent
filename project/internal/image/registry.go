@@ -16,6 +16,7 @@ import (
 type RegistryClient struct {
 	httpClient *http.Client
 	tokens     map[string]tokenEntry
+	credStore  *CredentialStore
 }
 
 type tokenEntry struct {
@@ -74,6 +75,18 @@ func NewRegistryClient() *RegistryClient {
 			Timeout: 5 * time.Minute,
 		},
 		tokens: make(map[string]tokenEntry),
+	}
+}
+
+// NewRegistryClientWithCreds creates a RegistryClient that uses stored credentials
+// for authenticating with private registries.
+func NewRegistryClientWithCreds(credStore *CredentialStore) *RegistryClient {
+	return &RegistryClient{
+		httpClient: &http.Client{
+			Timeout: 5 * time.Minute,
+		},
+		tokens:    make(map[string]tokenEntry),
+		credStore: credStore,
 	}
 }
 
@@ -189,7 +202,7 @@ func (c *RegistryClient) registryGet(registry, repo, url, accept string) (io.Rea
 			return nil, "", fmt.Errorf("registry returned 401 with no WWW-Authenticate header")
 		}
 
-		token, expiresIn, err := c.fetchToken(challenge, repo)
+		token, expiresIn, err := c.fetchToken(challenge, registry, repo)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to authenticate: %w", err)
 		}
@@ -235,7 +248,7 @@ func (c *RegistryClient) registryGet(registry, repo, url, accept string) (io.Rea
 
 // fetchToken performs the OAuth2 token exchange with the registry's token service.
 // It parses the WWW-Authenticate header to extract realm, service, and scope.
-func (c *RegistryClient) fetchToken(challenge, repo string) (string, int, error) {
+func (c *RegistryClient) fetchToken(challenge, registry, repo string) (string, int, error) {
 	params := parseWWWAuthenticate(challenge)
 
 	realm := params["realm"]
@@ -254,7 +267,13 @@ func (c *RegistryClient) fetchToken(challenge, repo string) (string, int, error)
 		tokenURL += "scope=repository:" + repo + ":pull"
 	}
 
-	resp, err := c.httpClient.Get(tokenURL)
+	req, err := http.NewRequest("GET", tokenURL, nil)
+	if err != nil {
+		return "", 0, fmt.Errorf("token request failed: %w", err)
+	}
+	c.applyBasicAuth(req, registry)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("token request failed: %w", err)
 	}
@@ -375,7 +394,7 @@ func (c *RegistryClient) registryRequest(method, registry, repo, url, contentTyp
 			return nil, fmt.Errorf("registry returned 401 with no WWW-Authenticate header")
 		}
 
-		token, expiresIn, err := c.fetchTokenWithScope(challenge, repo, "push,pull")
+		token, expiresIn, err := c.fetchTokenWithScope(challenge, registry, repo, "push,pull")
 		if err != nil {
 			return nil, fmt.Errorf("failed to authenticate: %w", err)
 		}
@@ -405,7 +424,7 @@ func (c *RegistryClient) registryRequest(method, registry, repo, url, contentTyp
 }
 
 // fetchTokenWithScope performs token exchange with a specific scope (e.g., "push,pull").
-func (c *RegistryClient) fetchTokenWithScope(challenge, repo, scope string) (string, int, error) {
+func (c *RegistryClient) fetchTokenWithScope(challenge, registry, repo, scope string) (string, int, error) {
 	params := parseWWWAuthenticate(challenge)
 
 	realm := params["realm"]
@@ -419,7 +438,13 @@ func (c *RegistryClient) fetchTokenWithScope(challenge, repo, scope string) (str
 	}
 	tokenURL += "scope=repository:" + repo + ":" + scope
 
-	resp, err := c.httpClient.Get(tokenURL)
+	req, err := http.NewRequest("GET", tokenURL, nil)
+	if err != nil {
+		return "", 0, fmt.Errorf("token request failed: %w", err)
+	}
+	c.applyBasicAuth(req, registry)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("token request failed: %w", err)
 	}
@@ -548,4 +573,20 @@ func (g *gzipReadCloser) Read(p []byte) (int, error) {
 func (g *gzipReadCloser) Close() error {
 	g.gz.Close()
 	return g.underlying.Close()
+}
+
+// applyBasicAuth adds Basic auth to a request if credentials exist for the registry.
+func (c *RegistryClient) applyBasicAuth(req *http.Request, registry string) {
+	if c.credStore == nil {
+		return
+	}
+	normalized := NormalizeRegistry(registry)
+	username, password, ok := c.credStore.Get(normalized)
+	if !ok {
+		// Also try the raw registry name
+		username, password, ok = c.credStore.Get(registry)
+	}
+	if ok && username != "" {
+		req.SetBasicAuth(username, password)
+	}
 }

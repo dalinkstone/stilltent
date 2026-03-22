@@ -55,6 +55,7 @@ func main() {
 	rootCmd.AddCommand(commitCmd())
 	rootCmd.AddCommand(systemCmd())
 	rootCmd.AddCommand(templateCmd())
+	rootCmd.AddCommand(registryCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
