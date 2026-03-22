@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -40,6 +41,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeConfigCmd())
 	cmd.AddCommand(composeGraphCmd())
 	cmd.AddCommand(composeVolumeCmd())
+	cmd.AddCommand(composeHealthCmd())
 
 	return cmd
 }
@@ -1255,5 +1257,196 @@ Examples:
 	}
 
 	cmd.Flags().BoolVar(&force, "force", false, "Force removal of all volumes")
+	return cmd
+}
+
+func composeHealthCmd() *cobra.Command {
+	var (
+		outputJSON bool
+		service    string
+		watch      bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "health <file>",
+		Short: "Show health status of services in a compose group",
+		Long: `Display the health check status of all services in a compose group.
+Services without health checks configured are shown as "none".
+
+Examples:
+  tent compose health tent-compose.yaml
+  tent compose health tent-compose.yaml --service agent
+  tent compose health tent-compose.yaml --json
+  tent compose health tent-compose.yaml --watch`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+
+			// Parse config to get health check definitions
+			config, err := manager.ParseConfig(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose config: %w", err)
+			}
+
+			// Get current compose status
+			status, err := manager.Status(groupName)
+			if err != nil {
+				return fmt.Errorf("failed to get compose status: %w", err)
+			}
+
+			if len(status.Sandboxes) == 0 {
+				fmt.Printf("No sandboxes found for compose group '%s'\n", groupName)
+				return nil
+			}
+
+			// Build health info from config + state
+			type healthInfo struct {
+				Name          string `json:"name"`
+				Status        string `json:"status"`
+				Health        string `json:"health"`
+				HealthDetail  string `json:"health_detail,omitempty"`
+				Restarts      int    `json:"restarts"`
+				RestartPolicy string `json:"restart_policy"`
+				CheckCmd      string `json:"check_command,omitempty"`
+				IntervalSec   int    `json:"interval_sec,omitempty"`
+			}
+
+			var infos []healthInfo
+			for name, ss := range status.Sandboxes {
+				hi := healthInfo{
+					Name:     name,
+					Status:   ss.Status,
+					Health:   ss.Health,
+					Restarts: ss.Restarts,
+				}
+
+				if hi.Health == "" {
+					hi.Health = "none"
+				}
+				if hi.HealthDetail == "" {
+					hi.HealthDetail = ss.HealthDetail
+				}
+
+				if svcCfg, ok := config.Sandboxes[name]; ok {
+					hi.RestartPolicy = svcCfg.RestartPolicy
+					if hi.RestartPolicy == "" {
+						hi.RestartPolicy = "no"
+					}
+					if svcCfg.HealthCheck != nil {
+						hi.CheckCmd = strings.Join(svcCfg.HealthCheck.Command, " ")
+						hi.IntervalSec = svcCfg.HealthCheck.IntervalSec
+						if hi.IntervalSec <= 0 {
+							hi.IntervalSec = 30
+						}
+					}
+				}
+
+				if service != "" && name != service {
+					continue
+				}
+				infos = append(infos, hi)
+			}
+
+			sort.Slice(infos, func(i, j int) bool {
+				return infos[i].Name < infos[j].Name
+			})
+
+			if len(infos) == 0 && service != "" {
+				return fmt.Errorf("service %q not found in compose group %q", service, groupName)
+			}
+
+			if outputJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(infos)
+			}
+
+			fmt.Printf("Compose group '%s' health:\n", groupName)
+			fmt.Printf("  %-20s %-12s %-12s %-10s %-12s %s\n",
+				"SERVICE", "STATUS", "HEALTH", "RESTARTS", "POLICY", "CHECK")
+			for _, hi := range infos {
+				checkStr := hi.CheckCmd
+				if len(checkStr) > 30 {
+					checkStr = checkStr[:27] + "..."
+				}
+				if checkStr == "" {
+					checkStr = "-"
+				}
+				fmt.Printf("  %-20s %-12s %-12s %-10d %-12s %s\n",
+					hi.Name, hi.Status, hi.Health, hi.Restarts, hi.RestartPolicy, checkStr)
+			}
+
+			if watch {
+				// Start health monitor and display updates
+				baseDir := getBaseDir()
+				hvBackend, err := vm.NewPlatformBackend(baseDir)
+				if err != nil {
+					return err
+				}
+				vmManager, err := vm.NewManager(baseDir, nil, hvBackend, nil, nil)
+				if err != nil {
+					return err
+				}
+				if err := vmManager.Setup(); err != nil {
+					return err
+				}
+
+				stateMgr := compose.NewFileStateManager(baseDir)
+				monitor := compose.NewHealthMonitor(groupName, config, vmManager, stateMgr)
+				monitor.Start()
+				defer monitor.Stop()
+
+				fmt.Println("\nWatching health checks (Ctrl+C to stop)...")
+
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt)
+
+				ticker := time.NewTicker(5 * time.Second)
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-sigCh:
+						fmt.Println("\nStopping health monitor...")
+						return nil
+					case <-ticker.C:
+						statuses := monitor.Statuses()
+						sort.Slice(statuses, func(i, j int) bool {
+							return statuses[i].Service < statuses[j].Service
+						})
+						fmt.Printf("\n  %-20s %-12s %-6s %-10s %s\n",
+							"SERVICE", "HEALTH", "FAILS", "RESTARTS", "LAST OUTPUT")
+						for _, hs := range statuses {
+							if service != "" && hs.Service != service {
+								continue
+							}
+							output := hs.LastOutput
+							if len(output) > 40 {
+								output = output[:37] + "..."
+							}
+							if output == "" {
+								output = "-"
+							}
+							fmt.Printf("  %-20s %-12s %-6d %-10d %s\n",
+								hs.Service, hs.Status, hs.FailCount, hs.Restarts, output)
+						}
+					}
+				}
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	cmd.Flags().StringVar(&service, "service", "", "Show health for a specific service only")
+	cmd.Flags().BoolVar(&watch, "watch", false, "Watch health checks in real-time")
 	return cmd
 }

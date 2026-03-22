@@ -20,16 +20,32 @@ type VolumeConfig struct {
 
 // SandboxConfig represents a single sandbox definition in the compose file
 type SandboxConfig struct {
-	Name      string            `yaml:"name,omitempty"`
-	From      string            `yaml:"from"`
-	VCPUs     int               `yaml:"vcpus,omitempty"`
-	MemoryMB  int               `yaml:"memory_mb,omitempty"`
-	DiskGB    int               `yaml:"disk_gb,omitempty"`
-	Network   *NetworkConf      `yaml:"network,omitempty"`
-	Mounts    []Mount           `yaml:"mounts,omitempty"`
-	Volumes   []VolumeMount     `yaml:"volumes,omitempty"`
-	Env       map[string]string `yaml:"env,omitempty"`
-	DependsOn []string          `yaml:"depends_on,omitempty"`
+	Name          string            `yaml:"name,omitempty"`
+	From          string            `yaml:"from"`
+	VCPUs         int               `yaml:"vcpus,omitempty"`
+	MemoryMB      int               `yaml:"memory_mb,omitempty"`
+	DiskGB        int               `yaml:"disk_gb,omitempty"`
+	Network       *NetworkConf      `yaml:"network,omitempty"`
+	Mounts        []Mount           `yaml:"mounts,omitempty"`
+	Volumes       []VolumeMount     `yaml:"volumes,omitempty"`
+	Env           map[string]string `yaml:"env,omitempty"`
+	DependsOn     []string          `yaml:"depends_on,omitempty"`
+	HealthCheck   *HealthCheckConf  `yaml:"health_check,omitempty"`
+	RestartPolicy string            `yaml:"restart,omitempty"` // "no", "on-failure", "always"
+}
+
+// HealthCheckConf defines a health check for a sandbox service
+type HealthCheckConf struct {
+	// Command to run inside the sandbox to check health (exit 0 = healthy)
+	Command []string `yaml:"command"`
+	// IntervalSec is how often to run the check (default: 30)
+	IntervalSec int `yaml:"interval_sec,omitempty"`
+	// TimeoutSec is how long to wait for the check to complete (default: 10)
+	TimeoutSec int `yaml:"timeout_sec,omitempty"`
+	// Retries is how many consecutive failures before marking unhealthy (default: 3)
+	Retries int `yaml:"retries,omitempty"`
+	// StartPeriodSec is grace period after start before checks begin (default: 0)
+	StartPeriodSec int `yaml:"start_period_sec,omitempty"`
 }
 
 // VolumeMount maps a named volume to a guest path
@@ -61,10 +77,13 @@ type ComposeStatus struct {
 
 // SandboxStatus represents the status of a single sandbox in a compose group
 type SandboxStatus struct {
-	Name   string `yaml:"name"`
-	Status string `yaml:"status"`
-	IP     string `yaml:"ip,omitempty"`
-	PID    int    `yaml:"pid,omitempty"`
+	Name         string `yaml:"name"`
+	Status       string `yaml:"status"`
+	IP           string `yaml:"ip,omitempty"`
+	PID          int    `yaml:"pid,omitempty"`
+	Health       string `yaml:"health,omitempty"`        // "healthy", "unhealthy", "starting", ""
+	HealthDetail string `yaml:"health_detail,omitempty"` // last check output
+	Restarts     int    `yaml:"restarts,omitempty"`
 }
 
 // ComposeManager manages multi-sandbox orchestration

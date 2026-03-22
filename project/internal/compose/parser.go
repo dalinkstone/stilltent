@@ -51,6 +51,16 @@ func (c *ComposeConfig) Validate() error {
 			sandbox.DiskGB = 10 // Default
 		}
 
+		// Validate health check
+		if err := ValidateHealthCheck(sandbox.HealthCheck); err != nil {
+			return fmt.Errorf("sandbox %s: %w", name, err)
+		}
+
+		// Validate restart policy
+		if err := ValidateRestartPolicy(sandbox.RestartPolicy); err != nil {
+			return fmt.Errorf("sandbox %s: %w", name, err)
+		}
+
 		// Validate depends_on references
 		for _, dep := range sandbox.DependsOn {
 			if _, ok := c.Sandboxes[dep]; !ok {
