@@ -74,6 +74,7 @@ func main() {
 	rootCmd.AddCommand(migrateCmd())
 	rootCmd.AddCommand(quotaCmd())
 	rootCmd.AddCommand(auditCmd())
+	rootCmd.AddCommand(pluginCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
