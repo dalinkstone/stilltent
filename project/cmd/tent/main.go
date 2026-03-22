@@ -85,6 +85,7 @@ func main() {
 	rootCmd.AddCommand(ttlCmd())
 	rootCmd.AddCommand(lockCmd())
 	rootCmd.AddCommand(historyCmd())
+	rootCmd.AddCommand(contextCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
