@@ -210,8 +210,8 @@ while true; do
 
         # Check for rate limiting
         if grep -qi "rate limit\|rate_limit\|429\|too many requests\|overloaded\|capacity" "$LOGFILE" 2>/dev/null; then
-            echo -e "${YELLOW}  Rate limited. Waiting 5 minutes before retrying...${NC}"
-            sleep 300
+            echo -e "${YELLOW}  Rate limited. Waiting 4 hours before retrying...${NC}"
+            sleep 14400
         fi
     fi
 
