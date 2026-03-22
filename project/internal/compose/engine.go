@@ -2,11 +2,14 @@ package compose
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/dalinkstone/tent/internal/network"
 	"github.com/dalinkstone/tent/internal/sandbox"
@@ -252,6 +255,161 @@ func (m *ComposeManager) Status(name string) (*ComposeStatus, error) {
 	}
 
 	return status, nil
+}
+
+// ServiceLog holds log output for a single service in a compose group.
+type ServiceLog struct {
+	Service string
+	Logs    string
+}
+
+// Logs returns logs for all sandboxes in a compose group, optionally filtered
+// by service names. Each returned ServiceLog contains the service name and its
+// console output. Services are sorted alphabetically.
+func (m *ComposeManager) Logs(name string, services []string, tail int) ([]ServiceLog, error) {
+	status, err := m.Status(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get compose status: %w", err)
+	}
+
+	if len(status.Sandboxes) == 0 {
+		return nil, fmt.Errorf("no sandboxes found for compose group %q", name)
+	}
+
+	// Build target list
+	targets := make(map[string]bool)
+	if len(services) > 0 {
+		for _, s := range services {
+			if _, ok := status.Sandboxes[s]; !ok {
+				return nil, fmt.Errorf("service %q not found in compose group %q", s, name)
+			}
+			targets[s] = true
+		}
+	} else {
+		for s := range status.Sandboxes {
+			targets[s] = true
+		}
+	}
+
+	// Collect logs in parallel
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	results := make([]ServiceLog, 0, len(targets))
+	var firstErr error
+
+	for svc := range targets {
+		wg.Add(1)
+		go func(service string) {
+			defer wg.Done()
+			var logs string
+			var err error
+			if tail > 0 {
+				logs, err = m.vmManager.TailLogs(service, tail)
+			} else {
+				logs, err = m.vmManager.Logs(service)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("failed to get logs for %s: %w", service, err)
+				}
+				return
+			}
+			results = append(results, ServiceLog{Service: service, Logs: logs})
+		}(svc)
+	}
+	wg.Wait()
+
+	if firstErr != nil && len(results) == 0 {
+		return nil, firstErr
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Service < results[j].Service
+	})
+
+	return results, nil
+}
+
+// FollowComposeLogs streams logs from all sandboxes in a compose group to the
+// given writer. Each line is prefixed with the service name. The caller should
+// close the done channel to stop streaming.
+func (m *ComposeManager) FollowComposeLogs(name string, services []string, tail int, out io.Writer, done <-chan struct{}) error {
+	status, err := m.Status(name)
+	if err != nil {
+		return fmt.Errorf("failed to get compose status: %w", err)
+	}
+
+	if len(status.Sandboxes) == 0 {
+		return fmt.Errorf("no sandboxes found for compose group %q", name)
+	}
+
+	// Build target list
+	targets := make([]string, 0)
+	if len(services) > 0 {
+		for _, s := range services {
+			if _, ok := status.Sandboxes[s]; !ok {
+				return fmt.Errorf("service %q not found in compose group %q", s, name)
+			}
+			targets = append(targets, s)
+		}
+	} else {
+		for s := range status.Sandboxes {
+			targets = append(targets, s)
+		}
+	}
+	sort.Strings(targets)
+
+	// Create a prefixed writer for each service and follow logs concurrently
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, svc := range targets {
+		wg.Add(1)
+		go func(service string) {
+			defer wg.Done()
+			pw := &prefixWriter{
+				prefix: service,
+				out:    out,
+				mu:     &mu,
+			}
+			// Best-effort: if a service has no logs or isn't running, skip silently
+			_ = m.vmManager.FollowLogs(service, tail, pw, done)
+		}(svc)
+	}
+	wg.Wait()
+	return nil
+}
+
+// prefixWriter wraps an io.Writer and prepends each line with a service name prefix.
+type prefixWriter struct {
+	prefix string
+	out    io.Writer
+	mu     *sync.Mutex
+	buf    []byte
+}
+
+func (pw *prefixWriter) Write(p []byte) (int, error) {
+	pw.buf = append(pw.buf, p...)
+	for {
+		idx := -1
+		for i, b := range pw.buf {
+			if b == '\n' {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			break
+		}
+		line := pw.buf[:idx]
+		pw.buf = pw.buf[idx+1:]
+		pw.mu.Lock()
+		fmt.Fprintf(pw.out, "%s | %s\n", pw.prefix, string(line))
+		pw.mu.Unlock()
+	}
+	return len(p), nil
 }
 
 // List returns all compose groups

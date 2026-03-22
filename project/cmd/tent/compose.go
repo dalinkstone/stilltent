@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 
@@ -22,6 +23,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeUpCmd())
 	cmd.AddCommand(composeDownCmd())
 	cmd.AddCommand(composeStatusCmd())
+	cmd.AddCommand(composeLogsCmd())
 
 	return cmd
 }
@@ -159,4 +161,68 @@ func composeStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func composeLogsCmd() *cobra.Command {
+	var (
+		follow   bool
+		tail     int
+		services []string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "logs <file> [--service <name>]...",
+		Short: "View logs from sandboxes in a compose group",
+		Long: `View console logs from all sandboxes in a compose group.
+Optionally filter by service name with --service. Use --follow to stream live output.
+
+Examples:
+  tent compose logs tent-compose.yaml
+  tent compose logs tent-compose.yaml --service agent --service tool-runner
+  tent compose logs tent-compose.yaml --follow --tail 50`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+
+			if follow {
+				// Stream logs until interrupted
+				done := make(chan struct{})
+				sigCh := make(chan os.Signal, 1)
+				signal.Notify(sigCh, os.Interrupt)
+				go func() {
+					<-sigCh
+					close(done)
+				}()
+
+				fmt.Printf("Following logs for compose group '%s' (Ctrl+C to stop)...\n", groupName)
+				return manager.FollowComposeLogs(groupName, services, tail, os.Stdout, done)
+			}
+
+			// One-shot log dump
+			logs, err := manager.Logs(groupName, services, tail)
+			if err != nil {
+				return fmt.Errorf("failed to get compose logs: %w", err)
+			}
+
+			for _, sl := range logs {
+				fmt.Printf("=== %s ===\n", sl.Service)
+				fmt.Println(sl.Logs)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream logs in real-time")
+	cmd.Flags().IntVarP(&tail, "tail", "n", 0, "Number of lines to show from the end (0 = all)")
+	cmd.Flags().StringSliceVar(&services, "service", nil, "Filter by service name (can be repeated)")
+
+	return cmd
 }
