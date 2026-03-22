@@ -5,6 +5,9 @@ package image
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -156,6 +159,158 @@ func (m *Manager) PullOCI(name string, ref string) (string, error) {
 	}
 
 	return rootfsPath, nil
+}
+
+// PushOCI pushes a local image to an OCI registry.
+// It creates a single-layer OCI image from the local disk image and uploads it.
+func (m *Manager) PushOCI(name string, ref string) error {
+	// Verify the image exists locally
+	imagePath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
+	imgInfo, err := os.Stat(imagePath)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("image not found: %s", name)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to stat image: %w", err)
+	}
+
+	// Parse destination reference
+	registry, repo, tag, err := parseImageRef(ref)
+	if err != nil {
+		return fmt.Errorf("failed to parse target reference: %w", err)
+	}
+
+	client := NewRegistryClient()
+
+	// Create a gzipped tar of the image as a single layer
+	layerBuf, layerDigest, layerSize, err := m.createLayerArchive(imagePath)
+	if err != nil {
+		return fmt.Errorf("failed to create layer archive: %w", err)
+	}
+
+	// Check if the layer already exists
+	exists, _ := client.CheckBlobExists(registry, repo, layerDigest)
+	if !exists {
+		// Upload the layer blob
+		if m.progressNotify != nil {
+			m.progressNotify(0, layerSize)
+		}
+		if err := client.UploadBlob(registry, repo, layerDigest, layerSize, bytes.NewReader(layerBuf)); err != nil {
+			return fmt.Errorf("failed to upload layer: %w", err)
+		}
+		if m.progressNotify != nil {
+			m.progressNotify(layerSize, layerSize)
+		}
+	}
+
+	// Create and upload the OCI config blob
+	configJSON := m.createOCIConfig(imgInfo.ModTime())
+	configDigest := computeSHA256(configJSON)
+	configSize := int64(len(configJSON))
+
+	configExists, _ := client.CheckBlobExists(registry, repo, configDigest)
+	if !configExists {
+		if err := client.UploadBlob(registry, repo, configDigest, configSize, bytes.NewReader(configJSON)); err != nil {
+			return fmt.Errorf("failed to upload config: %w", err)
+		}
+	}
+
+	// Build and upload the manifest
+	manifest := OCIManifest{
+		SchemaVersion: 2,
+		MediaType:     "application/vnd.oci.image.manifest.v1+json",
+		Config: OCIDescriptor{
+			MediaType: "application/vnd.oci.image.config.v1+json",
+			Digest:    configDigest,
+			Size:      configSize,
+		},
+		Layers: []OCIDescriptor{
+			{
+				MediaType: "application/vnd.oci.image.layer.v1.tar+gzip",
+				Digest:    layerDigest,
+				Size:      layerSize,
+			},
+		},
+	}
+
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	if err := client.PutManifest(registry, repo, tag, manifestJSON, "application/vnd.oci.image.manifest.v1+json"); err != nil {
+		return fmt.Errorf("failed to push manifest: %w", err)
+	}
+
+	return nil
+}
+
+// createLayerArchive creates a gzipped tar archive from a disk image file.
+// Returns the compressed bytes, sha256 digest, and compressed size.
+func (m *Manager) createLayerArchive(imagePath string) ([]byte, string, int64, error) {
+	imgFile, err := os.Open(imagePath)
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("failed to open image: %w", err)
+	}
+	defer imgFile.Close()
+
+	imgInfo, err := imgFile.Stat()
+	if err != nil {
+		return nil, "", 0, fmt.Errorf("failed to stat image: %w", err)
+	}
+
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+	tarWriter := tar.NewWriter(gzWriter)
+
+	// Add the disk image as a single file in the tar
+	header := &tar.Header{
+		Name:    filepath.Base(imagePath),
+		Size:    imgInfo.Size(),
+		Mode:    0644,
+		ModTime: imgInfo.ModTime(),
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		return nil, "", 0, fmt.Errorf("failed to write tar header: %w", err)
+	}
+
+	if _, err := io.Copy(tarWriter, imgFile); err != nil {
+		return nil, "", 0, fmt.Errorf("failed to write tar content: %w", err)
+	}
+
+	if err := tarWriter.Close(); err != nil {
+		return nil, "", 0, fmt.Errorf("failed to close tar: %w", err)
+	}
+	if err := gzWriter.Close(); err != nil {
+		return nil, "", 0, fmt.Errorf("failed to close gzip: %w", err)
+	}
+
+	data := buf.Bytes()
+	digest := computeSHA256(data)
+	return data, digest, int64(len(data)), nil
+}
+
+// createOCIConfig creates a minimal OCI image config JSON.
+func (m *Manager) createOCIConfig(created time.Time) []byte {
+	config := map[string]interface{}{
+		"created":      created.UTC().Format(time.RFC3339),
+		"architecture": "amd64",
+		"os":           "linux",
+		"rootfs": map[string]interface{}{
+			"type":     "layers",
+			"diff_ids": []string{},
+		},
+		"config": map[string]interface{}{},
+	}
+	data, _ := json.Marshal(config)
+	return data
+}
+
+// computeSHA256 computes the sha256 digest of data in the OCI format "sha256:<hex>".
+func computeSHA256(data []byte) string {
+	h := sha256.New()
+	h.Write(data)
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
 // parseImageRef parses an image reference into registry, repo, and tag

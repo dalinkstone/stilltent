@@ -28,6 +28,7 @@ func imageCmd() *cobra.Command {
 	cmd.AddCommand(imageTagCmd())
 	cmd.AddCommand(imagePruneCmd())
 	cmd.AddCommand(imageBuildCmd())
+	cmd.AddCommand(imagePushCmd())
 
 	return cmd
 }
@@ -534,4 +535,50 @@ Examples:
 	cmd.Flags().StringVarP(&file, "file", "f", "", "Path to Tentfile (default: ./Tentfile)")
 	cmd.Flags().StringVarP(&tag, "tag", "t", "", "Tag for the built image")
 	return cmd
+}
+
+func imagePushCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "push <name> <registry-ref>",
+		Short: "Push a local image to an OCI registry",
+		Long: `Push a locally stored image to a remote OCI-compliant registry.
+
+The registry reference should include the full repository path and optional tag.
+If no tag is specified, "latest" is used.
+
+Examples:
+  tent image push myimage registry.example.com/myrepo/myimage:v1
+  tent image push myimage ghcr.io/user/myimage:latest
+  tent image push myimage docker.io/library/myimage`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			ref := args[1]
+
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+			baseDir := filepath.Join(homeDir, ".tent")
+
+			fmt.Printf("Pushing image %s to %s...\n", name, ref)
+
+			manager, err := image.NewManager(baseDir, image.WithProgressCallback(func(bytes, total int64) {
+				if total > 0 {
+					pct := float64(bytes) / float64(total) * 100
+					fmt.Printf("\r  Uploading: %.1f%% (%d / %d bytes)", pct, bytes, total)
+				}
+			}))
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			if err := manager.PushOCI(name, ref); err != nil {
+				return fmt.Errorf("push failed: %w", err)
+			}
+
+			fmt.Printf("\nPushed %s to %s\n", name, ref)
+			return nil
+		},
+	}
 }

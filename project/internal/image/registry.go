@@ -344,6 +344,188 @@ func selectPlatform(entries []OCIManifestEntry) (string, error) {
 	return entries[0].Digest, nil
 }
 
+// registryAuth performs an authenticated request to a registry endpoint.
+// It handles the WWW-Authenticate challenge flow for bearer token auth with push scope.
+func (c *RegistryClient) registryRequest(method, registry, repo, url, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+
+	// Use cached token if available
+	tokenKey := registry + "/" + repo + ":push"
+	if te, ok := c.tokens[tokenKey]; ok && time.Now().Before(te.expires) {
+		req.Header.Set("Authorization", "Bearer "+te.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	// Handle auth challenge
+	if resp.StatusCode == http.StatusUnauthorized {
+		resp.Body.Close()
+
+		challenge := resp.Header.Get("Www-Authenticate")
+		if challenge == "" {
+			return nil, fmt.Errorf("registry returned 401 with no WWW-Authenticate header")
+		}
+
+		token, expiresIn, err := c.fetchTokenWithScope(challenge, repo, "push,pull")
+		if err != nil {
+			return nil, fmt.Errorf("failed to authenticate: %w", err)
+		}
+
+		c.tokens[tokenKey] = tokenEntry{
+			token:   token,
+			expires: time.Now().Add(time.Duration(expiresIn) * time.Second),
+		}
+
+		// Retry with token — need to re-create the request since body may have been consumed
+		req2, err := http.NewRequest(method, url, body)
+		if err != nil {
+			return nil, err
+		}
+		if contentType != "" {
+			req2.Header.Set("Content-Type", contentType)
+		}
+		req2.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err = c.httpClient.Do(req2)
+		if err != nil {
+			return nil, fmt.Errorf("authenticated request failed: %w", err)
+		}
+	}
+
+	return resp, nil
+}
+
+// fetchTokenWithScope performs token exchange with a specific scope (e.g., "push,pull").
+func (c *RegistryClient) fetchTokenWithScope(challenge, repo, scope string) (string, int, error) {
+	params := parseWWWAuthenticate(challenge)
+
+	realm := params["realm"]
+	if realm == "" {
+		return "", 0, fmt.Errorf("no realm in WWW-Authenticate header")
+	}
+
+	tokenURL := realm + "?"
+	if svc, ok := params["service"]; ok {
+		tokenURL += "service=" + svc + "&"
+	}
+	tokenURL += "scope=repository:" + repo + ":" + scope
+
+	resp, err := c.httpClient.Get(tokenURL)
+	if err != nil {
+		return "", 0, fmt.Errorf("token request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, fmt.Errorf("token endpoint returned status %d", resp.StatusCode)
+	}
+
+	var tr tokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+		return "", 0, fmt.Errorf("failed to decode token response: %w", err)
+	}
+
+	token := tr.Token
+	if token == "" {
+		token = tr.AccessToken
+	}
+	if token == "" {
+		return "", 0, fmt.Errorf("no token in response")
+	}
+
+	expiresIn := tr.ExpiresIn
+	if expiresIn == 0 {
+		expiresIn = 300
+	}
+
+	return token, expiresIn, nil
+}
+
+// CheckBlobExists checks whether a blob with the given digest already exists in the registry.
+func (c *RegistryClient) CheckBlobExists(registry, repo, digest string) (bool, error) {
+	url := fmt.Sprintf("https://%s/v2/%s/blobs/%s", registry, repo, digest)
+	resp, err := c.registryRequest("HEAD", registry, repo, url, "", nil)
+	if err != nil {
+		return false, err
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+// UploadBlob uploads a blob to the registry using the monolithic upload method.
+// Returns the digest string of the uploaded blob.
+func (c *RegistryClient) UploadBlob(registry, repo, digest string, size int64, content io.ReadSeeker) error {
+	// Step 1: Initiate upload
+	initiateURL := fmt.Sprintf("https://%s/v2/%s/blobs/uploads/", registry, repo)
+	resp, err := c.registryRequest("POST", registry, repo, initiateURL, "", nil)
+	if err != nil {
+		return fmt.Errorf("failed to initiate blob upload: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("registry returned status %d for upload initiation", resp.StatusCode)
+	}
+
+	// Get the upload URL from the Location header
+	uploadURL := resp.Header.Get("Location")
+	if uploadURL == "" {
+		return fmt.Errorf("registry did not return upload Location header")
+	}
+
+	// Make the upload URL absolute if needed
+	if !strings.HasPrefix(uploadURL, "http") {
+		uploadURL = fmt.Sprintf("https://%s%s", registry, uploadURL)
+	}
+
+	// Append the digest query parameter
+	sep := "?"
+	if strings.Contains(uploadURL, "?") {
+		sep = "&"
+	}
+	uploadURL += sep + "digest=" + digest
+
+	// Step 2: Upload the blob content
+	content.Seek(0, io.SeekStart)
+	resp, err = c.registryRequest("PUT", registry, repo, uploadURL, "application/octet-stream", content)
+	if err != nil {
+		return fmt.Errorf("failed to upload blob: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("registry returned status %d for blob upload", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// PutManifest uploads a manifest to the registry for the given tag.
+func (c *RegistryClient) PutManifest(registry, repo, tag string, manifest []byte, mediaType string) error {
+	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, repo, tag)
+
+	resp, err := c.registryRequest("PUT", registry, repo, url, mediaType, strings.NewReader(string(manifest)))
+	if err != nil {
+		return fmt.Errorf("failed to put manifest: %w", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("registry returned status %d for manifest put", resp.StatusCode)
+	}
+
+	return nil
+}
+
 func isManifestList(mediaType string) bool {
 	return mediaType == "application/vnd.docker.distribution.manifest.list.v2+json" ||
 		mediaType == "application/vnd.oci.image.index.v1+json"
