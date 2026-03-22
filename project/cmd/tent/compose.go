@@ -25,6 +25,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeStatusCmd())
 	cmd.AddCommand(composeLogsCmd())
 	cmd.AddCommand(composeRestartCmd())
+	cmd.AddCommand(composeExecCmd())
 
 	return cmd
 }
@@ -274,4 +275,53 @@ Examples:
 	cmd.Flags().IntVar(&timeout, "timeout", 0, "Seconds to wait for graceful shutdown before restart")
 
 	return cmd
+}
+
+func composeExecCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "exec <file> <service> -- <command> [args...]",
+		Short: "Execute a command in a compose service sandbox",
+		Long: `Execute a command inside a running sandbox belonging to a compose group.
+
+Examples:
+  tent compose exec tent-compose.yaml agent -- ls /
+  tent compose exec tent-compose.yaml tool-runner -- cat /etc/hostname
+  tent compose exec tent-compose.yaml shared-db -- psql -c "SELECT 1"`,
+		Args: cobra.MinimumNArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+			service := args[1]
+			execArgs := args[2:]
+
+			// Strip leading "--" if present (cobra may leave it)
+			if len(execArgs) > 0 && execArgs[0] == "--" {
+				execArgs = execArgs[1:]
+			}
+
+			if len(execArgs) == 0 {
+				return fmt.Errorf("no command specified")
+			}
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			groupName := composeGroupName(filePath)
+			output, exitCode, err := manager.Exec(groupName, service, execArgs)
+			if err != nil {
+				return fmt.Errorf("exec failed: %w", err)
+			}
+
+			if output != "" {
+				fmt.Print(output)
+			}
+
+			if exitCode != 0 {
+				os.Exit(exitCode)
+			}
+
+			return nil
+		},
+	}
 }

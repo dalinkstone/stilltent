@@ -492,6 +492,35 @@ func (m *ComposeManager) Restart(name string, services []string, timeoutSec int)
 }
 
 // List returns all compose groups
+// Exec runs a command inside a specific service's sandbox within a compose group.
+// It returns the command output, exit code, and any error.
+func (m *ComposeManager) Exec(groupName string, service string, command []string) (string, int, error) {
+	// Load compose state to verify the group and service exist
+	status, err := m.stateManager.LoadComposeState(groupName)
+	if err != nil {
+		return "", 1, fmt.Errorf("compose group %q not found: %w", groupName, err)
+	}
+
+	// Check that the service exists in the compose group
+	sbStatus, ok := status.Sandboxes[service]
+	if !ok {
+		available := make([]string, 0, len(status.Sandboxes))
+		for name := range status.Sandboxes {
+			available = append(available, name)
+		}
+		sort.Strings(available)
+		return "", 1, fmt.Errorf("service %q not found in compose group %q (available: %s)",
+			service, groupName, strings.Join(available, ", "))
+	}
+
+	if sbStatus.Status != "running" {
+		return "", 1, fmt.Errorf("service %q is not running (status: %s)", service, sbStatus.Status)
+	}
+
+	// Delegate to the VM manager's Exec
+	return m.vmManager.Exec(service, command)
+}
+
 func (m *ComposeManager) List() ([]string, error) {
 	statesDir := filepath.Join(m.baseDir, "compose")
 	entries, err := os.ReadDir(statesDir)
