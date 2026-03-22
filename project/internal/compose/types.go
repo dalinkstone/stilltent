@@ -8,6 +8,14 @@ import (
 // ComposeConfig represents the top-level compose file structure
 type ComposeConfig struct {
 	Sandboxes map[string]*SandboxConfig `yaml:"sandboxes,omitempty"`
+	Volumes   map[string]*VolumeConfig  `yaml:"volumes,omitempty"`
+}
+
+// VolumeConfig defines a named volume in a compose file
+type VolumeConfig struct {
+	Driver string            `yaml:"driver,omitempty"` // "local" (default)
+	SizeMB int               `yaml:"size_mb,omitempty"`
+	Labels map[string]string `yaml:"labels,omitempty"`
 }
 
 // SandboxConfig represents a single sandbox definition in the compose file
@@ -19,8 +27,16 @@ type SandboxConfig struct {
 	DiskGB    int               `yaml:"disk_gb,omitempty"`
 	Network   *NetworkConf      `yaml:"network,omitempty"`
 	Mounts    []Mount           `yaml:"mounts,omitempty"`
+	Volumes   []VolumeMount     `yaml:"volumes,omitempty"`
 	Env       map[string]string `yaml:"env,omitempty"`
 	DependsOn []string          `yaml:"depends_on,omitempty"`
+}
+
+// VolumeMount maps a named volume to a guest path
+type VolumeMount struct {
+	Name     string `yaml:"name"`
+	Guest    string `yaml:"guest"`
+	Readonly bool   `yaml:"readonly,omitempty"`
 }
 
 // NetworkConf defines network policy for a sandbox
@@ -53,10 +69,11 @@ type SandboxStatus struct {
 
 // ComposeManager manages multi-sandbox orchestration
 type ComposeManager struct {
-	vmManager    *vm.VMManager
-	baseDir      string
-	stateManager StateManager
-	dnsServers   map[string]*network.DNSServer // group name -> DNS server
+	vmManager     *vm.VMManager
+	baseDir       string
+	stateManager  StateManager
+	dnsServers    map[string]*network.DNSServer // group name -> DNS server
+	volumeManager *VolumeManager
 }
 
 // StateManager manages compose state persistence

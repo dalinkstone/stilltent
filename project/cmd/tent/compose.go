@@ -39,6 +39,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeUnpauseCmd())
 	cmd.AddCommand(composeConfigCmd())
 	cmd.AddCommand(composeGraphCmd())
+	cmd.AddCommand(composeVolumeCmd())
 
 	return cmd
 }
@@ -1052,4 +1053,207 @@ func resolveComposeTargets(status *compose.ComposeStatus, services []string) []s
 		targets = append(targets, name)
 	}
 	return targets
+}
+
+func composeVolumeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "volume",
+		Short: "Manage compose volumes",
+		Long: `View and manage named volumes used by compose groups.
+
+Named volumes allow sandboxes in a compose group to share persistent
+storage. Volumes are defined in the compose YAML and automatically
+created when the group starts.
+
+Example compose file with volumes:
+  volumes:
+    shared-data:
+      size_mb: 1024
+    model-cache:
+      labels:
+        type: cache
+  sandboxes:
+    agent:
+      from: ubuntu:22.04
+      volumes:
+        - name: shared-data
+          guest: /data
+        - name: model-cache
+          guest: /models
+          readonly: true
+    worker:
+      from: python:3.12
+      volumes:
+        - name: shared-data
+          guest: /data`,
+	}
+
+	cmd.AddCommand(composeVolumeListCmd())
+	cmd.AddCommand(composeVolumeInspectCmd())
+	cmd.AddCommand(composeVolumeRemoveCmd())
+
+	return cmd
+}
+
+func composeVolumeListCmd() *cobra.Command {
+	var group string
+	var outputFormat string
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List compose volumes",
+		Long: `List named volumes. Optionally filter by compose group.
+
+Examples:
+  tent compose volume list
+  tent compose volume list --group myapp
+  tent compose volume list --format json`,
+		Aliases: []string{"ls"},
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+			volMgr := compose.NewVolumeManager(baseDir)
+
+			var volumes []*compose.VolumeState
+			var err error
+
+			if group != "" {
+				volumes, err = volMgr.ListVolumes(group)
+			} else {
+				volumes, err = volMgr.ListAllVolumes()
+			}
+			if err != nil {
+				return fmt.Errorf("failed to list volumes: %w", err)
+			}
+
+			if len(volumes) == 0 {
+				fmt.Println("No volumes found.")
+				return nil
+			}
+
+			if outputFormat == "json" {
+				data, err := json.MarshalIndent(volumes, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+
+			fmt.Printf("%-20s %-15s %-8s %-8s %s\n", "NAME", "GROUP", "DRIVER", "SIZE", "CREATED")
+			for _, v := range volumes {
+				size := "-"
+				if v.SizeMB > 0 {
+					size = fmt.Sprintf("%dMB", v.SizeMB)
+				}
+				fmt.Printf("%-20s %-15s %-8s %-8s %s\n",
+					v.Name, v.Group, v.Driver, size,
+					v.CreatedAt.Format("2006-01-02 15:04"))
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&group, "group", "", "Filter by compose group name")
+	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json")
+	return cmd
+}
+
+func composeVolumeInspectCmd() *cobra.Command {
+	var outputFormat string
+
+	cmd := &cobra.Command{
+		Use:   "inspect <group> <volume>",
+		Short: "Show volume details",
+		Long: `Display detailed information about a named volume.
+
+Examples:
+  tent compose volume inspect myapp shared-data
+  tent compose volume inspect myapp shared-data --format json`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			group := args[0]
+			name := args[1]
+			baseDir := getBaseDir()
+			volMgr := compose.NewVolumeManager(baseDir)
+
+			vol, err := volMgr.GetVolume(group, name)
+			if err != nil {
+				return err
+			}
+
+			if outputFormat == "json" {
+				data, err := json.MarshalIndent(vol, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(data))
+				return nil
+			}
+
+			fmt.Printf("Volume: %s\n", vol.Name)
+			fmt.Printf("  Group:   %s\n", vol.Group)
+			fmt.Printf("  Driver:  %s\n", vol.Driver)
+			if vol.SizeMB > 0 {
+				fmt.Printf("  Size:    %d MB\n", vol.SizeMB)
+			}
+			fmt.Printf("  Path:    %s\n", vol.Path)
+			fmt.Printf("  Created: %s\n", vol.CreatedAt.Format("2006-01-02 15:04:05"))
+			if len(vol.Labels) > 0 {
+				fmt.Printf("  Labels:\n")
+				for k, v := range vol.Labels {
+					fmt.Printf("    %s=%s\n", k, v)
+				}
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json")
+	return cmd
+}
+
+func composeVolumeRemoveCmd() *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "remove <group> [volume]",
+		Short: "Remove compose volumes",
+		Long: `Remove named volumes for a compose group. If a volume name is given,
+only that volume is removed. Otherwise all volumes for the group are removed.
+
+Examples:
+  tent compose volume remove myapp shared-data
+  tent compose volume remove myapp --force`,
+		Aliases: []string{"rm"},
+		Args:    cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			group := args[0]
+			baseDir := getBaseDir()
+			volMgr := compose.NewVolumeManager(baseDir)
+
+			if len(args) == 2 {
+				name := args[1]
+				if err := volMgr.RemoveVolume(group, name); err != nil {
+					return err
+				}
+				fmt.Printf("Removed volume %q from group %q\n", name, group)
+				return nil
+			}
+
+			if !force {
+				fmt.Printf("This will remove ALL volumes for group %q. Use --force to confirm.\n", group)
+				return nil
+			}
+
+			if err := volMgr.RemoveVolumes(group); err != nil {
+				return err
+			}
+			fmt.Printf("Removed all volumes for group %q\n", group)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&force, "force", false, "Force removal of all volumes")
+	return cmd
 }

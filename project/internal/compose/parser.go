@@ -62,6 +62,33 @@ func (c *ComposeConfig) Validate() error {
 		}
 	}
 
+	// Validate volume references
+	for name, sandbox := range c.Sandboxes {
+		for _, vol := range sandbox.Volumes {
+			if vol.Name == "" {
+				return fmt.Errorf("sandbox %s: volume mount must have a 'name' field", name)
+			}
+			if vol.Guest == "" {
+				return fmt.Errorf("sandbox %s: volume %q must have a 'guest' mount path", name, vol.Name)
+			}
+			if c.Volumes == nil {
+				return fmt.Errorf("sandbox %s: references volume %q but no volumes are defined", name, vol.Name)
+			}
+			if _, ok := c.Volumes[vol.Name]; !ok {
+				return fmt.Errorf("sandbox %s: references undefined volume %q", name, vol.Name)
+			}
+		}
+	}
+
+	// Set volume defaults
+	for vname, vol := range c.Volumes {
+		if vol == nil {
+			c.Volumes[vname] = &VolumeConfig{Driver: "local"}
+		} else if vol.Driver == "" {
+			vol.Driver = "local"
+		}
+	}
+
 	// Detect dependency cycles
 	if err := c.detectCycles(); err != nil {
 		return err

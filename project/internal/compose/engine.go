@@ -62,10 +62,11 @@ func expandSandboxEnv(env map[string]string) map[string]string {
 // NewComposeManager creates a new compose manager
 func NewComposeManager(baseDir string, vmManager *vm.VMManager, stateManager StateManager) *ComposeManager {
 	return &ComposeManager{
-		vmManager:    vmManager,
-		baseDir:      baseDir,
-		stateManager: stateManager,
-		dnsServers:   make(map[string]*network.DNSServer),
+		vmManager:     vmManager,
+		baseDir:       baseDir,
+		stateManager:  stateManager,
+		dnsServers:    make(map[string]*network.DNSServer),
+		volumeManager: NewVolumeManager(baseDir),
 	}
 }
 
@@ -89,6 +90,16 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 	if err == nil {
 		if startErr := dns.Start(); startErr == nil {
 			m.dnsServers[name] = dns
+		}
+	}
+
+	// Create named volumes if defined
+	var volumePaths map[string]string
+	if len(config.Volumes) > 0 {
+		var volErr error
+		volumePaths, volErr = m.volumeManager.EnsureVolumes(name, config.Volumes)
+		if volErr != nil {
+			return nil, fmt.Errorf("failed to create volumes: %w", volErr)
 		}
 	}
 
@@ -123,6 +134,17 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 				Host:     m.Host,
 				Guest:    m.Guest,
 				Readonly: m.Readonly,
+			}
+		}
+
+		// Append named volume mounts
+		for _, vol := range sandboxConfig.Volumes {
+			if hostPath, ok := volumePaths[vol.Name]; ok {
+				vmConfig.Mounts = append(vmConfig.Mounts, models.MountConfig{
+					Host:     hostPath,
+					Guest:    vol.Guest,
+					Readonly: vol.Readonly,
+				})
 			}
 		}
 
@@ -191,6 +213,11 @@ func (m *ComposeManager) Down(name string) error {
 		if err := m.vmManager.Destroy(sandboxName); err != nil {
 			errors = append(errors, fmt.Sprintf("failed to destroy %s: %v", sandboxName, err))
 		}
+	}
+
+	// Clean up named volumes
+	if err := m.volumeManager.RemoveVolumes(name); err != nil {
+		errors = append(errors, fmt.Sprintf("failed to remove volumes: %v", err))
 	}
 
 	// Delete compose state
