@@ -13,6 +13,7 @@ package hvf
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 // Helper function to convert macOS error codes to human-readable strings
 static const char* hvm_error_string(hv_return_t ret) {
