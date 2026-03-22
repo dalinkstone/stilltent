@@ -58,7 +58,7 @@ type Backend struct {
 type VM struct {
 	config    *models.VMConfig
 	backend   *Backend
-	vcpuID    C.hv_vcpuid_t
+	vcpuID    uint
 	running   bool
 	ip        string
 	tapDevice string
@@ -157,7 +157,7 @@ func (v *VM) Start() error {
 		C.size_t(memorySize),
 		C.PROT_READ|C.PROT_WRITE,
 		C.MAP_ANON|C.MAP_PRIVATE,
-		-1,
+		C.int(-1),
 		0,
 	)
 	if memoryPtr == C.MAP_FAILED {
@@ -167,10 +167,10 @@ func (v *VM) Start() error {
 	// Map memory to VM - signature: (uva, gpa, size, flags) - no vmRef parameter
 	// The VM is implicitly associated with the current task after hv_vm_create
 	ret = C.hv_vm_map(
-		C.hv_uvaddr_t(unsafe.Pointer(memoryPtr)),
+		C.hv_uvaddr_t(memoryPtr),
 		C.hv_gpaddr_t(0),
 		C.size_t(memorySize),
-		C.HV_MEMORY_READ|C.HV_MEMORY_WRITE|C.HV_MEMORY_EXEC,
+		C.hv_memory_flags_t(C.HV_MEMORY_READ|C.HV_MEMORY_WRITE|C.HV_MEMORY_EXEC),
 	)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
@@ -178,11 +178,13 @@ func (v *VM) Start() error {
 	}
 
 	// Create vCPU
-	ret = C.hv_vcpu_create(&v.vcpuID, C.HV_VCPU_DEFAULT)
+	var vcpuID C.uint
+	ret = C.hv_vcpu_create(&vcpuID, C.HV_VCPU_DEFAULT)
 	if ret != C.HV_SUCCESS {
 		C.munmap(memoryPtr, C.size_t(memorySize))
 		return fmt.Errorf("failed to create vCPU: %s", C.GoString(C.hvm_error_string(ret)))
 	}
+	v.vcpuID = uint(vcpuID)
 
 	// Set up vCPU state - configure the vCPU with initial registers
 	// For simplicity, we'll set up a minimal configuration
@@ -201,7 +203,7 @@ func (v *VM) Start() error {
 }
 
 // runVCPU executes the vCPU loop using Hypervisor.framework
-func (v *VM) runVCPU(vcpuID C.hv_vcpuid_t) error {
+func (v *VM) runVCPU(vcpuID C.uint) error {
 	// The vCPU execution loop - runs until the VM stops or an error occurs
 	// This implements the basic HVF vCPU execution loop using hv_vcpu_run
 
