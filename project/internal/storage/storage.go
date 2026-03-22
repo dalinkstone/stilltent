@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/dalinkstone/tent/pkg/models"
+	"github.com/dalinkstone/tent/internal/image"
 )
 
 // StorageManager handles rootfs creation and snapshot management
@@ -29,6 +30,11 @@ func NewManager(baseDir string) (*Manager, error) {
 // GetBaseDir returns the base directory for storage
 func (m *Manager) GetBaseDir() string {
 	return m.baseDir
+}
+
+// ImageManager returns the image manager for the storage directory
+func (m *Manager) ImageManager() (*image.Manager, error) {
+	return image.NewManager(m.baseDir)
 }
 
 // CreateRootFS creates a root filesystem for a VM
