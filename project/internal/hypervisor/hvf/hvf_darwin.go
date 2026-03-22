@@ -204,15 +204,25 @@ func (v *VM) Start() error {
 
 // runVCPU executes the vCPU loop using Hypervisor.framework
 func (v *VM) runVCPU(vcpuRef C.hv_vcpu_t) error {
-	// The vCPU execution loop - this runs until the VM stops
-	// In a full implementation, this would handle:
-	// 1. vCPU execution with hv_vcpu_run
-	// 2. Exit handling (I/O, interrupts, etc.)
-	// 3. State management
+	// The vCPU execution loop - runs until the VM stops or an error occurs
+	// This implements the basic HVF vCPU execution loop using hv_vcpu_run
 
-	// For now, we mark the VM as running
-	// A complete implementation would call hv_vcpu_run in a loop
-	// and handle various exit reasons (memory access, I/O, interrupts)
+	for v.running {
+		// Run the vCPU until it exits
+		ret := C.hv_vcpu_run(vcpuRef)
+		if ret != C.HV_SUCCESS {
+			return fmt.Errorf("vCPU run failed: %s", C.GoString(C.hvm_error_string(ret)))
+		}
+
+		// In a full implementation, we would:
+		// 1. Check the exit reason from hv_vcpu_run
+		// 2. Handle different exit types (memory access, I/O, interrupts, etc.)
+		// 3. Update guest state based on exit reasons
+		// 4. Resume execution
+
+		// For now, we just continue the loop
+		// A complete implementation would handle exits properly
+	}
 
 	return nil
 }
