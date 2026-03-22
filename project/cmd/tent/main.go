@@ -68,6 +68,7 @@ func main() {
 	rootCmd.AddCommand(rollbackCmd())
 	rootCmd.AddCommand(debugCmd())
 	rootCmd.AddCommand(tunnelCmd())
+	rootCmd.AddCommand(apiCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
