@@ -61,11 +61,16 @@ func ConfigureStatusCmd(options ...CommonCmdOption) *cobra.Command {
 
 			fmt.Printf("VM: %s\n", name)
 			fmt.Printf("  Status:    %s\n", vmState.Status)
+			fmt.Printf("  Image:     %s\n", vmState.ImageRef)
+			fmt.Printf("  VCPUs:     %d\n", vmState.VCPUs)
+			fmt.Printf("  Memory:    %d MB\n", vmState.MemoryMB)
+			fmt.Printf("  Disk:      %d GB\n", vmState.DiskGB)
 			fmt.Printf("  PID:       %d\n", vmState.PID)
 			fmt.Printf("  IP:        %s\n", vmState.IP)
 			fmt.Printf("  RootFS:    %s\n", vmState.RootFSPath)
 			fmt.Printf("  TAP:       %s\n", vmState.TAPDevice)
 			fmt.Printf("  Socket:    %s\n", vmState.SocketPath)
+			fmt.Printf("  SSH Key:   %s\n", vmState.SSHKeyPath)
 			fmt.Printf("  Created:   %d\n", vmState.CreatedAt)
 			fmt.Printf("  Updated:   %d\n", vmState.UpdatedAt)
 

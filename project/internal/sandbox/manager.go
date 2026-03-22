@@ -209,6 +209,10 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		RootFSPath:  rootfsPath,
 		TAPDevice:   tapDevice,
 		SSHKeyPath:  keyPair.PrivateKeyPath,
+		ImageRef:    config.From,
+		VCPUs:       config.VCPUs,
+		MemoryMB:    config.MemoryMB,
+		DiskGB:      config.DiskGB,
 		CreatedAt:   time.Now().Unix(),
 		UpdatedAt:   time.Now().Unix(),
 	}

@@ -62,6 +62,10 @@ type VMState struct {
 	RootFSPath  string     `json:"rootfs_path,omitempty"`
 	TAPDevice   string     `json:"tap_device,omitempty"`
 	SSHKeyPath  string     `json:"ssh_key_path,omitempty"`
+	ImageRef    string     `json:"image_ref,omitempty"`
+	VCPUs       int        `json:"vcpus,omitempty"`
+	MemoryMB    int        `json:"memory_mb,omitempty"`
+	DiskGB      int        `json:"disk_gb,omitempty"`
 	CreatedAt   int64      `json:"created_at"`
 	UpdatedAt   int64      `json:"updated_at"`
 }

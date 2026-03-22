@@ -62,11 +62,27 @@ func ConfigureListCmd(options ...CommonCmdOption) *cobra.Command {
 				return nil
 			}
 
-			fmt.Println("Listing VMs:")
-			fmt.Println("NAME\tSTATUS\tIP\tPID\tROOTFS")
+			fmt.Printf("%-20s %-10s %-16s %-6s %-6s %-8s %-20s\n",
+				"NAME", "STATUS", "IP", "VCPUS", "MEM", "DISK", "IMAGE")
 			for _, vm := range vms {
-				fmt.Printf("%s\t%s\t%s\t%d\t%s\n",
-					vm.Name, vm.Status, vm.IP, vm.PID, vm.RootFSPath)
+				mem := ""
+				if vm.MemoryMB > 0 {
+					mem = fmt.Sprintf("%dMB", vm.MemoryMB)
+				}
+				disk := ""
+				if vm.DiskGB > 0 {
+					disk = fmt.Sprintf("%dGB", vm.DiskGB)
+				}
+				vcpus := ""
+				if vm.VCPUs > 0 {
+					vcpus = fmt.Sprintf("%d", vm.VCPUs)
+				}
+				image := vm.ImageRef
+				if image == "" {
+					image = "-"
+				}
+				fmt.Printf("%-20s %-10s %-16s %-6s %-6s %-8s %-20s\n",
+					vm.Name, vm.Status, vm.IP, vcpus, mem, disk, image)
 			}
 
 			return nil
