@@ -151,6 +151,11 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		}
 	}
 
+	// Persist the full config so it survives stop/start cycles
+	if err := m.saveConfig(config); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
 	// Create VM state
 	vmState := &models.VMState{
 		Name:        name,
@@ -164,6 +169,26 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 	// Save state
 	if err := m.stateManager.StoreVM(vmState); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
+	}
+
+	return nil
+}
+
+// saveConfig persists the full VMConfig to disk
+func (m *VMManager) saveConfig(config *models.VMConfig) error {
+	configDir := filepath.Join(m.baseDir, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, fmt.Sprintf("%s.yaml", config.Name))
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
 	}
 
 	return nil

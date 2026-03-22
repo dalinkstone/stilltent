@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -27,12 +28,14 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 	}
 
 	var (
-		fromImage string
-		vcpus     int
-		memoryMB  int
-		diskGB    int
-		allowList []string
-		envVars   []string
+		fromImage  string
+		vcpus      int
+		memoryMB   int
+		diskGB     int
+		allowList  []string
+		envVars    []string
+		mountSpecs []string
+		portSpecs  []string
 	)
 
 	cmd := &cobra.Command{
@@ -44,7 +47,9 @@ Examples:
   tent create mybox --from ubuntu:22.04
   tent create agent --from python:3.12-slim --vcpus 4 --memory 2048
   tent create dev --from ubuntu:22.04 --allow api.anthropic.com --allow openrouter.ai
-  tent create mybox --config sandbox.yaml`,
+  tent create mybox --config sandbox.yaml
+  tent create dev --from ubuntu:22.04 --mount ./workspace:/workspace --mount ./data:/data:ro
+  tent create web --from ubuntu:22.04 --port 8080:80 --port 2222:22`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -96,6 +101,28 @@ Examples:
 						val = os.Getenv(envName)
 					}
 					cfg.Env[key] = val
+				}
+			}
+
+			// Parse --mount host:guest[:ro] specs
+			if len(mountSpecs) > 0 {
+				for _, spec := range mountSpecs {
+					mount, err := parseMountSpec(spec)
+					if err != nil {
+						return fmt.Errorf("invalid mount spec %q: %w", spec, err)
+					}
+					cfg.Mounts = append(cfg.Mounts, mount)
+				}
+			}
+
+			// Parse --port hostPort:guestPort specs
+			if len(portSpecs) > 0 {
+				for _, spec := range portSpecs {
+					pf, err := parsePortSpec(spec)
+					if err != nil {
+						return fmt.Errorf("invalid port spec %q: %w", spec, err)
+					}
+					cfg.Network.Ports = append(cfg.Network.Ports, pf)
 				}
 			}
 
@@ -158,6 +185,8 @@ Examples:
 	cmd.Flags().IntVar(&diskGB, "disk", 10, "Disk size in GB")
 	cmd.Flags().StringSliceVar(&allowList, "allow", nil, "Allowed external endpoints (can be repeated)")
 	cmd.Flags().StringSliceVar(&envVars, "env", nil, "Environment variables in KEY=VALUE format (can be repeated)")
+	cmd.Flags().StringSliceVar(&mountSpecs, "mount", nil, "Host-to-guest directory mounts in host:guest[:ro] format (can be repeated)")
+	cmd.Flags().StringSliceVar(&portSpecs, "port", nil, "Port forwarding in hostPort:guestPort format (can be repeated)")
 
 	return cmd
 }
@@ -165,6 +194,57 @@ Examples:
 // createCmd is a convenience function that uses default dependencies
 func createCmd() *cobra.Command {
 	return ConfigureCreateCmd()
+}
+
+// parseMountSpec parses a mount spec in the format host:guest[:ro]
+func parseMountSpec(spec string) (models.MountConfig, error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return models.MountConfig{}, fmt.Errorf("expected host:guest[:ro], got %q", spec)
+	}
+
+	mount := models.MountConfig{
+		Host:  parts[0],
+		Guest: parts[1],
+	}
+
+	if len(parts) == 3 {
+		if parts[2] == "ro" {
+			mount.Readonly = true
+		} else {
+			return models.MountConfig{}, fmt.Errorf("expected 'ro' as third component, got %q", parts[2])
+		}
+	}
+
+	if mount.Host == "" || mount.Guest == "" {
+		return models.MountConfig{}, fmt.Errorf("host and guest paths cannot be empty")
+	}
+
+	return mount, nil
+}
+
+// parsePortSpec parses a port spec in the format hostPort:guestPort
+func parsePortSpec(spec string) (models.PortForward, error) {
+	parts := strings.SplitN(spec, ":", 2)
+	if len(parts) != 2 {
+		return models.PortForward{}, fmt.Errorf("expected hostPort:guestPort, got %q", spec)
+	}
+
+	hostPort, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return models.PortForward{}, fmt.Errorf("invalid host port %q: %w", parts[0], err)
+	}
+
+	guestPort, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return models.PortForward{}, fmt.Errorf("invalid guest port %q: %w", parts[1], err)
+	}
+
+	if hostPort < 1 || hostPort > 65535 || guestPort < 1 || guestPort > 65535 {
+		return models.PortForward{}, fmt.Errorf("port numbers must be between 1 and 65535")
+	}
+
+	return models.PortForward{Host: hostPort, Guest: guestPort}, nil
 }
 
 // loadConfigFromFile loads VM config from a YAML file
