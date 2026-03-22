@@ -70,6 +70,7 @@ func main() {
 	rootCmd.AddCommand(tunnelCmd())
 	rootCmd.AddCommand(apiCmd())
 	rootCmd.AddCommand(provisionCmd())
+	rootCmd.AddCommand(kernelCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
