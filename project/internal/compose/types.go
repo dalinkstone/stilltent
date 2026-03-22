@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"github.com/dalinkstone/tent/internal/network"
 	"github.com/dalinkstone/tent/internal/sandbox"
 )
 
@@ -53,6 +54,7 @@ type ComposeManager struct {
 	vmManager    *vm.VMManager
 	baseDir      string
 	stateManager StateManager
+	dnsServers   map[string]*network.DNSServer // group name -> DNS server
 }
 
 // StateManager manages compose state persistence

@@ -2,11 +2,13 @@ package compose
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/dalinkstone/tent/internal/network"
 	"github.com/dalinkstone/tent/internal/sandbox"
 	"github.com/dalinkstone/tent/pkg/models"
 )
@@ -60,6 +62,7 @@ func NewComposeManager(baseDir string, vmManager *vm.VMManager, stateManager Sta
 		vmManager:    vmManager,
 		baseDir:      baseDir,
 		stateManager: stateManager,
+		dnsServers:   make(map[string]*network.DNSServer),
 	}
 }
 
@@ -73,6 +76,15 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 	status := &ComposeStatus{
 		Name:      name,
 		Sandboxes: make(map[string]*SandboxStatus),
+	}
+
+	// Start a DNS server for service discovery within this compose group.
+	// Sandboxes can reach each other by name (e.g., "agent", "shared-db").
+	dns, err := network.NewDNSServer(network.DefaultDNSConfig())
+	if err == nil {
+		if startErr := dns.Start(); startErr == nil {
+			m.dnsServers[name] = dns
+		}
 	}
 
 	for sandboxName, sandboxConfig := range config.Sandboxes {
@@ -129,6 +141,13 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 			PID:    vmState.PID,
 		}
 
+		// Register sandbox name in DNS for service discovery
+		if dnsServer, ok := m.dnsServers[name]; ok && vmState.IP != "" {
+			if ip := net.ParseIP(vmState.IP); ip != nil {
+				dnsServer.Register(sandboxName, ip)
+			}
+		}
+
 		// Save compose state
 		if err := m.stateManager.SaveComposeState(name, status); err != nil {
 			return nil, fmt.Errorf("failed to save compose state: %w", err)
@@ -140,6 +159,12 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 
 // Down stops and destroys all sandboxes in a compose group
 func (m *ComposeManager) Down(name string) error {
+	// Stop the DNS server for this compose group
+	if dns, ok := m.dnsServers[name]; ok {
+		dns.Stop()
+		delete(m.dnsServers, name)
+	}
+
 	status, err := m.stateManager.LoadComposeState(name)
 	if err != nil {
 		return fmt.Errorf("failed to load compose state: %w", err)
