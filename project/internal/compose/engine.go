@@ -521,6 +521,182 @@ func (m *ComposeManager) Exec(groupName string, service string, command []string
 	return m.vmManager.Exec(service, command)
 }
 
+// Scale adjusts the number of replicas for a service in a compose group.
+// Replicas are named <service>-1, <service>-2, etc. The original service
+// sandbox (without a suffix) counts as replica 0.
+// When scaling up, new sandboxes are created and started using the original
+// service's configuration. When scaling down, excess replicas are stopped
+// and destroyed in reverse order.
+func (m *ComposeManager) Scale(groupName string, service string, replicas int, config *ComposeConfig) error {
+	if replicas < 1 {
+		return fmt.Errorf("replica count must be at least 1")
+	}
+
+	// Verify the service exists in the compose config
+	svcConfig, ok := config.Sandboxes[service]
+	if !ok {
+		available := make([]string, 0, len(config.Sandboxes))
+		for name := range config.Sandboxes {
+			available = append(available, name)
+		}
+		sort.Strings(available)
+		return fmt.Errorf("service %q not found in compose config (available: %s)",
+			service, strings.Join(available, ", "))
+	}
+
+	// Load current compose state
+	status, err := m.stateManager.LoadComposeState(groupName)
+	if err != nil {
+		return fmt.Errorf("compose group %q not found: %w", groupName, err)
+	}
+
+	// Count current replicas: the original service + any <service>-N replicas
+	currentCount := 0
+	if _, exists := status.Sandboxes[service]; exists {
+		currentCount = 1
+	}
+	for name := range status.Sandboxes {
+		if strings.HasPrefix(name, service+"-") {
+			suffix := name[len(service)+1:]
+			if _, err := fmt.Sscanf(suffix, "%d", new(int)); err == nil {
+				currentCount++
+			}
+		}
+	}
+
+	if currentCount == replicas {
+		return nil // already at desired count
+	}
+
+	if replicas > currentCount {
+		// Scale up: create new replicas
+		for i := currentCount; i < replicas; i++ {
+			var replicaName string
+			if i == 0 {
+				replicaName = service
+			} else {
+				replicaName = fmt.Sprintf("%s-%d", service, i)
+			}
+
+			// Skip if already exists
+			if _, exists := status.Sandboxes[replicaName]; exists {
+				continue
+			}
+
+			// Build config for this replica
+			expandedEnv := expandSandboxEnv(svcConfig.Env)
+			netConfig := models.NetworkConfig{}
+			if svcConfig.Network != nil {
+				netConfig.Allow = svcConfig.Network.Allow
+				netConfig.Deny = svcConfig.Network.Deny
+			}
+
+			vmConfig := &models.VMConfig{
+				Name:     replicaName,
+				From:     svcConfig.From,
+				VCPUs:    svcConfig.VCPUs,
+				MemoryMB: svcConfig.MemoryMB,
+				DiskGB:   svcConfig.DiskGB,
+				Mounts:   make([]models.MountConfig, len(svcConfig.Mounts)),
+				Env:      expandedEnv,
+				Network:  netConfig,
+			}
+			for j, mt := range svcConfig.Mounts {
+				vmConfig.Mounts[j] = models.MountConfig{
+					Host:     mt.Host,
+					Guest:    mt.Guest,
+					Readonly: mt.Readonly,
+				}
+			}
+
+			if err := m.vmManager.Create(replicaName, vmConfig); err != nil {
+				return fmt.Errorf("failed to create replica %s: %w", replicaName, err)
+			}
+			if err := m.vmManager.Start(replicaName); err != nil {
+				return fmt.Errorf("failed to start replica %s: %w", replicaName, err)
+			}
+
+			vmState, err := m.vmManager.Status(replicaName)
+			if err != nil {
+				return fmt.Errorf("failed to get status for replica %s: %w", replicaName, err)
+			}
+
+			status.Sandboxes[replicaName] = &SandboxStatus{
+				Name:   replicaName,
+				Status: vmState.Status.String(),
+				IP:     vmState.IP,
+				PID:    vmState.PID,
+			}
+
+			// Register in DNS
+			if dnsServer, ok := m.dnsServers[groupName]; ok && vmState.IP != "" {
+				if ip := net.ParseIP(vmState.IP); ip != nil {
+					dnsServer.Register(replicaName, ip)
+				}
+			}
+		}
+	} else {
+		// Scale down: remove excess replicas in reverse order
+		for i := currentCount - 1; i >= replicas; i-- {
+			var replicaName string
+			if i == 0 {
+				replicaName = service
+			} else {
+				replicaName = fmt.Sprintf("%s-%d", service, i)
+			}
+
+			if _, exists := status.Sandboxes[replicaName]; !exists {
+				continue
+			}
+
+			// Unregister from DNS
+			if dnsServer, ok := m.dnsServers[groupName]; ok {
+				dnsServer.Unregister(replicaName)
+			}
+
+			if err := m.vmManager.Stop(replicaName); err != nil {
+				// Continue even if stop fails
+				_ = err
+			}
+			if err := m.vmManager.Destroy(replicaName); err != nil {
+				return fmt.Errorf("failed to destroy replica %s: %w", replicaName, err)
+			}
+
+			delete(status.Sandboxes, replicaName)
+		}
+	}
+
+	// Persist updated state
+	if err := m.stateManager.SaveComposeState(groupName, status); err != nil {
+		return fmt.Errorf("failed to save compose state: %w", err)
+	}
+
+	return nil
+}
+
+// ReplicaCount returns the current number of replicas for a service
+// in a compose group.
+func (m *ComposeManager) ReplicaCount(groupName string, service string) (int, error) {
+	status, err := m.stateManager.LoadComposeState(groupName)
+	if err != nil {
+		return 0, fmt.Errorf("compose group %q not found: %w", groupName, err)
+	}
+
+	count := 0
+	if _, exists := status.Sandboxes[service]; exists {
+		count = 1
+	}
+	for name := range status.Sandboxes {
+		if strings.HasPrefix(name, service+"-") {
+			suffix := name[len(service)+1:]
+			if _, err := fmt.Sscanf(suffix, "%d", new(int)); err == nil {
+				count++
+			}
+		}
+	}
+	return count, nil
+}
+
 func (m *ComposeManager) List() ([]string, error) {
 	statesDir := filepath.Join(m.baseDir, "compose")
 	entries, err := os.ReadDir(statesDir)

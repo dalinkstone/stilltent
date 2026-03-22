@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"strconv"
+
 	"github.com/dalinkstone/tent/internal/compose"
 	"github.com/dalinkstone/tent/internal/sandbox"
 )
@@ -29,6 +31,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeExecCmd())
 	cmd.AddCommand(composeListCmd())
 	cmd.AddCommand(composeValidateCmd())
+	cmd.AddCommand(composeScaleCmd())
 
 	return cmd
 }
@@ -472,6 +475,73 @@ Examples:
 
 			if exitCode != 0 {
 				os.Exit(exitCode)
+			}
+
+			return nil
+		},
+	}
+}
+
+func composeScaleCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "scale <file> <service>=<replicas>",
+		Short: "Scale a service to the specified number of replicas",
+		Long: `Scale a service within a compose group up or down.
+
+When scaling up, new sandbox replicas are created using the service's
+configuration from the compose file. Replicas are named <service>-1,
+<service>-2, etc. The original sandbox counts as the first replica.
+
+When scaling down, excess replicas are stopped and destroyed in reverse order.
+
+Examples:
+  tent compose scale tent-compose.yaml agent=3
+  tent compose scale tent-compose.yaml tool-runner=5
+  tent compose scale tent-compose.yaml agent=1`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+			scaleSpec := args[1]
+
+			// Parse service=replicas
+			parts := strings.SplitN(scaleSpec, "=", 2)
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid scale spec %q, expected service=replicas", scaleSpec)
+			}
+			service := parts[0]
+			replicas, err := strconv.Atoi(parts[1])
+			if err != nil {
+				return fmt.Errorf("invalid replica count %q: %w", parts[1], err)
+			}
+			if replicas < 1 {
+				return fmt.Errorf("replica count must be at least 1")
+			}
+
+			manager, err := newComposeManager()
+			if err != nil {
+				return err
+			}
+
+			config, err := manager.ParseConfig(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			groupName := composeGroupName(filePath)
+
+			// Get current replica count for display
+			currentCount, _ := manager.ReplicaCount(groupName, service)
+
+			if err := manager.Scale(groupName, service, replicas, config); err != nil {
+				return fmt.Errorf("failed to scale service: %w", err)
+			}
+
+			if replicas > currentCount {
+				fmt.Printf("Scaled service %q up from %d to %d replicas\n", service, currentCount, replicas)
+			} else if replicas < currentCount {
+				fmt.Printf("Scaled service %q down from %d to %d replicas\n", service, currentCount, replicas)
+			} else {
+				fmt.Printf("Service %q already at %d replicas\n", service, replicas)
 			}
 
 			return nil
