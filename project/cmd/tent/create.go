@@ -29,15 +29,16 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 	}
 
 	var (
-		fromImage  string
-		vcpus      int
-		memoryMB   int
-		diskGB     int
-		allowList  []string
-		envVars    []string
-		mountSpecs []string
-		portSpecs  []string
-		labelSpecs []string
+		fromImage   string
+		vcpus       int
+		memoryMB    int
+		diskGB      int
+		allowList   []string
+		envVars     []string
+		mountSpecs  []string
+		portSpecs   []string
+		labelSpecs  []string
+		backendName string
 	)
 
 	cmd := &cobra.Command{
@@ -165,10 +166,14 @@ Examples:
 				fmt.Printf("Resolved image '%s' -> %s\n", cfg.From, rootfsPath)
 			}
 
-			// Get platform-specific hypervisor backend if not provided
+			// Get hypervisor backend: explicit --backend flag, injected option, or platform default
 			hvBackend := opts.Hypervisor
 			if hvBackend == nil {
-				hvBackend, err = vm.NewPlatformBackend(baseDir)
+				if backendName != "" {
+					hvBackend, err = vm.NewBackendByName(backendName, baseDir)
+				} else {
+					hvBackend, err = vm.NewPlatformBackend(baseDir)
+				}
 				if err != nil {
 					return fmt.Errorf("failed to create hypervisor backend: %w", err)
 				}
@@ -204,6 +209,7 @@ Examples:
 	cmd.Flags().StringSliceVar(&mountSpecs, "mount", nil, "Host-to-guest directory mounts in host:guest[:ro] format (can be repeated)")
 	cmd.Flags().StringSliceVar(&portSpecs, "port", nil, "Port forwarding in hostPort:guestPort format (can be repeated)")
 	cmd.Flags().StringSliceVar(&labelSpecs, "label", nil, "Labels in key=value format (can be repeated)")
+	cmd.Flags().StringVar(&backendName, "backend", "", "Hypervisor backend (e.g., kvm, hvf, firecracker)")
 
 	return cmd
 }
