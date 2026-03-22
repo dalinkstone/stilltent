@@ -80,6 +80,7 @@ type VMManager struct {
 	policyMgr      *network.PolicyManager
 	egressFirewall *network.EgressFirewall
 	mountMgr       *MountManager
+	eventLogger    *EventLogger
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
@@ -137,6 +138,7 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 		policyMgr:      policyMgr,
 		egressFirewall: egressFw,
 		mountMgr:       NewMountManager(baseDir),
+		eventLogger:    NewEventLogger(baseDir),
 		baseDir:        baseDir,
 		execCommand:    exec.Command,
 		runningVMs:     make(map[string]hypervisor.VM),
@@ -146,6 +148,18 @@ func NewManager(baseDir string, stateManager StateManager, hv HypervisorBackend,
 // Setup initializes the VM manager components
 func (m *VMManager) Setup() error {
 	return nil // Components are initialized in NewManager
+}
+
+// logEvent records a lifecycle event (best-effort, errors are ignored)
+func (m *VMManager) logEvent(eventType EventType, sandbox string, details map[string]string) {
+	if m.eventLogger != nil {
+		_ = m.eventLogger.Log(eventType, sandbox, details)
+	}
+}
+
+// EventLogger returns the event logger for external use
+func (m *VMManager) EventLog() *EventLogger {
+	return m.eventLogger
 }
 
 // Create creates a new microVM
@@ -240,6 +254,12 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 	if err := m.stateManager.StoreVM(vmState); err != nil {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
+
+	m.logEvent(EventCreate, name, map[string]string{
+		"image": config.From,
+		"vcpus": fmt.Sprintf("%d", config.VCPUs),
+		"memory": fmt.Sprintf("%dMB", config.MemoryMB),
+	})
 
 	return nil
 }
@@ -357,6 +377,8 @@ func (m *VMManager) Start(name string) error {
 		return fmt.Errorf("failed to update state: %w", err)
 	}
 
+	m.logEvent(EventStart, name, nil)
+
 	return nil
 }
 
@@ -417,6 +439,8 @@ func (m *VMManager) Stop(name string) error {
 		return fmt.Errorf("failed to update state: %w", err)
 	}
 
+	m.logEvent(EventStop, name, nil)
+
 	return nil
 }
 
@@ -454,6 +478,8 @@ func (m *VMManager) Restart(name string, timeoutSec int) error {
 	}); err != nil {
 		return fmt.Errorf("failed to update restart count: %w", err)
 	}
+
+	m.logEvent(EventRestart, name, nil)
 
 	return nil
 }
@@ -529,6 +555,8 @@ func (m *VMManager) Destroy(name string) error {
 		return fmt.Errorf("failed to delete state: %w", err)
 	}
 
+	m.logEvent(EventDestroy, name, nil)
+
 	return nil
 }
 
@@ -589,6 +617,8 @@ func (m *VMManager) RenameVM(oldName, newName string) error {
 	if err := m.stateManager.RenameVM(oldName, newName); err != nil {
 		return fmt.Errorf("failed to rename sandbox state: %w", err)
 	}
+
+	m.logEvent(EventRename, newName, map[string]string{"from": oldName})
 
 	return nil
 }
@@ -687,7 +717,12 @@ func (m *VMManager) CreateSnapshot(name string, tag string) (string, error) {
 		return "", fmt.Errorf("VM not found: %w", err)
 	}
 
-	return m.storageMgr.CreateSnapshot(name, tag)
+	path, err := m.storageMgr.CreateSnapshot(name, tag)
+	if err != nil {
+		return "", err
+	}
+	m.logEvent(EventSnapshotCreate, name, map[string]string{"tag": tag})
+	return path, nil
 }
 
 // RestoreSnapshot restores a VM's rootfs from a snapshot
@@ -698,7 +733,11 @@ func (m *VMManager) RestoreSnapshot(name string, tag string) error {
 		return fmt.Errorf("VM not found: %w", err)
 	}
 
-	return m.storageMgr.RestoreSnapshot(name, tag)
+	if err := m.storageMgr.RestoreSnapshot(name, tag); err != nil {
+		return err
+	}
+	m.logEvent(EventSnapshotRestore, name, map[string]string{"tag": tag})
+	return nil
 }
 
 // ListSnapshots lists all snapshots for a VM

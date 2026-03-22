@@ -1,0 +1,145 @@
+package vm
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// EventType represents the type of sandbox lifecycle event
+type EventType string
+
+const (
+	EventCreate          EventType = "create"
+	EventStart           EventType = "start"
+	EventStop            EventType = "stop"
+	EventDestroy         EventType = "destroy"
+	EventRestart         EventType = "restart"
+	EventSnapshotCreate  EventType = "snapshot.create"
+	EventSnapshotRestore EventType = "snapshot.restore"
+	EventSnapshotDelete  EventType = "snapshot.delete"
+	EventExport          EventType = "export"
+	EventImport          EventType = "import"
+	EventRename          EventType = "rename"
+	EventUpdate          EventType = "update"
+	EventPrune           EventType = "prune"
+	EventNetworkAllow    EventType = "network.allow"
+	EventNetworkDeny     EventType = "network.deny"
+)
+
+// Event represents a single sandbox lifecycle event
+type Event struct {
+	Timestamp time.Time         `json:"timestamp"`
+	Type      EventType         `json:"type"`
+	Sandbox   string            `json:"sandbox"`
+	Details   map[string]string `json:"details,omitempty"`
+}
+
+// EventLogger handles writing and reading sandbox events
+type EventLogger struct {
+	logPath string
+	mu      sync.Mutex
+}
+
+// NewEventLogger creates an event logger for the given base directory
+func NewEventLogger(baseDir string) *EventLogger {
+	return &EventLogger{
+		logPath: filepath.Join(baseDir, "events.log"),
+	}
+}
+
+// Log writes an event to the event log
+func (el *EventLogger) Log(eventType EventType, sandbox string, details map[string]string) error {
+	el.mu.Lock()
+	defer el.mu.Unlock()
+
+	event := Event{
+		Timestamp: time.Now().UTC(),
+		Type:      eventType,
+		Sandbox:   sandbox,
+		Details:   details,
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(el.logPath), 0755); err != nil {
+		return fmt.Errorf("failed to create events directory: %w", err)
+	}
+
+	f, err := os.OpenFile(el.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open event log: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("failed to write event: %w", err)
+	}
+
+	return nil
+}
+
+// EventFilter controls which events to return
+type EventFilter struct {
+	Sandbox string
+	Type    EventType
+	Since   time.Time
+	Limit   int
+}
+
+// Query reads events from the log, applying optional filters
+func (el *EventLogger) Query(filter EventFilter) ([]Event, error) {
+	el.mu.Lock()
+	defer el.mu.Unlock()
+
+	data, err := os.ReadFile(el.logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to read event log: %w", err)
+	}
+
+	var events []Event
+	// Parse newline-delimited JSON
+	start := 0
+	for i := 0; i <= len(data); i++ {
+		if i == len(data) || data[i] == '\n' {
+			line := data[start:i]
+			start = i + 1
+			if len(line) == 0 {
+				continue
+			}
+			var event Event
+			if err := json.Unmarshal(line, &event); err != nil {
+				continue // skip malformed lines
+			}
+
+			// Apply filters
+			if filter.Sandbox != "" && event.Sandbox != filter.Sandbox {
+				continue
+			}
+			if filter.Type != "" && event.Type != filter.Type {
+				continue
+			}
+			if !filter.Since.IsZero() && event.Timestamp.Before(filter.Since) {
+				continue
+			}
+			events = append(events, event)
+		}
+	}
+
+	// Apply limit (return last N events)
+	if filter.Limit > 0 && len(events) > filter.Limit {
+		events = events[len(events)-filter.Limit:]
+	}
+
+	return events, nil
+}
