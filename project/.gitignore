@@ -11,5 +11,5 @@ docs/iterations/
 docs/memory/
 
 # Build artifacts
-tent
+/tent
 *.exe
