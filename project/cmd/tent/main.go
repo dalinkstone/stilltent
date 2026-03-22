@@ -47,6 +47,8 @@ func main() {
 	rootCmd.AddCommand(runCmd())
 	rootCmd.AddCommand(cloneCmd())
 	rootCmd.AddCommand(labelCmd())
+	rootCmd.AddCommand(versionCmd())
+	rootCmd.AddCommand(completionCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
