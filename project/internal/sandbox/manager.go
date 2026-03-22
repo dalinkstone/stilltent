@@ -174,6 +174,9 @@ func (m *VMManager) Start(name string) error {
 		return fmt.Errorf("failed to create VM: %w", err)
 	}
 
+	// Configure network for the VM
+	vm.SetNetwork(vmState.TAPDevice, vmState.IP)
+
 	// Start the VM
 	if err := vm.Start(); err != nil {
 		return fmt.Errorf("failed to start VM: %w", err)

@@ -27,6 +27,7 @@ config/mnemo/*
 # Runtime data
 workspace/repo/
 workspace/.orchestrator-stats.json
+scripts/loop-logs/
 *.log
 
 # OS

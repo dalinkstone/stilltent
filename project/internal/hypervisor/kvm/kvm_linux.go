@@ -32,6 +32,12 @@ type VM struct {
 	tapDevice string
 }
 
+// SetNetwork configures the VM's network interface
+func (v *VM) SetNetwork(tapDevice string, ip string) {
+	v.tapDevice = tapDevice
+	v.ip = ip
+}
+
 // NewBackend creates a new KVM backend
 func NewBackend(baseDir string) (*Backend, error) {
 	// Check if KVM is available
@@ -108,6 +114,11 @@ func (v *VM) Start() error {
 
 	// Add console device for serial output
 	cfg.Devices = append(cfg.Devices, &virtio.ConsoleDevice{})
+
+	// Note: The hype library doesn't support virtio-net devices.
+	// Network is handled externally via TAP devices and the network manager.
+	// The VM will use the kernel's network stack with the TAP device configured
+	// by the network manager before VM start.
 
 	// Set up kernel loader using storage manager's ExtractKernel
 	// This extracts kernel/initrd from the rootfs image
