@@ -12,6 +12,80 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// NetworkCondition defines simulated network conditions for a sandbox.
+// Used to test workloads under degraded network scenarios (high latency,
+// packet loss, jitter). All values of 0 mean no simulation (normal conditions).
+type NetworkCondition struct {
+	LatencyMs   uint32  `yaml:"latency_ms,omitempty"`   // added latency in milliseconds (0 = none)
+	JitterMs    uint32  `yaml:"jitter_ms,omitempty"`    // latency jitter in milliseconds (0 = none)
+	PacketLoss  float64 `yaml:"packet_loss,omitempty"`  // packet loss percentage 0.0-100.0 (0 = none)
+	Corrupt     float64 `yaml:"corrupt,omitempty"`      // packet corruption percentage 0.0-100.0 (0 = none)
+	Reorder     float64 `yaml:"reorder,omitempty"`      // packet reorder percentage 0.0-100.0 (0 = none)
+	Duplicate   float64 `yaml:"duplicate,omitempty"`    // packet duplicate percentage 0.0-100.0 (0 = none)
+	RateLimitKB uint32  `yaml:"rate_limit_kb,omitempty"` // rate limit in KB/s for condition shaping (0 = unlimited)
+	Preset      string  `yaml:"preset,omitempty"`       // named preset: "3g", "satellite", "lossy-wifi", "edge", "perfect"
+}
+
+// HasConditions returns true if any network condition simulation is configured.
+func (nc *NetworkCondition) HasConditions() bool {
+	return nc != nil && (nc.LatencyMs > 0 || nc.JitterMs > 0 || nc.PacketLoss > 0 ||
+		nc.Corrupt > 0 || nc.Reorder > 0 || nc.Duplicate > 0 || nc.RateLimitKB > 0)
+}
+
+// ApplyPreset fills in condition values from a named preset.
+func (nc *NetworkCondition) ApplyPreset(preset string) error {
+	switch strings.ToLower(preset) {
+	case "3g":
+		nc.LatencyMs = 150
+		nc.JitterMs = 30
+		nc.PacketLoss = 1.5
+		nc.RateLimitKB = 384
+		nc.Preset = "3g"
+	case "satellite":
+		nc.LatencyMs = 600
+		nc.JitterMs = 50
+		nc.PacketLoss = 2.0
+		nc.RateLimitKB = 512
+		nc.Preset = "satellite"
+	case "lossy-wifi":
+		nc.LatencyMs = 10
+		nc.JitterMs = 20
+		nc.PacketLoss = 5.0
+		nc.Corrupt = 0.5
+		nc.Preset = "lossy-wifi"
+	case "edge":
+		nc.LatencyMs = 300
+		nc.JitterMs = 100
+		nc.PacketLoss = 3.0
+		nc.RateLimitKB = 128
+		nc.Preset = "edge"
+	case "perfect", "none", "":
+		*nc = NetworkCondition{}
+	default:
+		return fmt.Errorf("unknown preset %q: use 3g, satellite, lossy-wifi, edge, or perfect", preset)
+	}
+	return nil
+}
+
+// FormatDuration formats milliseconds as a human-readable duration string.
+func FormatDuration(ms uint32) string {
+	if ms == 0 {
+		return "0ms"
+	}
+	if ms >= 1000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000.0)
+	}
+	return fmt.Sprintf("%dms", ms)
+}
+
+// FormatPercent formats a percentage value.
+func FormatPercent(pct float64) string {
+	if pct == 0 {
+		return "0%"
+	}
+	return fmt.Sprintf("%.1f%%", pct)
+}
+
 // BandwidthLimit defines rate limits for sandbox network traffic.
 // Rates are specified in bits per second. A value of 0 means unlimited.
 type BandwidthLimit struct {
@@ -90,12 +164,13 @@ func ParseRate(s string) (uint64, error) {
 
 // Policy represents network policy for a sandbox
 type Policy struct {
-	Name      string          `yaml:"name"`
-	Allowed   []string        `yaml:"allowed"`
-	Denied    []string        `yaml:"denied"`
-	Bandwidth *BandwidthLimit `yaml:"bandwidth,omitempty"`
-	CreatedAt int64           `yaml:"created_at"`
-	UpdatedAt int64           `yaml:"updated_at"`
+	Name      string            `yaml:"name"`
+	Allowed   []string          `yaml:"allowed"`
+	Denied    []string          `yaml:"denied"`
+	Bandwidth *BandwidthLimit   `yaml:"bandwidth,omitempty"`
+	Condition *NetworkCondition `yaml:"condition,omitempty"`
+	CreatedAt int64             `yaml:"created_at"`
+	UpdatedAt int64             `yaml:"updated_at"`
 }
 
 // PolicyManager manages network policies for sandboxes
@@ -459,6 +534,70 @@ func (pm *PolicyManager) RemoveBandwidthLimit(name string) error {
 	policy.Bandwidth = nil
 	policy.UpdatedAt = time.Now().Unix()
 	return nil
+}
+
+// SetNetworkCondition configures network condition simulation for a sandbox.
+func (pm *PolicyManager) SetNetworkCondition(name string, cond *NetworkCondition) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		policy = &Policy{
+			Name:      name,
+			Allowed:   []string{},
+			Denied:    []string{},
+			CreatedAt: time.Now().Unix(),
+			UpdatedAt: time.Now().Unix(),
+		}
+		pm.policies[name] = policy
+	}
+
+	policy.Condition = cond
+	policy.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+// GetNetworkCondition returns the network condition simulation for a sandbox.
+func (pm *PolicyManager) GetNetworkCondition(name string) (*NetworkCondition, error) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		return nil, fmt.Errorf("no policy found for sandbox %s", name)
+	}
+
+	if policy.Condition == nil {
+		return &NetworkCondition{}, nil
+	}
+	return policy.Condition, nil
+}
+
+// RemoveNetworkCondition clears network condition simulation for a sandbox.
+func (pm *PolicyManager) RemoveNetworkCondition(name string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	policy, exists := pm.policies[name]
+	if !exists {
+		return fmt.Errorf("no policy found for sandbox %s", name)
+	}
+
+	policy.Condition = nil
+	policy.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+// ListPresets returns all available network condition presets with descriptions.
+func ListPresets() map[string]string {
+	return map[string]string{
+		"3g":         "3G mobile (150ms latency, 30ms jitter, 1.5% loss, 384KB/s)",
+		"satellite":  "Satellite link (600ms latency, 50ms jitter, 2% loss, 512KB/s)",
+		"lossy-wifi": "Lossy WiFi (10ms latency, 20ms jitter, 5% loss, 0.5% corrupt)",
+		"edge":       "Edge/2G (300ms latency, 100ms jitter, 3% loss, 128KB/s)",
+		"perfect":    "No simulation (clear all conditions)",
+	}
 }
 
 // IsEndpointAllowed checks if an endpoint is allowed for a sandbox

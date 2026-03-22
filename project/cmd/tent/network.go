@@ -34,6 +34,7 @@ func networkCmd() *cobra.Command {
 	cmd.AddCommand(networkDisconnectCmd())
 	cmd.AddCommand(networkLsCmd())
 	cmd.AddCommand(networkBandwidthCmd())
+	cmd.AddCommand(networkLatencyCmd())
 
 	return cmd
 }
@@ -926,4 +927,405 @@ func getBaseDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".tent")
+}
+
+func networkLatencyCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "latency",
+		Short: "Simulate network conditions (latency, jitter, packet loss)",
+		Long: `Configure network condition simulation for sandbox testing.
+
+Simulate degraded network environments to test AI workloads under real-world
+conditions like high latency, packet loss, jitter, and rate limiting.
+
+Built-in presets:
+  3g          — 150ms latency, 30ms jitter, 1.5% loss, 384KB/s
+  satellite   — 600ms latency, 50ms jitter, 2% loss, 512KB/s
+  lossy-wifi  — 10ms latency, 20ms jitter, 5% loss, 0.5% corrupt
+  edge        — 300ms latency, 100ms jitter, 3% loss, 128KB/s
+  perfect     — Clear all conditions (normal networking)
+
+Examples:
+  tent network latency set mybox --preset 3g
+  tent network latency set mybox --latency 200ms --jitter 50ms --loss 2.0
+  tent network latency get mybox
+  tent network latency remove mybox
+  tent network latency presets`,
+	}
+
+	cmd.AddCommand(networkLatencySetCmd())
+	cmd.AddCommand(networkLatencyGetCmd())
+	cmd.AddCommand(networkLatencyRemoveCmd())
+	cmd.AddCommand(networkLatencyPresetsCmd())
+	cmd.AddCommand(networkLatencyListCmd())
+
+	return cmd
+}
+
+func networkLatencySetCmd() *cobra.Command {
+	var (
+		preset    string
+		latency   string
+		jitter    string
+		loss      float64
+		corrupt   float64
+		reorder   float64
+		duplicate float64
+		rateKB    uint32
+		jsonOut   bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "set <sandbox>",
+		Short: "Set network condition simulation for a sandbox",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+
+			cond := &network.NetworkCondition{}
+
+			// Apply preset first if specified
+			if preset != "" {
+				if err := cond.ApplyPreset(preset); err != nil {
+					return err
+				}
+			}
+
+			// Override with explicit values
+			if latency != "" {
+				ms, err := parseDurationMs(latency)
+				if err != nil {
+					return fmt.Errorf("invalid latency %q: %w", latency, err)
+				}
+				cond.LatencyMs = ms
+			}
+			if jitter != "" {
+				ms, err := parseDurationMs(jitter)
+				if err != nil {
+					return fmt.Errorf("invalid jitter %q: %w", jitter, err)
+				}
+				cond.JitterMs = ms
+			}
+			if cmd.Flags().Changed("loss") {
+				if loss < 0 || loss > 100 {
+					return fmt.Errorf("packet loss must be between 0 and 100, got %.1f", loss)
+				}
+				cond.PacketLoss = loss
+			}
+			if cmd.Flags().Changed("corrupt") {
+				if corrupt < 0 || corrupt > 100 {
+					return fmt.Errorf("corrupt must be between 0 and 100, got %.1f", corrupt)
+				}
+				cond.Corrupt = corrupt
+			}
+			if cmd.Flags().Changed("reorder") {
+				if reorder < 0 || reorder > 100 {
+					return fmt.Errorf("reorder must be between 0 and 100, got %.1f", reorder)
+				}
+				cond.Reorder = reorder
+			}
+			if cmd.Flags().Changed("duplicate") {
+				if duplicate < 0 || duplicate > 100 {
+					return fmt.Errorf("duplicate must be between 0 and 100, got %.1f", duplicate)
+				}
+				cond.Duplicate = duplicate
+			}
+			if cmd.Flags().Changed("rate") {
+				cond.RateLimitKB = rateKB
+			}
+
+			if !cond.HasConditions() && preset == "" {
+				return fmt.Errorf("no conditions specified: use --preset or set individual parameters")
+			}
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			if err := pm.SetNetworkCondition(name, cond); err != nil {
+				return fmt.Errorf("failed to set network conditions: %w", err)
+			}
+
+			// Get the updated policy and save it
+			policy, _ := pm.GetPolicy(name)
+			if policy != nil {
+				if err := pm.SavePolicy(policy); err != nil {
+					return fmt.Errorf("failed to save policy: %w", err)
+				}
+			}
+
+			if jsonOut {
+				data, _ := json.MarshalIndent(cond, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+
+			fmt.Printf("Network conditions set for sandbox %q:\n", name)
+			printNetworkCondition(cond)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&preset, "preset", "", "Apply a named preset (3g, satellite, lossy-wifi, edge, perfect)")
+	cmd.Flags().StringVar(&latency, "latency", "", "Added latency (e.g., 100ms, 1s)")
+	cmd.Flags().StringVar(&jitter, "jitter", "", "Latency jitter (e.g., 20ms)")
+	cmd.Flags().Float64Var(&loss, "loss", 0, "Packet loss percentage (0-100)")
+	cmd.Flags().Float64Var(&corrupt, "corrupt", 0, "Packet corruption percentage (0-100)")
+	cmd.Flags().Float64Var(&reorder, "reorder", 0, "Packet reorder percentage (0-100)")
+	cmd.Flags().Float64Var(&duplicate, "duplicate", 0, "Packet duplicate percentage (0-100)")
+	cmd.Flags().Uint32Var(&rateKB, "rate", 0, "Rate limit in KB/s")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func networkLatencyGetCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "get <sandbox>",
+		Short: "Show network condition simulation for a sandbox",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			cond, err := pm.GetNetworkCondition(name)
+			if err != nil {
+				return err
+			}
+
+			if jsonOut {
+				data, _ := json.MarshalIndent(cond, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+
+			if !cond.HasConditions() {
+				fmt.Printf("No network conditions configured for sandbox %q (normal networking)\n", name)
+				return nil
+			}
+
+			fmt.Printf("Network conditions for sandbox %q:\n", name)
+			printNetworkCondition(cond)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func networkLatencyRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <sandbox>",
+		Short: "Remove network condition simulation (restore normal networking)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			baseDir := getBaseDir()
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			if err := pm.RemoveNetworkCondition(name); err != nil {
+				return err
+			}
+
+			policy, _ := pm.GetPolicy(name)
+			if policy != nil {
+				if err := pm.SavePolicy(policy); err != nil {
+					return fmt.Errorf("failed to save policy: %w", err)
+				}
+			}
+
+			fmt.Printf("Network conditions removed for sandbox %q (normal networking restored)\n", name)
+			return nil
+		},
+	}
+}
+
+func networkLatencyPresetsCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "presets",
+		Short: "List available network condition presets",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			presets := network.ListPresets()
+
+			if jsonOut {
+				data, _ := json.MarshalIndent(presets, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+
+			fmt.Println("Available network condition presets:")
+			fmt.Println()
+
+			order := []string{"3g", "satellite", "lossy-wifi", "edge", "perfect"}
+			for _, name := range order {
+				desc := presets[name]
+				fmt.Printf("  %-12s %s\n", name, desc)
+			}
+			fmt.Println()
+			fmt.Println("Usage: tent network latency set <sandbox> --preset <name>")
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func networkLatencyListCmd() *cobra.Command {
+	var jsonOut bool
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all sandboxes with active network condition simulation",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			baseDir := getBaseDir()
+
+			pm, err := network.NewPolicyManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create policy manager: %w", err)
+			}
+
+			policies, err := pm.ListPolicies()
+			if err != nil {
+				return fmt.Errorf("failed to list policies: %w", err)
+			}
+
+			type condEntry struct {
+				Sandbox   string                    `json:"sandbox"`
+				Condition *network.NetworkCondition  `json:"condition"`
+			}
+
+			var entries []condEntry
+			for _, p := range policies {
+				if p.Condition != nil && p.Condition.HasConditions() {
+					entries = append(entries, condEntry{
+						Sandbox:   p.Name,
+						Condition: p.Condition,
+					})
+				}
+			}
+
+			if jsonOut {
+				data, _ := json.MarshalIndent(entries, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+
+			if len(entries) == 0 {
+				fmt.Println("No sandboxes have active network condition simulation.")
+				return nil
+			}
+
+			fmt.Printf("%-20s %-10s %-10s %-10s %-12s %s\n",
+				"SANDBOX", "LATENCY", "JITTER", "LOSS", "RATE", "PRESET")
+			for _, e := range entries {
+				c := e.Condition
+				rateStr := "unlimited"
+				if c.RateLimitKB > 0 {
+					rateStr = fmt.Sprintf("%dKB/s", c.RateLimitKB)
+				}
+				presetStr := c.Preset
+				if presetStr == "" {
+					presetStr = "custom"
+				}
+				fmt.Printf("%-20s %-10s %-10s %-10s %-12s %s\n",
+					e.Sandbox,
+					network.FormatDuration(c.LatencyMs),
+					network.FormatDuration(c.JitterMs),
+					network.FormatPercent(c.PacketLoss),
+					rateStr,
+					presetStr,
+				)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func printNetworkCondition(cond *network.NetworkCondition) {
+	if cond.Preset != "" {
+		fmt.Printf("  Preset:     %s\n", cond.Preset)
+	}
+	if cond.LatencyMs > 0 {
+		fmt.Printf("  Latency:    %s\n", network.FormatDuration(cond.LatencyMs))
+	}
+	if cond.JitterMs > 0 {
+		fmt.Printf("  Jitter:     ±%s\n", network.FormatDuration(cond.JitterMs))
+	}
+	if cond.PacketLoss > 0 {
+		fmt.Printf("  Loss:       %s\n", network.FormatPercent(cond.PacketLoss))
+	}
+	if cond.Corrupt > 0 {
+		fmt.Printf("  Corrupt:    %s\n", network.FormatPercent(cond.Corrupt))
+	}
+	if cond.Reorder > 0 {
+		fmt.Printf("  Reorder:    %s\n", network.FormatPercent(cond.Reorder))
+	}
+	if cond.Duplicate > 0 {
+		fmt.Printf("  Duplicate:  %s\n", network.FormatPercent(cond.Duplicate))
+	}
+	if cond.RateLimitKB > 0 {
+		fmt.Printf("  Rate limit: %d KB/s\n", cond.RateLimitKB)
+	}
+}
+
+// parseDurationMs parses a duration string like "100ms", "1s", "1.5s" into milliseconds.
+func parseDurationMs(s string) (uint32, error) {
+	s = strings.TrimSpace(s)
+	lower := strings.ToLower(s)
+
+	if strings.HasSuffix(lower, "ms") {
+		numStr := strings.TrimSpace(s[:len(s)-2])
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		if val < 0 {
+			return 0, fmt.Errorf("duration cannot be negative: %s", s)
+		}
+		return uint32(val), nil
+	}
+
+	if strings.HasSuffix(lower, "s") {
+		numStr := strings.TrimSpace(s[:len(s)-1])
+		val, err := strconv.ParseFloat(numStr, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q", s)
+		}
+		if val < 0 {
+			return 0, fmt.Errorf("duration cannot be negative: %s", s)
+		}
+		return uint32(val * 1000), nil
+	}
+
+	// Try plain number as milliseconds
+	val, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid duration %q: expected number with ms or s suffix", s)
+	}
+	return uint32(val), nil
 }
