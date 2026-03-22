@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/dalinkstone/tent/internal/image"
 )
 
 func imageCmd() *cobra.Command {
@@ -17,6 +17,7 @@ func imageCmd() *cobra.Command {
 
 	cmd.AddCommand(imageListCmd())
 	cmd.AddCommand(imagePullCmd())
+	cmd.AddCommand(imageExtractCmd())
 
 	return cmd
 }
@@ -28,16 +29,16 @@ func imageListCmd() *cobra.Command {
 		Long:  `List available base rootfs images.`,
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Create storage manager
+			// Create image manager
 			baseDir := os.Getenv("TENT_BASE_DIR")
 			if baseDir == "" {
 				home, _ := os.UserHomeDir()
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := storage.NewManager(baseDir)
+			manager, err := image.NewManager(baseDir)
 			if err != nil {
-				return fmt.Errorf("failed to create storage manager: %w", err)
+				return fmt.Errorf("failed to create image manager: %w", err)
 			}
 
 			// List images
@@ -83,25 +84,59 @@ func imagePullCmd() *cobra.Command {
 
 			fmt.Printf("Pulling image '%s' from %s...\n", name, url)
 
-			// Create storage manager
+			// Create image manager
 			baseDir := os.Getenv("TENT_BASE_DIR")
 			if baseDir == "" {
 				home, _ := os.UserHomeDir()
 				baseDir = home + "/.tent"
 			}
 
-			manager, err := storage.NewManager(baseDir)
+			manager, err := image.NewManager(baseDir)
 			if err != nil {
-				return fmt.Errorf("failed to create storage manager: %w", err)
+				return fmt.Errorf("failed to create image manager: %w", err)
 			}
 
 			// Pull the image
-			imagePath, err := manager.PullImage(name, url)
+			imagePath, err := manager.Pull(name, url)
 			if err != nil {
 				return fmt.Errorf("failed to pull image: %w", err)
 			}
 
 			fmt.Printf("Image '%s' pulled successfully to %s\n", name, imagePath)
+			return nil
+		},
+	}
+	return cmd
+}
+
+func imageExtractCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "extract <image>",
+		Short: "Extract kernel and initrd from an image",
+		Long:  `Extract kernel and initrd from an ISO or rootfs image.`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			imagePath := args[0]
+
+			// Create image manager
+			baseDir := os.Getenv("TENT_BASE_DIR")
+			if baseDir == "" {
+				home, _ := os.UserHomeDir()
+				baseDir = home + "/.tent"
+			}
+
+			manager, err := image.NewManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to create image manager: %w", err)
+			}
+
+			// Extract the image
+			info, err := manager.Extract(imagePath)
+			if err != nil {
+				return fmt.Errorf("failed to extract image: %w", err)
+			}
+
+			fmt.Printf("Extracted image '%s' to %s (%d MB)\n", info.Name, info.Path, info.SizeMB)
 			return nil
 		},
 	}

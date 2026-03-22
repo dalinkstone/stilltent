@@ -1,7 +1,7 @@
 package compose
 
 import (
-	"github.com/dalinkstone/tent/internal/vm"
+	"github.com/dalinkstone/tent/internal/sandbox"
 )
 
 // ComposeConfig represents the top-level compose file structure

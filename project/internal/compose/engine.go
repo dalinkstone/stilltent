@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dalinkstone/tent/internal/vm"
+	"github.com/dalinkstone/tent/internal/sandbox"
 	"github.com/dalinkstone/tent/pkg/models"
 )
 

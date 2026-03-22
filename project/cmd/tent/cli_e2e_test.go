@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/spf13/cobra"
 
-	"github.com/dalinkstone/tent/internal/vm"
+	"github.com/dalinkstone/tent/internal/sandbox"
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
