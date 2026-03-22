@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -23,6 +25,8 @@ func configCmd() *cobra.Command {
 	cmd.AddCommand(configInitCmd())
 	cmd.AddCommand(configValidateCmd())
 	cmd.AddCommand(configShowCmd())
+	cmd.AddCommand(configGetCmd())
+	cmd.AddCommand(configSetCmd())
 
 	return cmd
 }
@@ -273,6 +277,181 @@ Examples:
 	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json, yaml")
 
 	return cmd
+}
+
+func configGetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get <sandbox> <key>",
+		Short: "Get a configuration value for a sandbox",
+		Long: `Get a specific configuration property for an existing sandbox.
+
+Available keys:
+  vcpus, memory, disk, image, restart-policy, ip, status, labels, locked, ttl
+
+Examples:
+  tent config get mybox vcpus
+  tent config get mybox memory
+  tent config get mybox restart-policy`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+			key := strings.ToLower(args[1])
+			baseDir := getBaseDir()
+
+			sm, err := state.NewStateManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open state: %w", err)
+			}
+
+			vmState, err := sm.GetVM(sandboxName)
+			if err != nil {
+				return fmt.Errorf("sandbox '%s' not found", sandboxName)
+			}
+
+			value, err := getConfigValue(vmState, key, baseDir)
+			if err != nil {
+				return err
+			}
+
+			fmt.Println(value)
+			return nil
+		},
+	}
+}
+
+func getConfigValue(vm *models.VMState, key, baseDir string) (string, error) {
+	switch key {
+	case "vcpus":
+		return strconv.Itoa(vm.VCPUs), nil
+	case "memory", "memory_mb", "memory-mb":
+		return strconv.Itoa(vm.MemoryMB), nil
+	case "disk", "disk_gb", "disk-gb":
+		return strconv.Itoa(vm.DiskGB), nil
+	case "image", "from":
+		return vm.ImageRef, nil
+	case "restart-policy", "restart_policy":
+		return string(vm.RestartPolicy), nil
+	case "ip":
+		return vm.IP, nil
+	case "status":
+		return string(vm.Status), nil
+	case "rootfs":
+		return vm.RootFSPath, nil
+	case "locked":
+		return strconv.FormatBool(vm.Locked), nil
+	case "ttl":
+		return vm.TTL, nil
+	case "labels":
+		if len(vm.Labels) == 0 {
+			return "{}", nil
+		}
+		data, err := json.Marshal(vm.Labels)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	default:
+		return "", fmt.Errorf("unknown config key '%s'. Available keys: vcpus, memory, disk, image, restart-policy, ip, status, rootfs, locked, ttl, labels", key)
+	}
+}
+
+func configSetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "set <sandbox> <key> <value>",
+		Short: "Set a configuration value for a sandbox",
+		Long: `Set a specific configuration property for an existing sandbox.
+The sandbox must be stopped to change most properties.
+
+Settable keys:
+  vcpus, memory, disk, restart-policy, ttl
+
+Examples:
+  tent config set mybox vcpus 4
+  tent config set mybox memory 2048
+  tent config set mybox restart-policy on-failure
+  tent config set mybox ttl 2h`,
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sandboxName := args[0]
+			key := strings.ToLower(args[1])
+			value := args[2]
+			baseDir := getBaseDir()
+
+			sm, err := state.NewStateManager(baseDir)
+			if err != nil {
+				return fmt.Errorf("failed to open state: %w", err)
+			}
+
+			vmState, err := sm.GetVM(sandboxName)
+			if err != nil {
+				return fmt.Errorf("sandbox '%s' not found", sandboxName)
+			}
+
+			if vmState.Locked {
+				return fmt.Errorf("sandbox '%s' is locked: %s", sandboxName, vmState.LockedReason)
+			}
+
+			// Most config changes require sandbox to be stopped
+			requiresStopped := key != "ttl" && key != "restart-policy" && key != "restart_policy"
+			if requiresStopped && vmState.Status == models.VMStatusRunning {
+				return fmt.Errorf("sandbox '%s' must be stopped to change '%s' (current status: %s)", sandboxName, key, vmState.Status)
+			}
+
+			err = sm.UpdateVM(sandboxName, func(vm *models.VMState) error {
+				return setConfigValue(vm, key, value)
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Set %s=%s for sandbox '%s'\n", key, value, sandboxName)
+			return nil
+		},
+	}
+}
+
+func setConfigValue(vm *models.VMState, key, value string) error {
+	switch key {
+	case "vcpus":
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid vcpus value: %w", err)
+		}
+		if v < 1 || v > 128 {
+			return fmt.Errorf("vcpus must be between 1 and 128")
+		}
+		vm.VCPUs = v
+	case "memory", "memory_mb", "memory-mb":
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid memory value: %w", err)
+		}
+		if v < 128 {
+			return fmt.Errorf("memory must be at least 128 MB")
+		}
+		vm.MemoryMB = v
+	case "disk", "disk_gb", "disk-gb":
+		v, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("invalid disk value: %w", err)
+		}
+		if v < 1 {
+			return fmt.Errorf("disk must be at least 1 GB")
+		}
+		vm.DiskGB = v
+	case "restart-policy", "restart_policy":
+		switch models.RestartPolicy(value) {
+		case models.RestartPolicyNever, models.RestartPolicyAlways, models.RestartPolicyOnFailure:
+			vm.RestartPolicy = models.RestartPolicy(value)
+		default:
+			return fmt.Errorf("invalid restart policy '%s'. Options: never, always, on-failure", value)
+		}
+	case "ttl":
+		vm.TTL = value
+	default:
+		return fmt.Errorf("cannot set key '%s'. Settable keys: vcpus, memory, disk, restart-policy, ttl", key)
+	}
+	return nil
 }
 
 // validateWarnings returns non-fatal warnings about a config
