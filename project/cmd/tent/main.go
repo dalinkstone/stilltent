@@ -65,6 +65,7 @@ func main() {
 	rootCmd.AddCommand(secretCmd())
 	rootCmd.AddCommand(scanCmd())
 	rootCmd.AddCommand(watchCmd())
+	rootCmd.AddCommand(rollbackCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
