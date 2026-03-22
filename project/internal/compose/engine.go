@@ -153,6 +153,19 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 			return nil, fmt.Errorf("failed to create sandbox %s: %w", sandboxName, err)
 		}
 
+		// Run post_create hooks (before first start)
+		if sandboxConfig.Hooks != nil && len(sandboxConfig.Hooks.PostCreate) > 0 {
+			// Start temporarily to run hooks, then the main start below continues
+			if err := m.vmManager.Start(sandboxName); err != nil {
+				return nil, fmt.Errorf("failed to start sandbox %s for post_create hooks: %w", sandboxName, err)
+			}
+			if _, err := m.runHooks(sandboxName, sandboxConfig.Hooks, HookPostCreate, false); err != nil {
+				return nil, fmt.Errorf("post_create hooks failed for %s: %w", sandboxName, err)
+			}
+			// Stop so the main start below is clean
+			_ = m.vmManager.Stop(sandboxName)
+		}
+
 		if err := m.vmManager.Start(sandboxName); err != nil {
 			return nil, fmt.Errorf("failed to start sandbox %s: %w", sandboxName, err)
 		}
@@ -177,6 +190,13 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 			}
 		}
 
+		// Run post_start hooks (after sandbox is running and reachable)
+		if sandboxConfig.Hooks != nil && len(sandboxConfig.Hooks.PostStart) > 0 {
+			if _, err := m.runHooks(sandboxName, sandboxConfig.Hooks, HookPostStart, false); err != nil {
+				return nil, fmt.Errorf("post_start hooks failed for %s: %w", sandboxName, err)
+			}
+		}
+
 		// Save compose state
 		if err := m.stateManager.SaveComposeState(name, status); err != nil {
 			return nil, fmt.Errorf("failed to save compose state: %w", err)
@@ -188,6 +208,12 @@ func (m *ComposeManager) Up(name string, config *ComposeConfig) (*ComposeStatus,
 
 // Down stops and destroys all sandboxes in a compose group
 func (m *ComposeManager) Down(name string) error {
+	return m.DownWithConfig(name, nil)
+}
+
+// DownWithConfig stops and destroys all sandboxes in a compose group.
+// If config is provided, lifecycle hooks (pre_stop, pre_destroy) are executed.
+func (m *ComposeManager) DownWithConfig(name string, config *ComposeConfig) error {
 	// Stop the DNS server for this compose group
 	if dns, ok := m.dnsServers[name]; ok {
 		dns.Stop()
@@ -202,11 +228,37 @@ func (m *ComposeManager) Down(name string) error {
 	// Stop sandboxes in reverse dependency order (dependents first)
 	stopOrder := reverseOrder(status.StartOrder, status.Sandboxes)
 
+	// Build config lookup for hooks
+	var sandboxConfigs map[string]*SandboxConfig
+	if config != nil {
+		sandboxConfigs = config.Sandboxes
+	}
+
 	var errors []string
 	for _, sandboxName := range stopOrder {
+		// Run pre_stop hooks before stopping
+		if sandboxConfigs != nil {
+			if cfg, ok := sandboxConfigs[sandboxName]; ok && cfg.Hooks != nil {
+				if _, err := m.runHooks(sandboxName, cfg.Hooks, HookPreStop, true); err != nil {
+					errors = append(errors, fmt.Sprintf("pre_stop hook failed for %s: %v", sandboxName, err))
+				}
+			}
+		}
+
 		// Stop sandbox
 		if err := m.vmManager.Stop(sandboxName); err != nil {
 			errors = append(errors, fmt.Sprintf("failed to stop %s: %v", sandboxName, err))
+		}
+
+		// Run pre_destroy hooks before destroying
+		if sandboxConfigs != nil {
+			if cfg, ok := sandboxConfigs[sandboxName]; ok && cfg.Hooks != nil && len(cfg.Hooks.PreDestroy) > 0 {
+				// Start briefly to run pre_destroy hooks
+				if startErr := m.vmManager.Start(sandboxName); startErr == nil {
+					m.runHooks(sandboxName, cfg.Hooks, HookPreDestroy, true)
+					_ = m.vmManager.Stop(sandboxName)
+				}
+			}
 		}
 
 		// Destroy sandbox

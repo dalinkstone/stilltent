@@ -42,6 +42,7 @@ func composeCmd() *cobra.Command {
 	cmd.AddCommand(composeGraphCmd())
 	cmd.AddCommand(composeVolumeCmd())
 	cmd.AddCommand(composeHealthCmd())
+	cmd.AddCommand(composeHooksCmd())
 
 	return cmd
 }
@@ -129,10 +130,16 @@ func composeDownCmd() *cobra.Command {
 				return err
 			}
 
+			// Try to parse compose file for lifecycle hooks
+			var config *compose.ComposeConfig
+			if data, readErr := os.ReadFile(filePath); readErr == nil {
+				config, _ = compose.ParseConfig(data)
+			}
+
 			groupName := composeGroupName(filePath)
 			fmt.Printf("Stopping compose group '%s'...\n", groupName)
 
-			if err := manager.Down(groupName); err != nil {
+			if err := manager.DownWithConfig(groupName, config); err != nil {
 				return fmt.Errorf("failed to stop compose group: %w", err)
 			}
 
@@ -1449,4 +1456,121 @@ Examples:
 	cmd.Flags().StringVar(&service, "service", "", "Show health for a specific service only")
 	cmd.Flags().BoolVar(&watch, "watch", false, "Watch health checks in real-time")
 	return cmd
+}
+
+func composeHooksCmd() *cobra.Command {
+	var (
+		outputJSON bool
+		service    string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "hooks <file>",
+		Short: "Show lifecycle hooks configured for services in a compose file",
+		Long: `Display lifecycle hooks (post_create, post_start, pre_stop, pre_destroy)
+configured for each service in a compose file.
+
+Hooks run at specific points in the sandbox lifecycle:
+  post_create  - After creation, before first start (one-time setup)
+  post_start   - After the sandbox is started and reachable (initialization)
+  pre_stop     - Before the sandbox is stopped (graceful shutdown)
+  pre_destroy  - Before the sandbox is destroyed (cleanup)
+
+Examples:
+  tent compose hooks tent-compose.yaml
+  tent compose hooks tent-compose.yaml --service agent
+  tent compose hooks tent-compose.yaml --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			filePath := args[0]
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return fmt.Errorf("failed to read compose file: %w", err)
+			}
+
+			config, err := compose.ParseConfig(data)
+			if err != nil {
+				return fmt.Errorf("failed to parse compose file: %w", err)
+			}
+
+			// Collect hooks info
+			type hookInfo struct {
+				Service     string              `json:"service"`
+				PostCreate  []string            `json:"post_create,omitempty"`
+				PostStart   []string            `json:"post_start,omitempty"`
+				PreStop     []string            `json:"pre_stop,omitempty"`
+				PreDestroy  []string            `json:"pre_destroy,omitempty"`
+			}
+
+			var hooks []hookInfo
+			names := make([]string, 0, len(config.Sandboxes))
+			for name := range config.Sandboxes {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+
+			for _, name := range names {
+				if service != "" && name != service {
+					continue
+				}
+				cfg := config.Sandboxes[name]
+				if cfg.Hooks == nil {
+					continue
+				}
+				h := cfg.Hooks
+				if len(h.PostCreate) == 0 && len(h.PostStart) == 0 &&
+					len(h.PreStop) == 0 && len(h.PreDestroy) == 0 {
+					continue
+				}
+				hooks = append(hooks, hookInfo{
+					Service:    name,
+					PostCreate: h.PostCreate,
+					PostStart:  h.PostStart,
+					PreStop:    h.PreStop,
+					PreDestroy: h.PreDestroy,
+				})
+			}
+
+			if outputJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(hooks)
+			}
+
+			if len(hooks) == 0 {
+				if service != "" {
+					fmt.Printf("No lifecycle hooks configured for service %q\n", service)
+				} else {
+					fmt.Println("No lifecycle hooks configured in this compose file")
+				}
+				return nil
+			}
+
+			for _, h := range hooks {
+				fmt.Printf("Service: %s\n", h.Service)
+				printHookList("  post_create", h.PostCreate)
+				printHookList("  post_start", h.PostStart)
+				printHookList("  pre_stop", h.PreStop)
+				printHookList("  pre_destroy", h.PreDestroy)
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	cmd.Flags().StringVar(&service, "service", "", "Show hooks for a specific service only")
+	return cmd
+}
+
+func printHookList(label string, commands []string) {
+	if len(commands) == 0 {
+		return
+	}
+	fmt.Printf("%s:\n", label)
+	for _, cmd := range commands {
+		fmt.Printf("    - %s\n", cmd)
+	}
 }

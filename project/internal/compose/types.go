@@ -32,6 +32,24 @@ type SandboxConfig struct {
 	DependsOn     []string          `yaml:"depends_on,omitempty"`
 	HealthCheck   *HealthCheckConf  `yaml:"health_check,omitempty"`
 	RestartPolicy string            `yaml:"restart,omitempty"` // "no", "on-failure", "always"
+	Hooks         *LifecycleHooks   `yaml:"hooks,omitempty"`
+}
+
+// LifecycleHooks defines commands to run at various stages of sandbox lifecycle.
+// Each hook is a list of shell commands executed inside the sandbox.
+type LifecycleHooks struct {
+	// PostStart runs inside the sandbox after it has started and is reachable.
+	// Use for initialization: warming caches, running migrations, seeding data.
+	PostStart []string `yaml:"post_start,omitempty"`
+	// PreStop runs inside the sandbox before it is stopped.
+	// Use for graceful shutdown: draining connections, flushing buffers.
+	PreStop []string `yaml:"pre_stop,omitempty"`
+	// PostCreate runs inside the sandbox after creation but before first start.
+	// Use for one-time setup: installing packages, configuring services.
+	PostCreate []string `yaml:"post_create,omitempty"`
+	// PreDestroy runs inside the sandbox before it is destroyed.
+	// Use for cleanup: exporting data, sending notifications.
+	PreDestroy []string `yaml:"pre_destroy,omitempty"`
 }
 
 // HealthCheckConf defines a health check for a sandbox service
