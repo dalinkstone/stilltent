@@ -27,7 +27,10 @@ type VMConfig struct {
 	MemoryMB  int           `yaml:"memory_mb" json:"memory_mb"`
 	Kernel    string        `yaml:"kernel" json:"kernel,omitempty"`
 	RootFS    string        `yaml:"rootfs" json:"rootfs,omitempty"`
+	Initrd        string        `yaml:"initrd" json:"initrd,omitempty"`
+	KernelCmdline string        `yaml:"kernel_cmdline" json:"kernel_cmdline,omitempty"`
 	DiskGB    int           `yaml:"disk_gb" json:"disk_gb"`
+	Backend   string        `yaml:"backend" json:"backend,omitempty"` // hypervisor backend: "hvf", "vz", "kvm", "firecracker"
 	Network   NetworkConfig `yaml:"network" json:"network"`
 	Mounts    []MountConfig `yaml:"mounts" json:"mounts,omitempty"`
 	Env            map[string]string  `yaml:"env" json:"env,omitempty"`

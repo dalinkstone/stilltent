@@ -260,7 +260,7 @@ Examples:
 	cmd.Flags().StringSliceVar(&portSpecs, "port", nil, "Port forwarding in hostPort:guestPort format (can be repeated)")
 	cmd.Flags().StringSliceVar(&labelSpecs, "label", nil, "Labels in key=value format (can be repeated)")
 	cmd.Flags().StringSliceVar(&hookSpecs, "hook", nil, "Lifecycle hooks in phase:command format (e.g., pre_start:echo hello)")
-	cmd.Flags().StringVar(&backendName, "backend", "", "Hypervisor backend (e.g., kvm, hvf, firecracker)")
+	cmd.Flags().StringVar(&backendName, "backend", "", "Hypervisor backend (e.g., hvf, vz, kvm, firecracker)")
 	cmd.Flags().IntVar(&cpuWeight, "cpu-weight", 0, "CPU scheduling weight (1-10000)")
 	cmd.Flags().IntVar(&cpuMax, "cpu-max", 0, "Maximum CPU usage as percentage")
 	cmd.Flags().IntVar(&memMax, "memory-max", 0, "Hard memory limit in MB")
