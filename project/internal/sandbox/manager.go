@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -446,7 +448,8 @@ func (m *VMManager) Start(name string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Resolve kernel path — "default" or empty means use the kernel store's default
+	// Resolve kernel path — "default" or empty means use the kernel store's default.
+	// If no kernel is installed, auto-download one.
 	if config.Kernel == "" || config.Kernel == "default" {
 		kernelStore, err := boot.NewKernelStore(m.baseDir)
 		if err != nil {
@@ -454,7 +457,12 @@ func (m *VMManager) Start(name string) error {
 		}
 		entry, err := kernelStore.GetDefault()
 		if err != nil {
-			return fmt.Errorf("no kernel available: %w\n\nTo add a kernel:\n  tent kernel add /path/to/vmlinuz\n\nFor macOS (Apple Silicon), download a Linux ARM64 kernel:\n  curl -LO https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-arm64-vmlinuz-generic\n  tent kernel add ubuntu-22.04-server-cloudimg-arm64-vmlinuz-generic", err)
+			// No kernel available — auto-download one
+			fmt.Println("No kernel installed. Downloading Linux kernel for this platform...")
+			entry, err = m.autoProvisionKernel(kernelStore)
+			if err != nil {
+				return fmt.Errorf("failed to auto-provision kernel: %w\n\nYou can also add one manually:\n  tent kernel add /path/to/vmlinuz", err)
+			}
 		}
 		config.Kernel = entry.Path
 		if config.Initrd == "" && entry.InitrdPath != "" {
@@ -1912,6 +1920,59 @@ func writeTarFile(tw *tar.Writer, name string, srcPath string, size int64) error
 	defer f.Close()
 	_, err = io.Copy(tw, f)
 	return err
+}
+
+// autoProvisionKernel downloads a Linux kernel appropriate for the current platform.
+func (m *VMManager) autoProvisionKernel(kernelStore *boot.KernelStore) (*boot.KernelEntry, error) {
+	kernelURL := ""
+	arch := ""
+
+	switch runtime.GOARCH {
+	case "arm64":
+		kernelURL = "https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-arm64-vmlinuz-generic"
+		arch = "arm64"
+	case "amd64":
+		kernelURL = "https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-amd64-vmlinuz-generic"
+		arch = "amd64"
+	default:
+		return nil, fmt.Errorf("no pre-built kernel available for architecture %s", runtime.GOARCH)
+	}
+
+	fmt.Printf("Downloading Linux kernel for %s...\n", arch)
+
+	tmpFile := filepath.Join(m.baseDir, "kernel-download-tmp")
+	defer os.Remove(tmpFile)
+
+	resp, err := http.Get(kernelURL)
+	if err != nil {
+		return nil, fmt.Errorf("download kernel: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("download kernel: HTTP %d", resp.StatusCode)
+	}
+
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return nil, fmt.Errorf("create temp file: %w", err)
+	}
+
+	n, err := io.Copy(f, resp.Body)
+	f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("download kernel: %w", err)
+	}
+
+	fmt.Printf("Downloaded %d MB. Adding to kernel store...\n", n/(1024*1024))
+
+	entry, err := kernelStore.Add(tmpFile, "ubuntu-22.04-"+arch, nil)
+	if err != nil {
+		return nil, fmt.Errorf("add kernel to store: %w", err)
+	}
+
+	fmt.Printf("Kernel ready: %s (%s, %s)\n", entry.Version, entry.Format, entry.Arch)
+	return entry, nil
 }
 
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {

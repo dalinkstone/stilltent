@@ -41,6 +41,7 @@ typedef struct {
 	int   state;       // last known state
 	int   vcpuCount;
 	unsigned long long memoryBytes;
+	char  lastError[512]; // last error description
 } vzVMHandle;
 
 static vzVMHandle* vz_create_config(int vcpus, unsigned long long memoryBytes,
@@ -172,6 +173,11 @@ static int vz_start(vzVMHandle *h) {
 			[vm startWithCompletionHandler:^(NSError *err) {
 				if (err) {
 					result = -1;
+					const char *desc = [[err localizedDescription] UTF8String];
+					if (desc) {
+						strncpy(h->lastError, desc, sizeof(h->lastError) - 1);
+						h->lastError[sizeof(h->lastError) - 1] = '\0';
+					}
 				} else {
 					result = 0;
 				}
@@ -298,6 +304,11 @@ static int vz_get_state(vzVMHandle *h) {
 		h->state = state;
 		return state;
 	}
+}
+
+static const char* vz_last_error(vzVMHandle *h) {
+	if (!h || h->lastError[0] == '\0') return NULL;
+	return h->lastError;
 }
 
 static void vz_destroy(vzVMHandle *h) {
@@ -473,9 +484,16 @@ func (v *VM) Start() error {
 
 	ret := C.vz_start(handle)
 	if ret != 0 {
+		errMsg := ""
+		if cErr := C.vz_last_error(handle); cErr != nil {
+			errMsg = C.GoString(cErr)
+		}
 		C.vz_destroy(handle)
 		if ret == -2 {
 			return fmt.Errorf("VM %s start timed out (30s)", v.config.Name)
+		}
+		if errMsg != "" {
+			return fmt.Errorf("VM %s failed to start: %s", v.config.Name, errMsg)
 		}
 		return fmt.Errorf("VM %s failed to start (error %d)", v.config.Name, ret)
 	}

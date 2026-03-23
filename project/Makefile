@@ -15,14 +15,14 @@ sign: build
 	codesign --force --sign - --entitlements tent.entitlements tent-agent
 
 install: sign
-	@echo "Installing tent to $(PREFIX)..."
-	install -d $(PREFIX)
-	install -m 755 tent $(PREFIX)/tent
-	install -m 755 tent-agent $(PREFIX)/tent-agent
+	@echo "Installing tent to $(PREFIX)... (may require sudo)"
+	sudo install -d $(PREFIX)
+	sudo install -m 755 tent $(PREFIX)/tent
+	sudo install -m 755 tent-agent $(PREFIX)/tent-agent
 	@echo "Done. Run 'tent --help' to get started."
 
 uninstall:
-	rm -f $(PREFIX)/tent $(PREFIX)/tent-agent
+	sudo rm -f $(PREFIX)/tent $(PREFIX)/tent-agent
 
 test:
 	go test ./... -v -count=1

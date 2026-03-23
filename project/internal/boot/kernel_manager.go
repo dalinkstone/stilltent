@@ -3,6 +3,8 @@
 package boot
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -142,6 +144,23 @@ func (ks *KernelStore) Add(srcPath, version string, labels map[string]string) (*
 	if err != nil {
 		return nil, fmt.Errorf("read kernel: %w", err)
 	}
+
+	// Auto-decompress gzip kernels — VZ requires uncompressed kernel images
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		gr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("decompress gzip kernel: %w", err)
+		}
+		decompressed, err := io.ReadAll(gr)
+		gr.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decompress gzip kernel: %w", err)
+		}
+		data = decompressed
+		fmt.Printf("Decompressed gzip kernel (%d MB -> %d MB)\n",
+			info.Size()/(1024*1024), len(data)/(1024*1024))
+	}
+
 	hash := sha256.Sum256(data)
 	hashStr := hex.EncodeToString(hash[:])
 
