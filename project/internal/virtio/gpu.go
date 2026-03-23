@@ -253,11 +253,10 @@ func (g *VirtioGPU) Start() error {
 
 // Stop shuts down the GPU device.
 func (g *VirtioGPU) Stop() error {
-	if !g.running.Load() {
+	if !g.running.CompareAndSwap(true, false) {
 		return nil
 	}
 
-	g.running.Store(false)
 	close(g.stopCh)
 	return nil
 }
@@ -479,6 +478,13 @@ func (g *VirtioGPU) cmdResourceCreate2D(hdr gpuCtrlHeader, data []byte) []byte {
 	height := binary.LittleEndian.Uint32(data[offset+12 : offset+16])
 
 	if resID == 0 || width == 0 || height == 0 {
+		return encodeGPUCtrlHeader(gpuCtrlHeader{Type: VirtioGPURespErrInvalidParam})
+	}
+
+	// Sanity-check dimensions to prevent integer overflow and excessive allocation.
+	// Limit to 16384x16384 (1 GiB at 4 BPP), well beyond any practical display.
+	const maxDim = 16384
+	if width > maxDim || height > maxDim {
 		return encodeGPUCtrlHeader(gpuCtrlHeader{Type: VirtioGPURespErrInvalidParam})
 	}
 

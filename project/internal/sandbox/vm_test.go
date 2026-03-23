@@ -707,6 +707,23 @@ func TestDestroyVM_NotFound(t *testing.T) {
 func TestStartVM(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	// Create a dummy kernel file so the kernel resolution step succeeds
+	dummyKernel := filepath.Join(tmpDir, "vmlinuz")
+	if err := os.WriteFile(dummyKernel, []byte("fake-kernel"), 0644); err != nil {
+		t.Fatalf("failed to create dummy kernel: %v", err)
+	}
+
+	// Write a config file with the kernel path set so Start() doesn't
+	// try to look up the kernel store's default
+	configDir := filepath.Join(tmpDir, "configs")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+	configYAML := fmt.Sprintf("name: test-vm\nkernel: %s\nvcpus: 2\nmemory_mb: 512\n", dummyKernel)
+	if err := os.WriteFile(filepath.Join(configDir, "test-vm.yaml"), []byte(configYAML), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
 	// Setup state with created VM
 	mockState := &mockStateManager{
 		vms: map[string]*models.VMState{

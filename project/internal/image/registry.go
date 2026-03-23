@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -153,7 +154,7 @@ func (c *RegistryClient) FetchLayers(registry, repo string, manifest *OCIManifes
 	return layers
 }
 
-// DownloadLayer streams a layer blob from the registry.
+// DownloadLayer streams a layer blob from the registry, decompressing gzip layers.
 // The caller is responsible for closing the returned reader.
 func (c *RegistryClient) DownloadLayer(registry, repo string, layer LayerInfo) (io.ReadCloser, error) {
 	body, _, err := c.registryGet(registry, repo, layer.URL, "application/octet-stream")
@@ -171,6 +172,18 @@ func (c *RegistryClient) DownloadLayer(registry, repo string, layer LayerInfo) (
 		return &gzipReadCloser{gz: gz, underlying: body}, nil
 	}
 
+	return body, nil
+}
+
+// DownloadLayerRaw streams the raw (compressed) layer blob from the registry
+// without decompressing. This is suitable for caching the original blob so
+// that its digest can be verified. The caller is responsible for closing the
+// returned reader.
+func (c *RegistryClient) DownloadLayerRaw(registry, repo string, layer LayerInfo) (io.ReadCloser, error) {
+	body, _, err := c.registryGet(registry, repo, layer.URL, "application/octet-stream")
+	if err != nil {
+		return nil, fmt.Errorf("failed to download layer %s: %w", layer.Digest, err)
+	}
 	return body, nil
 }
 
@@ -344,12 +357,12 @@ func (c *RegistryClient) fetchToken(challenge, registry, repo string) (string, i
 	// Build token request URL
 	tokenURL := realm + "?"
 	if svc, ok := params["service"]; ok {
-		tokenURL += "service=" + svc + "&"
+		tokenURL += "service=" + url.QueryEscape(svc) + "&"
 	}
 	if scope, ok := params["scope"]; ok {
-		tokenURL += "scope=" + scope
+		tokenURL += "scope=" + url.QueryEscape(scope)
 	} else {
-		tokenURL += "scope=repository:" + repo + ":pull"
+		tokenURL += "scope=repository:" + url.QueryEscape(repo) + ":pull"
 	}
 
 	req, err := http.NewRequest("GET", tokenURL, nil)
@@ -546,9 +559,9 @@ func (c *RegistryClient) fetchTokenWithScope(challenge, registry, repo, scope st
 
 	tokenURL := realm + "?"
 	if svc, ok := params["service"]; ok {
-		tokenURL += "service=" + svc + "&"
+		tokenURL += "service=" + url.QueryEscape(svc) + "&"
 	}
-	tokenURL += "scope=repository:" + repo + ":" + scope
+	tokenURL += "scope=repository:" + url.QueryEscape(repo) + ":" + url.QueryEscape(scope)
 
 	req, err := http.NewRequest("GET", tokenURL, nil)
 	if err != nil {
@@ -711,7 +724,7 @@ func (c *RegistryClient) SearchImages(registry, query string, limit int) ([]Sear
 	}
 
 	normalized := NormalizeRegistry(registry)
-	if normalized == "registry-1.docker.io" || normalized == "docker.io" || registry == "" {
+	if normalized == "registry-1.docker.io" {
 		return c.searchDockerHub(query, limit)
 	}
 
@@ -793,9 +806,6 @@ func (c *RegistryClient) searchCatalog(registry, query string, limit int) ([]Sea
 // ListTags retrieves all tags for a repository from a registry.
 func (c *RegistryClient) ListTags(registry, repo string) ([]string, error) {
 	normalized := NormalizeRegistry(registry)
-	if normalized == "" {
-		normalized = "registry-1.docker.io"
-	}
 
 	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", normalized, repo)
 

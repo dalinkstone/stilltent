@@ -200,7 +200,7 @@ Examples:
 func collectSandboxMetrics(baseDir string) *metrics.Collector {
 	collector := metrics.NewCollector(60)
 
-	sm, err := state.NewStateManager(baseDir + "/state.json")
+	sm, err := state.NewStateManager(baseDir)
 	if err != nil {
 		return collector
 	}

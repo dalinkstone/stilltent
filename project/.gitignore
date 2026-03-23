@@ -12,4 +12,41 @@ docs/memory/
 
 # Build artifacts
 /tent
+/tent-agent
 *.exe
+
+# Runtime state — never commit (may contain secrets, keys, IPs)
+state.json
+*.state
+events.log
+
+# SSH keys
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+*.pem
+
+# Credentials and secrets
+credentials.json
+vault.key
+*.key
+*.secret
+*.token
+
+# Config files (may contain env vars with API keys)
+configs/
+
+# Runtime directories
+keys/
+secrets/
+rootfs/
+images/
+logs/
+network-policies/
+webhooks.json
+
+# Environment files
+.env
+.env.*
+!.env.example

@@ -15,17 +15,24 @@ func TestParseImageRef(t *testing.T) {
 		wantTag    string
 	}{
 		{
-			name:    "ubuntu basic",
+			name:    "ubuntu with tag",
 			ref:     "ubuntu:22.04",
-			wantReg: "registry.hub.docker.com",
-			wantRepo: "library/ubuntu:22.04",
-			wantTag: "latest",
+			wantReg: "registry-1.docker.io",
+			wantRepo: "library/ubuntu",
+			wantTag: "22.04",
 		},
 		{
 			name:    "alpine with tag",
 			ref:     "alpine:3.18",
-			wantReg: "registry.hub.docker.com",
-			wantRepo: "library/alpine:3.18",
+			wantReg: "registry-1.docker.io",
+			wantRepo: "library/alpine",
+			wantTag: "3.18",
+		},
+		{
+			name:    "ubuntu no tag",
+			ref:     "ubuntu",
+			wantReg: "registry-1.docker.io",
+			wantRepo: "library/ubuntu",
 			wantTag: "latest",
 		},
 		{
@@ -45,7 +52,7 @@ func TestParseImageRef(t *testing.T) {
 		{
 			name:    "docker hub org",
 			ref:     "myorg/myapp",
-			wantReg: "registry.hub.docker.com",
+			wantReg: "registry-1.docker.io",
 			wantRepo: "myorg/myapp",
 			wantTag: "latest",
 		},
@@ -82,12 +89,8 @@ func TestDetectFormatISO(t *testing.T) {
 	tmpDir := t.TempDir()
 	imagePath := filepath.Join(tmpDir, "test.iso")
 
-	// Note: DetectFormat currently only reads 512 bytes, so it cannot
-	// detect ISO9660 at offset 0x8001. This is a known limitation of
-	// the current implementation.
-	// For now, we test with a QCOW2 format which is detected from the first bytes.
-
-	// Create a file with QCOW2 magic number at offset 0
+	// Create a file with QCOW2 magic number at offset 0 (DetectFormat uses
+	// ReadAt so it can detect magic numbers at any offset).
 	data := []byte{'Q', 'F', 'I', 0xfb, 0, 0, 0, 0}
 
 	err := os.WriteFile(imagePath, data, 0644)

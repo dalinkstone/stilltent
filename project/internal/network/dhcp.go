@@ -364,9 +364,16 @@ func (s *DHCPServer) handleRequest(pkt *dhcpPacket) *dhcpPacket {
 		return s.buildResponse(pkt, DHCPNak, nil)
 	}
 
-	// Verify IP is in our range and available
+	// Verify IP is in our range
 	if !s.subnet.Contains(requestedIP) {
 		return s.buildResponse(pkt, DHCPNak, nil)
+	}
+
+	// Check that the IP is not already leased to a different MAC
+	for otherMAC, lease := range s.leases {
+		if otherMAC != macStr && lease.IP.Equal(requestedIP) && lease.ExpiresAt.After(time.Now()) {
+			return s.buildResponse(pkt, DHCPNak, nil)
+		}
 	}
 
 	// Create or update lease
@@ -434,7 +441,7 @@ func (s *DHCPServer) vmNameForMAC(macStr string) string {
 // buildResponse constructs a DHCP response packet
 func (s *DHCPServer) buildResponse(req *dhcpPacket, msgType byte, offerIP net.IP) *dhcpPacket {
 	resp := &dhcpPacket{
-		data: make([]byte, 300),
+		data: make([]byte, 576),
 	}
 
 	// Op: BOOTREPLY
@@ -452,10 +459,7 @@ func (s *DHCPServer) buildResponse(req *dhcpPacket, msgType byte, offerIP net.IP
 	// Flags - copy from request
 	copy(resp.data[10:12], req.data[10:12])
 
-	// CIAddr - zero for offer, client IP for ack
-	if msgType == DHCPAck {
-		copy(resp.data[12:16], offerIP.To4())
-	}
+	// CIAddr - leave as zero (client-filled field per RFC 2131)
 
 	// YIAddr - offered IP
 	if offerIP != nil {

@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/dalinkstone/tent/internal/boot"
 	"github.com/dalinkstone/tent/internal/console"
 	"github.com/dalinkstone/tent/internal/hypervisor"
 	"github.com/dalinkstone/tent/internal/network"
@@ -89,6 +91,7 @@ type VMManager struct {
 	accounting      *AccountingManager
 	baseDir        string
 	execCommand    func(cmd string, args ...string) *exec.Cmd
+	mu             sync.Mutex               // Protects runningVMs
 	runningVMs     map[string]hypervisor.VM // Track running VM instances
 }
 
@@ -419,7 +422,7 @@ func (m *VMManager) saveConfig(config *models.VMConfig) error {
 	}
 
 	configPath := filepath.Join(configDir, fmt.Sprintf("%s.yaml", config.Name))
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
@@ -441,6 +444,22 @@ func (m *VMManager) Start(name string) error {
 	config, err := m.loadConfigFromState(vmState)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Resolve kernel path — "default" or empty means use the kernel store's default
+	if config.Kernel == "" || config.Kernel == "default" {
+		kernelStore, err := boot.NewKernelStore(m.baseDir)
+		if err != nil {
+			return fmt.Errorf("failed to open kernel store: %w", err)
+		}
+		entry, err := kernelStore.GetDefault()
+		if err != nil {
+			return fmt.Errorf("no kernel available: %w\n\nTo add a kernel:\n  tent kernel add /path/to/vmlinuz\n\nFor macOS (Apple Silicon), download a Linux ARM64 kernel:\n  curl -LO https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-arm64-vmlinuz-generic\n  tent kernel add ubuntu-22.04-server-cloudimg-arm64-vmlinuz-generic", err)
+		}
+		config.Kernel = entry.Path
+		if config.Initrd == "" && entry.InitrdPath != "" {
+			config.Initrd = entry.InitrdPath
+		}
 	}
 
 	// Run pre-start lifecycle hooks
@@ -489,7 +508,9 @@ func (m *VMManager) Start(name string) error {
 	}
 
 	// Track running VM
+	m.mu.Lock()
 	m.runningVMs[name] = vm
+	m.mu.Unlock()
 
 	// Apply resource limits
 	if config.Resources != nil {
@@ -535,7 +556,9 @@ func (m *VMManager) Start(name string) error {
 		return nil
 	}); err != nil {
 		vm.Stop()
+		m.mu.Lock()
 		delete(m.runningVMs, name)
+		m.mu.Unlock()
 		return fmt.Errorf("failed to update state: %w", err)
 	}
 
@@ -582,7 +605,9 @@ func (m *VMManager) Stop(name string) error {
 	}
 
 	// Get running VM instance
+	m.mu.Lock()
 	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("VM %s not found in running VMs", name)
 	}
@@ -616,7 +641,9 @@ func (m *VMManager) Stop(name string) error {
 	}
 
 	// Remove from running VMs
+	m.mu.Lock()
 	delete(m.runningVMs, name)
+	m.mu.Unlock()
 
 	// Update state
 	vmState.Status = models.VMStatusStopped
@@ -666,7 +693,9 @@ func (m *VMManager) Pause(name string) error {
 		return fmt.Errorf("VM %s is not running (status: %s)", name, vmState.Status)
 	}
 
+	m.mu.Lock()
 	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("VM %s not found in running VMs", name)
 	}
@@ -703,7 +732,9 @@ func (m *VMManager) Unpause(name string) error {
 		return fmt.Errorf("VM %s is not paused (status: %s)", name, vmState.Status)
 	}
 
+	m.mu.Lock()
 	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("VM %s not found in running VMs", name)
 	}
@@ -804,18 +835,24 @@ func (m *VMManager) Destroy(name string) error {
 		return fmt.Errorf("VM not found: %w", err)
 	}
 
-	// Stop if running
+	// Stop if running — Stop() handles its own network/port cleanup
+	wasStopped := false
 	if vmState.Status == models.VMStatusRunning {
 		if err := m.Stop(name); err != nil {
 			return fmt.Errorf("failed to stop VM before destroy: %w", err)
 		}
+		wasStopped = true
 	}
 
-	// Remove port forwarding rules (for created/never-started VMs)
-	m.portForwarder.RemoveForwards(name)
+	// Remove port forwarding rules (for created/never-started VMs;
+	// Stop() already handles this for running VMs)
+	if !wasStopped {
+		m.portForwarder.RemoveForwards(name)
+	}
 
-	// Cleanup network resources (for created/never-started VMs)
-	if vmState.TAPDevice != "" {
+	// Cleanup network resources (for created/never-started VMs;
+	// Stop() already handles this for running VMs)
+	if !wasStopped && vmState.TAPDevice != "" {
 		if err := m.networkMgr.CleanupVMNetwork(name); err != nil {
 			return fmt.Errorf("failed to cleanup network: %w", err)
 		}
@@ -875,7 +912,7 @@ func (m *VMManager) RenameVM(oldName, newName string) error {
 			if err := yaml.Unmarshal(data, &config); err == nil {
 				config.Name = newName
 				if newData, err := yaml.Marshal(&config); err == nil {
-					_ = os.WriteFile(newConfigPath, newData, 0644)
+					_ = os.WriteFile(newConfigPath, newData, 0600)
 					_ = os.Remove(oldConfigPath)
 				}
 			}
@@ -919,14 +956,18 @@ func (m *VMManager) Status(name string) (*models.VMState, error) {
 
 	// Update status if running
 	if vmState.Status == models.VMStatusRunning {
+		m.mu.Lock()
 		vm, ok := m.runningVMs[name]
+		m.mu.Unlock()
 		if ok {
 			status, _ := vm.Status()
 			if status == models.VMStatusStopped {
 				vmState.Status = models.VMStatusStopped
 				vmState.IP = ""
 				vmState.UpdatedAt = time.Now().Unix()
+				m.mu.Lock()
 				delete(m.runningVMs, name)
+				m.mu.Unlock()
 				_ = m.stateManager.UpdateVM(name, func(s *models.VMState) error {
 					s.Status = vmState.Status
 					s.IP = vmState.IP
@@ -1217,7 +1258,10 @@ func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 
 	// Resolve the guest IP
 	vmIP := vmState.IP
-	if vm, ok := m.runningVMs[name]; ok {
+	m.mu.Lock()
+	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
+	if ok {
 		if ip := vm.GetIP(); ip != "" {
 			vmIP = ip
 		}
@@ -1315,7 +1359,7 @@ func (m *VMManager) AddPortForward(name string, hostPort, guestPort int) error {
 	if err != nil {
 		return fmt.Errorf("VM not found: %w", err)
 	}
-	if vmState.Status != "running" {
+	if vmState.Status != models.VMStatusRunning {
 		return fmt.Errorf("VM %s is not running (status: %s)", name, vmState.Status)
 	}
 	return m.portForwarder.AddForward(name, hostPort, guestPort, vmState.IP)
@@ -1396,7 +1440,10 @@ func (m *VMManager) CopyToGuest(name, hostPath, guestPath string) error {
 		return fmt.Errorf("VM %s is not running", name)
 	}
 	ip := vmState.IP
-	if vm, ok := m.runningVMs[name]; ok {
+	m.mu.Lock()
+	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
+	if ok {
 		if vmIP := vm.GetIP(); vmIP != "" {
 			ip = vmIP
 		}
@@ -1434,7 +1481,10 @@ func (m *VMManager) CopyFromGuest(name, guestPath, hostPath string) error {
 		return fmt.Errorf("VM %s is not running", name)
 	}
 	ip := vmState.IP
-	if vm, ok := m.runningVMs[name]; ok {
+	m.mu.Lock()
+	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
+	if ok {
 		if vmIP := vm.GetIP(); vmIP != "" {
 			ip = vmIP
 		}
@@ -1545,7 +1595,6 @@ func dirSizeMB(path string) int64 {
 	return total / (1024 * 1024)
 }
 
-// loadConfigFromState loads the VM config from the state file
 // ExportArchive represents the metadata stored in an export archive
 type ExportArchive struct {
 	Version   int              `json:"version"`
@@ -1703,7 +1752,7 @@ func (m *VMManager) Import(archivePath string, newName string) error {
 			}
 		}
 
-		if err := os.WriteFile(filepath.Join(configDir, name+".yaml"), configData, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(configDir, name+".yaml"), configData, 0600); err != nil {
 			return fmt.Errorf("failed to write config: %w", err)
 		}
 	}
@@ -1716,7 +1765,7 @@ func (m *VMManager) Import(archivePath string, newName string) error {
 			return fmt.Errorf("failed to create VM directory: %w", err)
 		}
 		rootfsPath = filepath.Join(rootfsDir, "rootfs.img")
-		if err := os.WriteFile(rootfsPath, rootfsData, 0644); err != nil {
+		if err := os.WriteFile(rootfsPath, rootfsData, 0600); err != nil {
 			return fmt.Errorf("failed to write rootfs: %w", err)
 		}
 	}
@@ -1809,7 +1858,7 @@ func (m *VMManager) Commit(name string, imageName string, message string) (strin
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err == nil {
 		metaPath := filepath.Join(imagesDir, fmt.Sprintf("%s.meta.json", imageName))
-		_ = os.WriteFile(metaPath, metaJSON, 0644)
+		_ = os.WriteFile(metaPath, metaJSON, 0600)
 	}
 
 	m.logEvent(EventCommit, name, map[string]string{
@@ -1875,11 +1924,22 @@ func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConf
 		}
 	}
 
-	// Return minimal config based on state
+	// Return minimal config based on state — use actual VM resource values
+	vcpus := vmState.VCPUs
+	if vcpus < 1 {
+		vcpus = 2
+	}
+	memoryMB := vmState.MemoryMB
+	if memoryMB < 1 {
+		memoryMB = 1024
+	}
 	return &models.VMConfig{
 		Name:     vmState.Name,
-		VCPUs:    2,  // default
-		MemoryMB: 1024, // default
+		From:     vmState.ImageRef,
+		VCPUs:    vcpus,
+		MemoryMB: memoryMB,
+		DiskGB:   vmState.DiskGB,
+		RootFS:   vmState.RootFSPath,
 	}, nil
 }
 
@@ -1906,7 +1966,7 @@ func (m *VMManager) WriteToConsole(name string, data []byte) error {
 	// In a real hypervisor scenario, this would inject keystrokes via
 	// the virtio-console rx queue. For now, we append to the log.
 	logPath := m.consoleMgr.GetLogPath(name)
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open console log: %w", err)
 	}

@@ -190,11 +190,10 @@ func (rng *VirtioRng) Start() error {
 
 // Stop shuts down the entropy device.
 func (rng *VirtioRng) Stop() error {
-	if !rng.running.Load() {
+	if !rng.running.CompareAndSwap(true, false) {
 		return nil
 	}
 
-	rng.running.Store(false)
 	close(rng.stopCh)
 	return nil
 }
@@ -314,10 +313,17 @@ func (rng *VirtioRng) fillChain(chain *DescriptorChain) uint32 {
 		return 0
 	}
 
-	rng.bytesProvided.Add(uint64(n))
+	// Write the random data into the chain's writable descriptors
+	written, writeErr := rng.vq.WriteChainData(chain, buf[:n])
+	if writeErr != nil {
+		rng.reqsFailed.Add(1)
+		return 0
+	}
+
+	rng.bytesProvided.Add(uint64(written))
 	rng.reqsCompleted.Add(1)
 
-	return uint32(n)
+	return uint32(written)
 }
 
 // GetVirtqueue returns the device's virtqueue for transport attachment.

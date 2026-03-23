@@ -253,11 +253,10 @@ func (wd *VirtioWatchdog) Start() error {
 
 // Stop shuts down the watchdog device.
 func (wd *VirtioWatchdog) Stop() error {
-	if !wd.running.Load() {
+	if !wd.running.CompareAndSwap(true, false) {
 		return nil
 	}
 
-	wd.running.Store(false)
 	close(wd.stopCh)
 
 	wd.mu.Lock()

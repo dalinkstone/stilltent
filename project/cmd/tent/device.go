@@ -48,10 +48,7 @@ func deviceListHostCmd() *cobra.Command {
 		Use:   "list-host",
 		Short: "List host devices available for passthrough",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			baseDir := os.Getenv("TENT_BASE_DIR")
-			if baseDir == "" {
-				baseDir = "/var/lib/tent"
-			}
+			baseDir := getBaseDir()
 
 			dm := vm.NewDeviceManager(baseDir)
 			devices, err := dm.ListHostDevices(deviceType)
@@ -106,10 +103,7 @@ func deviceAttachCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sandboxName := args[0]
 
-			baseDir := os.Getenv("TENT_BASE_DIR")
-			if baseDir == "" {
-				baseDir = "/var/lib/tent"
-			}
+			baseDir := getBaseDir()
 
 			hvBackend, err := vm.NewPlatformBackend(baseDir)
 			if err != nil {
@@ -176,10 +170,7 @@ func deviceDetachCmd() *cobra.Command {
 			sandboxName := args[0]
 			address, _ := cmd.Flags().GetString("address")
 
-			baseDir := os.Getenv("TENT_BASE_DIR")
-			if baseDir == "" {
-				baseDir = "/var/lib/tent"
-			}
+			baseDir := getBaseDir()
 
 			hvBackend, err := vm.NewPlatformBackend(baseDir)
 			if err != nil {
@@ -219,10 +210,7 @@ func deviceListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sandboxName := args[0]
 
-			baseDir := os.Getenv("TENT_BASE_DIR")
-			if baseDir == "" {
-				baseDir = "/var/lib/tent"
-			}
+			baseDir := getBaseDir()
 
 			hvBackend, err := vm.NewPlatformBackend(baseDir)
 			if err != nil {

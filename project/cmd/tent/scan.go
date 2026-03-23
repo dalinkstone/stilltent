@@ -71,7 +71,7 @@ func scanSandboxCmd() *cobra.Command {
 			name := args[0]
 			baseDir := getBaseDir()
 
-			sm, err := state.NewStateManager(filepath.Join(baseDir, "state.json"))
+			sm, err := state.NewStateManager(baseDir)
 			if err != nil {
 				return fmt.Errorf("failed to open state: %w", err)
 			}
@@ -110,7 +110,7 @@ func scanAllCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			baseDir := getBaseDir()
 
-			sm, err := state.NewStateManager(filepath.Join(baseDir, "state.json"))
+			sm, err := state.NewStateManager(baseDir)
 			if err != nil {
 				return fmt.Errorf("failed to open state: %w", err)
 			}

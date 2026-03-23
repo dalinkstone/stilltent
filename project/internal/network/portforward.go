@@ -128,7 +128,7 @@ func (pf *PortForwarder) ActivateForwards(vmName string, guestIP string) error {
 
 	var listeners []net.Listener
 	for _, rule := range rules {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", rule.HostPort))
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", rule.HostPort))
 		if err != nil {
 			// Cleanup any listeners we already started
 			for _, l := range listeners {
@@ -248,7 +248,7 @@ func (pf *PortForwarder) AddForward(vmName string, hostPort, guestPort int, gues
 
 	// If VM already has active listeners (i.e., it's running), activate this forward too
 	if guestIP != "" {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", hostPort))
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", hostPort))
 		if err != nil {
 			// Remove the rule we just added
 			rules := pf.rules[vmName]

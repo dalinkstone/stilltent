@@ -306,11 +306,11 @@ func (v *VM) Start() error {
 // Stop gracefully shuts down the Firecracker VM via the SendCtrlAltDel action.
 func (v *VM) Stop() error {
 	v.mu.Lock()
-	defer v.mu.Unlock()
-
 	if !v.running {
+		v.mu.Unlock()
 		return fmt.Errorf("VM %s is not running", v.config.Name)
 	}
+	v.mu.Unlock()
 
 	// Try graceful shutdown via Ctrl+Alt+Del
 	shutdownAction := firecrackerAction{ActionType: "SendCtrlAltDel"}

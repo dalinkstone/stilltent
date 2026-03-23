@@ -322,12 +322,12 @@ func (a *GuestAgent) HandleResponse(data []byte) error {
 
 	// Decode length-prefixed message
 	msgLen := binary.LittleEndian.Uint32(data[0:4])
-	if int(msgLen) > len(data)-4 {
+	if uint64(msgLen) > uint64(len(data)-4) {
 		return fmt.Errorf("agent: message length %d exceeds buffer (%d)", msgLen, len(data)-4)
 	}
 
 	var msg AgentMessage
-	if err := json.Unmarshal(data[4:4+msgLen], &msg); err != nil {
+	if err := json.Unmarshal(data[4:4+uint64(msgLen)], &msg); err != nil {
 		return fmt.Errorf("agent: failed to decode message: %w", err)
 	}
 
@@ -431,12 +431,12 @@ func DecodeAgentMessage(data []byte) (*AgentMessage, error) {
 	}
 
 	msgLen := binary.LittleEndian.Uint32(data[0:4])
-	if int(msgLen) > len(data)-4 {
+	if uint64(msgLen) > uint64(len(data)-4) {
 		return nil, fmt.Errorf("agent: message length %d exceeds buffer", msgLen)
 	}
 
 	var msg AgentMessage
-	if err := json.Unmarshal(data[4:4+msgLen], &msg); err != nil {
+	if err := json.Unmarshal(data[4:4+uint64(msgLen)], &msg); err != nil {
 		return nil, err
 	}
 

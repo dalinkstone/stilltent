@@ -12,6 +12,7 @@ import (
 	"github.com/dalinkstone/tent/internal/config"
 	"github.com/dalinkstone/tent/internal/image"
 	"github.com/dalinkstone/tent/internal/sandbox"
+	"github.com/dalinkstone/tent/internal/storage"
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
@@ -212,6 +213,14 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("failed to resolve image %q: %w", cfg.From, err)
 				}
+
+				// Format the raw disk image as ext4 so the guest kernel can mount it
+				if err := storage.FormatExt4(rootfsPath, &storage.Ext4FormatConfig{
+					Label: "rootfs",
+				}); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to format rootfs as ext4: %v\n", err)
+				}
+
 				cfg.RootFS = rootfsPath
 				fmt.Printf("Resolved image '%s' -> %s\n", cfg.From, rootfsPath)
 			}

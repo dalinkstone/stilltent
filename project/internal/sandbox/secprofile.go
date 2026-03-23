@@ -228,22 +228,24 @@ func (m *SecurityProfileManager) registerBuiltins() {
 }
 
 // Get returns a security profile by name, checking custom profiles first,
-// then built-ins.
+// then built-ins. If the profile is not in memory, it attempts to load it
+// from disk.
 func (m *SecurityProfileManager) Get(name string) (*SecurityProfile, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if p, ok := m.profiles[name]; ok {
+		m.mu.RUnlock()
+		return p, nil
+	}
+	m.mu.RUnlock()
 
+	// Not in memory — try loading from disk under a write lock
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Double-check after acquiring write lock
 	if p, ok := m.profiles[name]; ok {
 		return p, nil
 	}
-
-	// Try loading from disk
-	m.mu.RUnlock()
-	m.mu.Lock()
-	defer func() {
-		m.mu.Unlock()
-		m.mu.RLock()
-	}()
 
 	p, err := m.loadFromDisk(name)
 	if err != nil {
@@ -255,16 +257,15 @@ func (m *SecurityProfileManager) Get(name string) (*SecurityProfile, error) {
 
 // List returns all available security profiles sorted by name.
 func (m *SecurityProfileManager) List() []*SecurityProfile {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	// Also load any custom profiles from disk
+	m.mu.Lock()
+	// Load any custom profiles from disk (writes to m.profiles)
 	m.loadCustomFromDisk()
 
-	var profiles []*SecurityProfile
+	profiles := make([]*SecurityProfile, 0, len(m.profiles))
 	for _, p := range m.profiles {
 		profiles = append(profiles, p)
 	}
+	m.mu.Unlock()
 
 	sort.Slice(profiles, func(i, j int) bool {
 		return profiles[i].Name < profiles[j].Name

@@ -32,14 +32,18 @@ on a running sandbox take effect on next restart.`,
 
 func envListCmd() *cobra.Command {
 	var outputFormat string
+	var showValues bool
 
 	cmd := &cobra.Command{
 		Use:   "list <sandbox>",
 		Short: "List environment variables for a sandbox",
 		Long: `Display all environment variables configured for a sandbox.
+Values are redacted by default to prevent accidental secret exposure.
+Use --show-values to display actual values.
 
 Examples:
   tent env list mybox
+  tent env list mybox --show-values
   tent env list mybox --format json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,8 +70,18 @@ Examples:
 				env = make(map[string]string)
 			}
 
+			// Build display map — redact values unless --show-values
+			display := make(map[string]string, len(env))
+			for k, v := range env {
+				if showValues {
+					display[k] = v
+				} else {
+					display[k] = "***"
+				}
+			}
+
 			if outputFormat == "json" {
-				data, err := json.MarshalIndent(env, "", "  ")
+				data, err := json.MarshalIndent(display, "", "  ")
 				if err != nil {
 					return err
 				}
@@ -81,21 +95,25 @@ Examples:
 			}
 
 			// Sort keys for consistent output
-			keys := make([]string, 0, len(env))
-			for k := range env {
+			keys := make([]string, 0, len(display))
+			for k := range display {
 				keys = append(keys, k)
 			}
 			sort.Strings(keys)
 
 			fmt.Printf("Environment variables for sandbox '%s':\n", name)
 			for _, k := range keys {
-				fmt.Printf("  %s=%s\n", k, env[k])
+				fmt.Printf("  %s=%s\n", k, display[k])
+			}
+			if !showValues {
+				fmt.Println("  (values redacted — use --show-values to display)")
 			}
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&outputFormat, "format", "text", "Output format: text, json")
+	cmd.Flags().BoolVar(&showValues, "show-values", false, "Show actual values (may contain secrets)")
 	return cmd
 }
 

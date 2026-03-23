@@ -254,6 +254,9 @@ func (d *VirtioBlk) processChain(chain *DescriptorChain) (VirtioBlkReqHeader, ui
 
 	// Write status byte to the last writable descriptor
 	lastWritable := chain.Writable[len(chain.Writable)-1]
+	if lastWritable.Len == 0 {
+		return header, VirtioBlkSIOErr, 0, errors.New("virtio-blk: status descriptor has zero length")
+	}
 	statusBuf := []byte{status}
 	if err := d.vq.memWrite(lastWritable.Addr+uint64(lastWritable.Len)-1, statusBuf); err != nil {
 		return header, VirtioBlkSIOErr, 0, fmt.Errorf("virtio-blk: failed to write status: %w", err)
@@ -267,7 +270,16 @@ func (d *VirtioBlk) processChain(chain *DescriptorChain) (VirtioBlkReqHeader, ui
 
 // handleRead reads sectors from the backing file into writable descriptors.
 func (d *VirtioBlk) handleRead(chain *DescriptorChain, sector uint64) (uint8, uint32) {
-	offset := int64(sector * virtioBlkSectorSize)
+	// Bounds check: ensure sector offset doesn't exceed device capacity
+	byteOffset := sector * virtioBlkSectorSize
+	if sector > 0 && byteOffset/virtioBlkSectorSize != sector {
+		// Overflow in sector-to-byte conversion
+		return VirtioBlkSIOErr, 0
+	}
+	if byteOffset >= d.capacity {
+		return VirtioBlkSIOErr, 0
+	}
+	offset := int64(byteOffset)
 	var totalWritten uint32
 
 	// Write data to all writable descriptors except the last one (status byte)
@@ -305,7 +317,16 @@ func (d *VirtioBlk) handleWrite(chain *DescriptorChain, sector uint64) uint8 {
 		return VirtioBlkSIOErr
 	}
 
-	offset := int64(sector * virtioBlkSectorSize)
+	// Bounds check: ensure sector offset doesn't exceed device capacity
+	byteOffset := sector * virtioBlkSectorSize
+	if sector > 0 && byteOffset/virtioBlkSectorSize != sector {
+		// Overflow in sector-to-byte conversion
+		return VirtioBlkSIOErr
+	}
+	if byteOffset >= d.capacity {
+		return VirtioBlkSIOErr
+	}
+	offset := int64(byteOffset)
 
 	// Data comes from readable descriptors after the header
 	dataDescs := chain.Readable

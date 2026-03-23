@@ -57,14 +57,28 @@ func NewSecretStore(baseDir string) (*SecretStore, error) {
 	}, nil
 }
 
-// deriveKey derives an AES-256 key from the store path (machine-local encryption)
+// deriveKey returns the AES-256 encryption key, reading it from a key file
+// or generating a new random key on first use.
 func (s *SecretStore) deriveKey() []byte {
-	// Use the store directory path + hostname as key material
-	// This ties secrets to the local machine
-	hostname, _ := os.Hostname()
-	material := fmt.Sprintf("tent-secrets:%s:%s", s.storeDir, hostname)
-	hash := sha256.Sum256([]byte(material))
-	return hash[:]
+	keyPath := filepath.Join(s.storeDir, "vault.key")
+	data, err := os.ReadFile(keyPath)
+	if err == nil && len(data) == 32 {
+		return data
+	}
+
+	// Generate a new random 32-byte key
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		// Fall back to deterministic key if random fails (should never happen)
+		hostname, _ := os.Hostname()
+		material := fmt.Sprintf("tent-secrets:%s:%s", s.storeDir, hostname)
+		hash := sha256.Sum256([]byte(material))
+		return hash[:]
+	}
+
+	// Persist the key with restrictive permissions
+	_ = os.WriteFile(keyPath, key, 0600)
+	return key
 }
 
 // encrypt encrypts plaintext using AES-256-GCM

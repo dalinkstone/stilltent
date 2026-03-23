@@ -346,7 +346,7 @@ func (rm *RotatingManager) RotationStats() RotationStatsInfo {
 		}
 		stats.Sandboxes = append(stats.Sandboxes, SandboxLogStats{
 			Name:         name,
-			CurrentSize:  rl.written,
+			CurrentSize:  rl.CurrentSize(),
 			TotalSize:    totalSize,
 			RotatedFiles: len(files) - 1, // exclude current
 		})

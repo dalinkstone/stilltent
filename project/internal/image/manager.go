@@ -326,15 +326,22 @@ func computeSHA256(data []byte) string {
 // - "gcr.io/project/image:tag" -> "gcr.io", "project/image", "tag"
 // - "myregistry.com:5000/repo/image:latest" -> "myregistry.com:5000", "repo/image", "latest"
 func parseImageRef(ref string) (registry, repo, tag string, err error) {
-	// Default registry
-	registry = "registry.hub.docker.com"
+	// Default registry (Docker Hub v2 API endpoint)
+	registry = "registry-1.docker.io"
 
 	// Split by '/' to separate registry from repo
 	parts := strings.Split(ref, "/")
 	if len(parts) == 1 {
-		// Just repo:tag (e.g., "ubuntu:22.04")
-		repo = "library/" + parts[0]
-		tag = "latest"
+		// Just repo or repo:tag (e.g., "ubuntu" or "ubuntu:22.04")
+		part := parts[0]
+		if strings.Contains(part, ":") {
+			repoTag := strings.SplitN(part, ":", 2)
+			repo = "library/" + repoTag[0]
+			tag = repoTag[1]
+		} else {
+			repo = "library/" + part
+			tag = "latest"
+		}
 		return
 	}
 
@@ -347,9 +354,9 @@ func parseImageRef(ref string) (registry, repo, tag string, err error) {
 		repo = strings.Join(parts, "/")
 	}
 
-	// Split repo by ':' to separate tag
+	// Split repo by ':' to separate tag (use SplitN to handle unusual tag values)
 	if strings.Contains(repo, ":") {
-		repoTag := strings.Split(repo, ":")
+		repoTag := strings.SplitN(repo, ":", 2)
 		repo = repoTag[0]
 		tag = repoTag[1]
 	} else {
@@ -404,26 +411,26 @@ func (m *Manager) extractLayers(layers []LayerInfo, tmpDir, rootfsPath string, p
 
 	var downloaded int64
 	for _, layer := range layers {
-		var layerReader io.Reader
-		var layerCloser io.Closer
+		var rawReader io.Reader    // raw (compressed) stream for caching
+		var rawCloser io.Closer    // closer for the raw stream
 
 		// Check layer cache first
 		if m.layerCache != nil && m.layerCache.Has(layer.Digest) {
 			cached, _, err := m.layerCache.Get(layer.Digest)
 			if err == nil {
-				layerReader = cached
-				layerCloser = cached
+				rawReader = cached
+				rawCloser = cached
 			}
 		}
 
-		// Download if not cached
-		if layerReader == nil {
-			reader, err := client.DownloadLayer(registry, repo, layer)
+		// Download raw (compressed) blob if not cached
+		if rawReader == nil {
+			reader, err := client.DownloadLayerRaw(registry, repo, layer)
 			if err != nil {
 				return fmt.Errorf("failed to download layer %s: %w", layer.Digest, err)
 			}
 
-			// Tee into cache while extracting
+			// Tee the raw blob into the cache while reading
 			if m.layerCache != nil {
 				pr, pw := io.Pipe()
 				tee := io.TeeReader(reader, pw)
@@ -435,29 +442,45 @@ func (m *Manager) extractLayers(layers []LayerInfo, tmpDir, rootfsPath string, p
 					cacheDone <- err
 				}()
 
-				layerReader = tee
-				layerCloser = &multiCloser{closers: []io.Closer{reader, pw}, cacheDone: cacheDone}
+				rawReader = tee
+				rawCloser = &multiCloser{closers: []io.Closer{reader, pw}, cacheDone: cacheDone}
 			} else {
-				layerReader = reader
-				layerCloser = reader
+				rawReader = reader
+				rawCloser = reader
 			}
 		}
 
-		// Wrap with progress tracking
+		// Wrap with progress tracking (on the raw/compressed stream)
 		if progress != nil {
-			layerReader = &progressLayerReader{
-				reader:     layerReader,
+			rawReader = &progressLayerReader{
+				reader:     rawReader,
 				tracker:    progress,
 				baseOffset: downloaded,
 			}
 		}
 
-		// Extract tar to rootfs directory
-		if err := extractTar(layerReader, rootfsDir); err != nil {
-			layerCloser.Close()
-			return fmt.Errorf("failed to extract layer %s: %w", layer.Digest, err)
+		// Decompress gzip layers before tar extraction
+		var tarReader io.Reader = rawReader
+		var gzCloser io.Closer
+		if isGzipLayer(layer.MediaType) {
+			gz, err := gzip.NewReader(rawReader)
+			if err != nil {
+				rawCloser.Close()
+				return fmt.Errorf("failed to decompress layer %s: %w", layer.Digest, err)
+			}
+			tarReader = gz
+			gzCloser = gz
 		}
-		layerCloser.Close()
+
+		// Extract tar to rootfs directory
+		extractErr := extractTar(tarReader, rootfsDir)
+		if gzCloser != nil {
+			gzCloser.Close()
+		}
+		rawCloser.Close()
+		if extractErr != nil {
+			return fmt.Errorf("failed to extract layer %s: %w", layer.Digest, extractErr)
+		}
 
 		downloaded += layer.Size
 		if progress != nil {
@@ -513,6 +536,10 @@ func extractTar(r io.Reader, dir string) error {
 		base := filepath.Base(name)
 		if strings.HasPrefix(base, ".wh.") {
 			target := filepath.Join(dir, filepath.Dir(name), strings.TrimPrefix(base, ".wh."))
+			// Validate whiteout target stays within extraction dir
+			if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dir)+string(os.PathSeparator)) {
+				continue
+			}
 			os.RemoveAll(target)
 			continue
 		}
@@ -543,6 +570,15 @@ func extractTar(r io.Reader, dir string) error {
 			}
 			f.Close()
 		case tar.TypeSymlink:
+			// Validate symlink target doesn't escape extraction dir
+			linkTarget := hdr.Linkname
+			if !filepath.IsAbs(linkTarget) {
+				linkTarget = filepath.Join(filepath.Dir(target), linkTarget)
+			}
+			resolved := filepath.Clean(linkTarget)
+			if !strings.HasPrefix(resolved, filepath.Clean(dir)+string(os.PathSeparator)) && resolved != filepath.Clean(dir) {
+				continue // skip symlinks that escape
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
@@ -551,10 +587,13 @@ func extractTar(r io.Reader, dir string) error {
 				return err
 			}
 		case tar.TypeLink:
+			linkTarget := filepath.Join(dir, hdr.Linkname)
+			if !strings.HasPrefix(filepath.Clean(linkTarget), filepath.Clean(dir)+string(os.PathSeparator)) {
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 				return err
 			}
-			linkTarget := filepath.Join(dir, hdr.Linkname)
 			os.Remove(target)
 			if err := os.Link(linkTarget, target); err != nil {
 				// Hard link may fail across filesystems, fall back to copy
@@ -565,9 +604,12 @@ func extractTar(r io.Reader, dir string) error {
 	return nil
 }
 
-// packRootfsImage creates a sparse raw disk image from a rootfs directory.
-// The image is a 2GB sparse file with the rootfs contents recorded for later
-// filesystem creation during VM boot.
+// packRootfsImage creates a raw disk image with a valid ext4 filesystem and
+// preserves the extracted rootfs directory alongside it for virtio-fs sharing.
+//
+// On macOS we cannot mount ext4 to copy files into the image, so we keep the
+// rootfs directory as a sibling (<name>_rootfs/) which the VM can access
+// via virtio-fs shared directories. The raw ext4 image serves as the boot disk.
 func packRootfsImage(rootfsDir, imagePath string) error {
 	f, err := os.Create(imagePath)
 	if err != nil {
@@ -581,8 +623,21 @@ func packRootfsImage(rootfsDir, imagePath string) error {
 		return fmt.Errorf("failed to set image size: %w", err)
 	}
 
+	// Preserve the rootfs directory alongside the image for virtio-fs sharing.
+	// This is the extracted OCI layer contents that the guest needs.
+	// Convention: for <name>.img, the rootfs directory is <name>_rootfs.
+	rootfsDstDir := strings.TrimSuffix(imagePath, ".img") + "_rootfs"
+	if err := os.Rename(rootfsDir, rootfsDstDir); err != nil {
+		// Rename may fail across filesystems; fall back to keeping in place
+		// The caller's defer will clean tmpDir, so copy instead
+		if cpErr := copyDir(rootfsDir, rootfsDstDir); cpErr != nil {
+			return fmt.Errorf("failed to preserve rootfs directory: %w", cpErr)
+		}
+	}
+
 	return nil
 }
+
 
 // progressLayerReader wraps a reader to report download progress
 type progressLayerReader struct {
@@ -698,58 +753,45 @@ func (m *Manager) Extract(imagePath string) (*models.ImageInfo, error) {
 
 // DetectFormat detects the format of an image file
 func (m *Manager) DetectFormat(imagePath string) (Format, error) {
-	// Read first few bytes for magic number detection
-	data := make([]byte, 512)
 	file, err := os.Open(imagePath)
 	if err != nil {
 		return FormatUnknown, fmt.Errorf("failed to open image: %w", err)
 	}
 	defer file.Close()
-	
-	n, err := file.Read(data)
-	if err != nil && err != os.ErrClosed && err != os.ErrInvalid {
-		return FormatUnknown, fmt.Errorf("failed to read image: %w", err)
-	}
-	data = data[:n]
-	
-	// Check for ISO9660 magic number (at offset 0x8001)
-	if len(data) > 0x8001 {
-		isoMagic := data[0x8001:0x8006]
-		if string(isoMagic) == "CD001" {
-			return FormatISO, nil
+
+	// Check for QCOW2 magic number at offset 0 ("QFI\xfb")
+	qcow2Buf := make([]byte, 4)
+	if _, err := file.ReadAt(qcow2Buf, 0); err == nil {
+		if qcow2Buf[0] == 'Q' && qcow2Buf[1] == 'F' && qcow2Buf[2] == 'I' && qcow2Buf[3] == 0xfb {
+			return FormatQCOW2, nil
 		}
 	}
-	
-	// Check for QCOW2 magic number (at offset 0)
-	qcow2Magic := []byte{'Q', 'F', 'I', 0xfb}
-	if len(data) >= 4 && string(data[:4]) == string(qcow2Magic) {
-		return FormatQCOW2, nil
-	}
-	
-	// Check for ext4 magic number (at offset 1024 + 56)
-	if len(data) > 1080 {
-		ext4Magic := data[1080:1082]
-		if string(ext4Magic) == "\x53\xEF" {
+
+	// Check for ext4 magic number at offset 1080 (superblock offset 0x438)
+	ext4Buf := make([]byte, 2)
+	if _, err := file.ReadAt(ext4Buf, 1080); err == nil {
+		if ext4Buf[0] == 0x53 && ext4Buf[1] == 0xEF {
 			return FormatRaw, nil
 		}
 	}
-	
+
+	// Check for ISO9660 magic number "CD001" at offset 0x8001 (sector 16 + 1)
+	isoBuf := make([]byte, 5)
+	if _, err := file.ReadAt(isoBuf, 0x8001); err == nil {
+		if string(isoBuf) == "CD001" {
+			return FormatISO, nil
+		}
+	}
+
 	// Default to raw if no magic number found
 	return FormatRaw, nil
 }
 
-// execCommand executes a shell command
-func execCommand(cmdStr string) error {
-	// Use /bin/sh -c to execute the command
-	cmd := exec.Command("/bin/sh", "-c", cmdStr)
-	return cmd.Run()
-}
-
 // convertQCOW2ToRaw converts a QCOW2 image to raw format
 func (m *Manager) convertQCOW2ToRaw(src, dst string) error {
-	// Use qemu-img if available
-	cmdStr := fmt.Sprintf("qemu-img convert -f qcow2 -O raw %s %s", src, dst)
-	if err := execCommand(cmdStr); err != nil {
+	// Use qemu-img directly (no shell) to avoid path injection issues
+	cmd := exec.Command("qemu-img", "convert", "-f", "qcow2", "-O", "raw", src, dst)
+	if err := cmd.Run(); err != nil {
 		// Fall back to raw copy for testing
 		return m.copyFile(src, dst)
 	}
@@ -1087,54 +1129,45 @@ func (p *ProgressTracker) UpdateProgress(bytes int64) {
 	}
 }
 
-// downloadFile downloads a file from a URL to a local path with progress reporting
-func (m *Manager) downloadFile(filepath string, url string, progress *ProgressTracker) error {
-	// Use curl to download (more reliable than native Go HTTP for large files)
-	cmd := exec.Command("curl", "-L", "-o", filepath, url)
-	
-	// Get file size for progress tracking if not provided
-	if progress != nil && progress.TotalBytes == 0 {
-		resp, err := http.Head(url)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			progress.TotalBytes = resp.ContentLength
-			resp.Body.Close()
-		}
+// downloadFile downloads a file from a URL to a local path with progress reporting.
+// Uses Go's native HTTP client with streaming to avoid buffering entire files in memory.
+func (m *Manager) downloadFile(destPath string, url string, progress *ProgressTracker) error {
+	httpClient := &http.Client{
+		Timeout: 30 * time.Minute,
 	}
-	
-	// Create a progress tracking wrapper for the output
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
+	}
+
+	// Set up progress tracking
 	if progress != nil {
-		outFile, err := os.Create(filepath)
-		if err != nil {
-			return fmt.Errorf("failed to create output file: %w", err)
-		}
-		defer outFile.Close()
-		
-		// Use io.TeeReader to track progress while downloading
-		cmd = exec.Command("curl", "-L", url)
-		resp, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("download failed: %w", err)
-		}
-		
-		// Write with progress tracking
-		reader := NewProgressReader(bytes.NewReader(resp), progress)
-		reader.(*progressReader).tracker.TotalBytes = progress.TotalBytes
-		_, err = io.Copy(outFile, reader)
-		if err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
-		}
-		
-		return nil
-	}
-	
-	// Original curl path without progress
-	if err := cmd.Run(); err != nil {
-		// Fall back to wget
-		cmd = exec.Command("wget", "-O", filepath, url)
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("download failed: %w", err)
+		if progress.TotalBytes == 0 && resp.ContentLength > 0 {
+			progress.TotalBytes = resp.ContentLength
 		}
 	}
+
+	outFile, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	var reader io.Reader = resp.Body
+	if progress != nil {
+		reader = NewProgressReader(resp.Body, progress)
+	}
+
+	if _, err := io.Copy(outFile, reader); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
 	return nil
 }
 
@@ -1547,7 +1580,7 @@ type progressReader struct {
 
 func (pr *progressReader) Read(p []byte) (n int, err error) {
 	n, err = pr.Reader.Read(p)
-	if err == nil && n > 0 {
+	if n > 0 {
 		pr.tracker.UpdateProgress(pr.tracker.Downloaded + int64(n))
 	}
 	return

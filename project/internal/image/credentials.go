@@ -150,11 +150,12 @@ func (cs *CredentialStore) save() error {
 }
 
 // NormalizeRegistry normalizes a registry hostname.
-// "docker.io" and "index.docker.io" both map to "index.docker.io".
+// All Docker Hub hostname variants map to "registry-1.docker.io",
+// which is the canonical v2 API endpoint.
 func NormalizeRegistry(registry string) string {
 	switch registry {
-	case "docker.io", "":
-		return "index.docker.io"
+	case "docker.io", "index.docker.io", "registry.hub.docker.com", "registry-1.docker.io", "":
+		return "registry-1.docker.io"
 	default:
 		return registry
 	}

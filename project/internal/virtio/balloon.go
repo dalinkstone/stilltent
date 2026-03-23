@@ -253,11 +253,10 @@ func (b *VirtioBalloon) Start() error {
 
 // Stop shuts down the balloon device.
 func (b *VirtioBalloon) Stop() error {
-	if !b.running.Load() {
+	if !b.running.CompareAndSwap(true, false) {
 		return nil
 	}
 
-	b.running.Store(false)
 	close(b.stopCh)
 	return nil
 }
@@ -408,7 +407,7 @@ func (b *VirtioBalloon) processInflate() {
 			return
 		}
 
-		pfns := b.extractPFNs(chain)
+		pfns := b.extractPFNs(chain, b.inflateQ)
 		if len(pfns) == 0 {
 			if err := b.inflateQ.PushUsed(chain.HeadIndex, 0); err != nil {
 				continue
@@ -450,7 +449,7 @@ func (b *VirtioBalloon) processDeflate() {
 			return
 		}
 
-		pfns := b.extractPFNs(chain)
+		pfns := b.extractPFNs(chain, b.deflateQ)
 		if len(pfns) == 0 {
 			if err := b.deflateQ.PushUsed(chain.HeadIndex, 0); err != nil {
 				continue
@@ -531,14 +530,14 @@ func (b *VirtioBalloon) processStats() {
 	}
 }
 
-// extractPFNs reads page frame numbers from a descriptor chain via the inflate queue.
+// extractPFNs reads page frame numbers from a descriptor chain using the given queue.
 // Each PFN is a uint32 representing a 4KB-aligned guest page.
-func (b *VirtioBalloon) extractPFNs(chain *DescriptorChain) []uint32 {
-	if chain == nil {
+func (b *VirtioBalloon) extractPFNs(chain *DescriptorChain, vq *Virtqueue) []uint32 {
+	if chain == nil || vq == nil {
 		return nil
 	}
 
-	allData, err := b.inflateQ.ReadChainData(chain)
+	allData, err := vq.ReadChainData(chain)
 	if err != nil || len(allData) == 0 {
 		return nil
 	}

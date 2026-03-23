@@ -29,6 +29,7 @@ import (
 type Backend struct {
 	baseDir   string
 	vmConfigs map[string]*models.VMConfig
+	vms       map[string]*VM
 	vmMutex   sync.Mutex
 }
 
@@ -53,6 +54,7 @@ func NewBackend(baseDir string) (*Backend, error) {
 	return &Backend{
 		baseDir:   baseDir,
 		vmConfigs: make(map[string]*models.VMConfig),
+		vms:       make(map[string]*VM),
 	}, nil
 }
 
@@ -73,6 +75,7 @@ func (b *Backend) CreateVM(config *models.VMConfig) (hypervisor.VM, error) {
 		running: false,
 	}
 
+	b.vms[config.Name] = vm
 	return vm, nil
 }
 
@@ -81,13 +84,8 @@ func (b *Backend) ListVMs() ([]hypervisor.VM, error) {
 	b.vmMutex.Lock()
 	defer b.vmMutex.Unlock()
 
-	var vms []hypervisor.VM
-	for _, config := range b.vmConfigs {
-		vm := &VM{
-			config:  config,
-			backend: b,
-			running: false,
-		}
+	vms := make([]hypervisor.VM, 0, len(b.vms))
+	for _, vm := range b.vms {
 		vms = append(vms, vm)
 	}
 	return vms, nil
@@ -106,6 +104,7 @@ func (b *Backend) DestroyVM(vm hypervisor.VM) error {
 
 	b.vmMutex.Lock()
 	delete(b.vmConfigs, hvmVM.config.Name)
+	delete(b.vms, hvmVM.config.Name)
 	b.vmMutex.Unlock()
 
 	return nil

@@ -219,7 +219,15 @@ func buildInspectOutput(vmState *models.VMState, vmConfig *models.VMConfig) *Ins
 		output.Config.Kernel = vmConfig.Kernel
 		output.Config.RootFS = vmConfig.RootFS
 		output.Mounts = vmConfig.Mounts
-		output.Env = vmConfig.Env
+		// Redact env var values — they may contain API keys and secrets.
+		// Show keys only; use `tent env list <name>` to see values.
+		if len(vmConfig.Env) > 0 {
+			redacted := make(map[string]string, len(vmConfig.Env))
+			for k := range vmConfig.Env {
+				redacted[k] = "***"
+			}
+			output.Env = redacted
+		}
 		output.Network.Mode = vmConfig.Network.Mode
 		output.Network.Bridge = vmConfig.Network.Bridge
 		output.Network.Allow = vmConfig.Network.Allow

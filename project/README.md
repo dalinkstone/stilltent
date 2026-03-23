@@ -268,11 +268,19 @@ Everything else — sandbox orchestration, virtio device emulation, boot protoco
 
 ## Quickstart
 
-### Build
+### Build and install
 
 ```bash
 cd project
-go build -o tent ./cmd/tent
+make install        # builds, signs with entitlements, installs to /usr/local/bin
+```
+
+This builds the `tent` binary, signs it with the Hypervisor/Virtualization entitlements (required on macOS), and copies it to `/usr/local/bin` so you can use `tent` from anywhere.
+
+If you prefer a custom install location:
+
+```bash
+make install PREFIX=~/.local/bin
 ```
 
 ### Pull an image and create a sandbox
@@ -408,10 +416,11 @@ tent destroy my-sandbox
 
 ```bash
 cd project
-go build -o tent ./cmd/tent
+make              # build + sign with entitlements
+make install      # build + sign + install to /usr/local/bin
 ```
 
-The binary auto-detects the platform at runtime. Build tags (`_linux.go`, `_darwin.go`) ensure only the relevant backend compiles on each OS.
+The binary auto-detects the platform at runtime. Build tags (`_linux.go`, `_darwin.go`) ensure only the relevant backend compiles on each OS. On macOS, the binary must be signed with `tent.entitlements` to access Virtualization.framework.
 
 ### Test
 

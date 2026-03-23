@@ -47,12 +47,15 @@ var (
 type GUID [16]byte
 
 // NewRandomGUID generates a random version-4 UUID.
+// In UEFI mixed-endian format, the first three fields are little-endian
+// but the version nibble (byte 7 in standard form) maps to byte 6 in
+// the mixed-endian on-disk representation, and the variant is at byte 8.
 func NewRandomGUID() GUID {
 	var g GUID
 	_, _ = rand.Read(g[:])
-	// Set version 4 (random)
-	g[7] = (g[7] & 0x0F) | 0x40
-	// Set variant (RFC 4122)
+	// Set version 4 (random) — byte 6 in mixed-endian GUID
+	g[6] = (g[6] & 0x0F) | 0x40
+	// Set variant (RFC 4122) — byte 8 in mixed-endian GUID
 	g[8] = (g[8] & 0x3F) | 0x80
 	return g
 }

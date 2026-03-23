@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/dalinkstone/tent/pkg/models"
 )
@@ -92,7 +93,7 @@ func (sm *StateManager) save() error {
 		return err
 	}
 	
-	return os.WriteFile(sm.path, data, 0644)
+	return os.WriteFile(sm.path, data, 0600)
 }
 
 // StoreVM stores a VM state
@@ -222,7 +223,5 @@ func (sm *StateManager) ListImages() ([]*models.ImageInfo, error) {
 }
 
 func (sm *StateManager) now() int64 {
-	// Placeholder - use proper timestamp in production
-	// Using 0 for deterministic test behavior
-	return 0
+	return time.Now().Unix()
 }

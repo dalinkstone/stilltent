@@ -256,7 +256,8 @@ func (img *QCOW2Image) readClusterLocked(clusterIndex uint64) ([]byte, error) {
 	if l1Entry == 0 {
 		// No L2 table allocated — cluster is unallocated
 		if img.backing != nil {
-			return img.backing.readClusterLocked(clusterIndex)
+			// Use the backing image's public ReadCluster to acquire its own lock
+			return img.backing.ReadCluster(clusterIndex)
 		}
 		return make([]byte, img.clusterSize), nil
 	}
@@ -271,7 +272,8 @@ func (img *QCOW2Image) readClusterLocked(clusterIndex uint64) ([]byte, error) {
 	if l2Entry == 0 {
 		// Cluster not allocated in this layer
 		if img.backing != nil {
-			return img.backing.readClusterLocked(clusterIndex)
+			// Use the backing image's public ReadCluster to acquire its own lock
+			return img.backing.ReadCluster(clusterIndex)
 		}
 		return make([]byte, img.clusterSize), nil
 	}

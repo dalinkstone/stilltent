@@ -105,14 +105,26 @@ const (
 func (c *VsockConnection) PeerCredit() uint32 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	peerFree := c.PeerBuf - (c.TxCnt - c.PeerFwd)
-	return peerFree
+	// Guard against underflow: if we've sent more than the peer has
+	// acknowledged plus their buffer size, credit is zero.
+	sent := c.TxCnt - c.PeerFwd
+	if sent > c.PeerBuf {
+		return 0
+	}
+	return c.PeerBuf - sent
 }
 
+// maxRecvBufSize is the maximum receive buffer size per connection (4 MiB).
+const maxRecvBufSize = 4 * 1024 * 1024
+
 // Enqueue appends data to the connection's receive buffer.
+// Data is silently dropped if the buffer would exceed the maximum size.
 func (c *VsockConnection) Enqueue(data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if len(c.recvBuf)+len(data) > maxRecvBufSize {
+		return // drop data to prevent unbounded memory growth
+	}
 	c.recvBuf = append(c.recvBuf, data...)
 }
 

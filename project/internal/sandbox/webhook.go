@@ -346,7 +346,7 @@ func (wm *WebhookManager) logDelivery(d *WebhookDelivery) {
 		return
 	}
 
-	f, err := os.OpenFile(wm.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(wm.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return
 	}
@@ -382,7 +382,7 @@ func (wm *WebhookManager) saveLocked(hooks []WebhookConfig) error {
 		return fmt.Errorf("failed to marshal webhooks: %w", err)
 	}
 
-	return os.WriteFile(wm.configPath, data, 0644)
+	return os.WriteFile(wm.configPath, data, 0600)
 }
 
 func computeHMAC(message, key []byte) string {

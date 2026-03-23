@@ -186,6 +186,9 @@ func ComputeLayout(header *SetupHeader, kernelSize, initrdSize, cmdlineLen int, 
 		if memorySize > 0 && memorySize < maxAddr {
 			maxAddr = memorySize
 		}
+		if uint64(initrdSize) > maxAddr {
+			return nil, fmt.Errorf("initrd size %d exceeds available address space %d", initrdSize, maxAddr)
+		}
 		initrdAddr := maxAddr - uint64(initrdSize)
 		// Align down to page boundary
 		initrdAddr &= ^uint64(0xFFF)
@@ -196,6 +199,11 @@ func ComputeLayout(header *SetupHeader, kernelSize, initrdSize, cmdlineLen int, 
 	// Compute total memory required
 	endOfKernel := layout.KernelLoadAddr + uint64(layout.KernelSize)
 	endOfInitrd := layout.InitrdLoadAddr + uint64(layout.InitrdSize)
+
+	// Check for initrd/kernel overlap
+	if layout.InitrdSize > 0 && layout.InitrdLoadAddr < endOfKernel {
+		return nil, fmt.Errorf("initrd at 0x%x overlaps kernel ending at 0x%x", layout.InitrdLoadAddr, endOfKernel)
+	}
 
 	layout.TotalRequired = endOfKernel
 	if endOfInitrd > layout.TotalRequired {

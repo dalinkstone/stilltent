@@ -14,25 +14,26 @@ import (
 )
 
 // NewPlatformBackend creates a new hypervisor backend for macOS.
-// Defaults to Hypervisor.framework (HVF) for backward compatibility.
+// Defaults to Virtualization.framework (VZ) which provides full VM lifecycle
+// management, native virtio device support, and VZLinuxBootLoader.
 func NewPlatformBackend(baseDir string) (HypervisorBackend, error) {
-	return hvf.NewBackend(baseDir)
+	return vz.NewBackend(baseDir)
 }
 
 // NewBackendByName creates a hypervisor backend by name on macOS.
 // Supported backends:
-//   - "hvf" (default): Apple Hypervisor.framework — low-level vCPU API with direct
-//     register/memory control. Best for custom boot sequences and full control.
-//   - "vz": Apple Virtualization.framework — high-level VM API with native virtio
-//     device emulation, VZLinuxBootLoader, NAT networking, and virtio-fs shared
+//   - "vz" (default): Apple Virtualization.framework — high-level VM API with native
+//     virtio device emulation, VZLinuxBootLoader, NAT networking, and virtio-fs shared
 //     directories. Preferred for production Linux guest workloads.
+//   - "hvf": Apple Hypervisor.framework — low-level vCPU API with direct
+//     register/memory control. Best for custom boot sequences and full control.
 func NewBackendByName(name, baseDir string) (HypervisorBackend, error) {
 	switch name {
-	case "", "hvf":
-		return hvf.NewBackend(baseDir)
-	case "vz":
+	case "", "vz":
 		return vz.NewBackend(baseDir)
+	case "hvf":
+		return hvf.NewBackend(baseDir)
 	default:
-		return nil, fmt.Errorf("unsupported hypervisor backend %q on macOS (supported: hvf, vz)", name)
+		return nil, fmt.Errorf("unsupported hypervisor backend %q on macOS (supported: vz, hvf)", name)
 	}
 }

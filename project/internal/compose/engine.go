@@ -567,8 +567,8 @@ func (m *ComposeManager) Restart(name string, services []string, timeoutSec int)
 
 	// Start in forward dependency order
 	for _, sandboxName := range targets {
-		if err := m.vmManager.Restart(sandboxName, timeoutSec); err != nil {
-			errors = append(errors, fmt.Sprintf("failed to restart %s: %v", sandboxName, err))
+		if err := m.vmManager.Start(sandboxName); err != nil {
+			errors = append(errors, fmt.Sprintf("failed to start %s: %v", sandboxName, err))
 		}
 	}
 

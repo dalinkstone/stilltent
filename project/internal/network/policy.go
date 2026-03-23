@@ -278,7 +278,7 @@ func (pm *PolicyManager) SavePolicy(policy *Policy) error {
 
 	// Save to file
 	policyPath := filepath.Join(policiesDir, fmt.Sprintf("%s.yaml", policy.Name))
-	if err := os.WriteFile(policyPath, data, 0644); err != nil {
+	if err := os.WriteFile(policyPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write policy file: %w", err)
 	}
 
@@ -303,21 +303,24 @@ func (pm *PolicyManager) SetPolicy(name string, allowed, denied []string) (*Poli
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
-	now := Policy{
+	ts := time.Now().Unix()
+	createdAt := ts
+
+	// Preserve existing CreatedAt if this is an update
+	if existing, exists := pm.policies[name]; exists {
+		createdAt = existing.CreatedAt
+	}
+
+	policy := &Policy{
 		Name:      name,
 		Allowed:   allowed,
 		Denied:    denied,
-		CreatedAt: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
+		CreatedAt: createdAt,
+		UpdatedAt: ts,
 	}
 
-	// Check if this is a new policy
-	if _, exists := pm.policies[name]; !exists {
-		now.CreatedAt = time.Now().Unix()
-	}
-
-	pm.policies[name] = &now
-	return &now, nil
+	pm.policies[name] = policy
+	return policy, nil
 }
 
 // AddAllowedEndpoint adds an endpoint to the allowed list
@@ -349,7 +352,7 @@ func (pm *PolicyManager) AddAllowedEndpoint(name, endpoint string) error {
 
 	// Add endpoint
 	policy.Allowed = append(policy.Allowed, endpoint)
-	policy.UpdatedAt = 0 // Will be set when saved
+	policy.UpdatedAt = time.Now().Unix()
 
 	return nil
 }
@@ -377,7 +380,7 @@ func (pm *PolicyManager) RemoveAllowedEndpoint(name, endpoint string) error {
 	}
 
 	policy.Allowed = newAllowed
-	policy.UpdatedAt = 0 // Will be set when saved
+	policy.UpdatedAt = time.Now().Unix()
 
 	return nil
 }
@@ -411,7 +414,7 @@ func (pm *PolicyManager) AddDeniedEndpoint(name, endpoint string) error {
 
 	// Add endpoint
 	policy.Denied = append(policy.Denied, endpoint)
-	policy.UpdatedAt = 0 // Will be set when saved
+	policy.UpdatedAt = time.Now().Unix()
 
 	return nil
 }
@@ -439,7 +442,7 @@ func (pm *PolicyManager) RemoveDeniedEndpoint(name, endpoint string) error {
 	}
 
 	policy.Denied = newDenied
-	policy.UpdatedAt = 0 // Will be set when saved
+	policy.UpdatedAt = time.Now().Unix()
 
 	return nil
 }

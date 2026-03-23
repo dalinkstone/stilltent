@@ -100,7 +100,7 @@ Examples:
 			// Determine hypervisor
 			switch runtime.GOOS {
 			case "darwin":
-				info.Hypervisor = "Apple Hypervisor.framework (HVF)"
+				info.Hypervisor = "Apple Virtualization.framework (VZ)"
 			case "linux":
 				if _, err := os.Stat("/dev/kvm"); err == nil {
 					info.Hypervisor = "KVM"

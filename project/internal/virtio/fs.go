@@ -1165,6 +1165,10 @@ func (d *VirtioFS) handleRename(hdr FuseInHeader, body []byte) ([]byte, error) {
 		return d.errorResponse(hdr.Unique, FuseErrInval), nil
 	}
 
+	// Ensure there's space for the null terminator and the new name
+	if len(names) < len(oldName)+2 {
+		return d.errorResponse(hdr.Unique, FuseErrInval), nil
+	}
 	remaining := names[len(oldName)+1:]
 	newName := cstring(remaining)
 	if newName == "" {
@@ -1226,14 +1230,17 @@ func (d *VirtioFS) isPathSafe(path string) bool {
 	if err != nil {
 		return false
 	}
+	// Ensure the path prefix includes a path separator to prevent
+	// matching paths like "/shared-evil" when root is "/shared".
+	rootWithSep := d.hostPath + string(filepath.Separator)
 	// Resolve symlinks to prevent traversal via symlinks
 	resolved, err := filepath.EvalSymlinks(filepath.Dir(absPath))
 	if err != nil {
 		// Parent dir might not exist yet (for create operations)
 		// Check if the directory portion is within root
-		return strings.HasPrefix(absPath, d.hostPath)
+		return absPath == d.hostPath || strings.HasPrefix(absPath, rootWithSep)
 	}
-	return strings.HasPrefix(resolved, d.hostPath) || resolved == d.hostPath
+	return resolved == d.hostPath || strings.HasPrefix(resolved, rootWithSep)
 }
 
 // fileInfoToAttr converts os.FileInfo to FuseAttr.
