@@ -42,6 +42,15 @@ tidb-data/
 *.bfg-report
 ..bfg-report/
 
+# Compiled binaries and object files
+*.o
+*.a
+*.so
+*.dylib
+embed-service/embed-service
+project/tent
+project/tent-agent
+
 # Editor
 .vscode/
 .idea/

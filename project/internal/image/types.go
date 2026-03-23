@@ -1,6 +1,8 @@
 // Package image provides image pipeline functionality for OCI/Docker, ISO, and raw disk images.
 package image
 
+import "fmt"
+
 // Format represents an image format
 type Format string
 
@@ -35,4 +37,26 @@ type ExtractOptions struct {
 	OutputPath string
 	// Format specifies the input format (auto-detect if empty)
 	Format Format
+}
+
+// PullPolicy controls when images are fetched from a remote registry.
+type PullPolicy string
+
+const (
+	// PullMissing only pulls if the image is not already cached locally.
+	PullMissing PullPolicy = "missing"
+	// PullAlways checks the remote registry and re-pulls if the manifest digest changed.
+	PullAlways PullPolicy = "always"
+	// PullNever returns an error if the image is not cached locally.
+	PullNever PullPolicy = "never"
+)
+
+// ValidatePullPolicy checks that the given string is a valid pull policy.
+func ValidatePullPolicy(s string) (PullPolicy, error) {
+	switch PullPolicy(s) {
+	case PullMissing, PullAlways, PullNever:
+		return PullPolicy(s), nil
+	default:
+		return "", fmt.Errorf("invalid pull policy %q: must be missing, always, or never", s)
+	}
 }

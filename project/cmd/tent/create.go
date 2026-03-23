@@ -12,7 +12,6 @@ import (
 	"github.com/dalinkstone/tent/internal/config"
 	"github.com/dalinkstone/tent/internal/image"
 	"github.com/dalinkstone/tent/internal/sandbox"
-	"github.com/dalinkstone/tent/internal/storage"
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
@@ -31,6 +30,7 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 
 	var (
 		fromImage   string
+		pullPolicy  string
 		vcpus       int
 		memoryMB    int
 		diskGB      int
@@ -39,26 +39,61 @@ func ConfigureCreateCmd(options ...CommonCmdOption) *cobra.Command {
 		mountSpecs  []string
 		portSpecs   []string
 		labelSpecs  []string
-		hookSpecs    []string
-		backendName  string
-		cpuWeight    int
-		cpuMax       int
-		memMax       int
-		pidsMax      int
+		hookSpecs   []string
+		backendName string
+		cpuWeight   int
+		cpuMax      int
+		memMax      int
+		pidsMax     int
+		enableSSH   bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create <name> [--from <image-ref>] [--config <path>]",
-		Short: "Create a new microVM",
-		Long: `Create a new microVM from a Docker/OCI image, registry image, ISO, or raw disk image.
+		Short: "Create a new microVM sandbox",
+		Long: `Create a new microVM sandbox from a Docker/OCI image, registry image, ISO, or
+raw disk image.
 
-Examples:
+The sandbox is created but not started. Use "tent start" to boot it, or use
+"tent run" to create, start, and execute a command in a single step.
+
+Images are pulled automatically from Docker Hub or any OCI-compatible registry
+when not available locally. Use "tent image list" to see cached images.
+
+On macOS the sandbox runs on Virtualization.framework; on Linux it uses KVM.
+The hypervisor backend can be overridden with the --backend flag.
+
+Configuration can be provided via CLI flags or a YAML file (--config). When
+both are given, CLI flags override values from the config file. Environment
+variable references in YAML (e.g., ${MY_VAR}) are expanded automatically.
+
+See also: tent start, tent run, tent destroy, tent config init`,
+		Example: `  # Create a sandbox from an Ubuntu image
   tent create mybox --from ubuntu:22.04
-  tent create agent --from python:3.12-slim --vcpus 4 --memory 2048
-  tent create dev --from ubuntu:22.04 --allow api.anthropic.com --allow openrouter.ai
+
+  # Create with custom resources
+  tent create devbox --from python:3.12-slim --vcpus 4 --memory 2048
+
+  # Create with network allow-list for specific APIs
+  tent create agent --from ubuntu:22.04 --allow api.anthropic.com --allow openrouter.ai
+
+  # Create from a YAML config file
   tent create mybox --config sandbox.yaml
+
+  # Create with host directory mounts (read-write and read-only)
   tent create dev --from ubuntu:22.04 --mount ./workspace:/workspace --mount ./data:/data:ro
-  tent create web --from ubuntu:22.04 --port 8080:80 --port 2222:22`,
+
+  # Create with port forwarding
+  tent create web --from ubuntu:22.04 --port 8080:80 --port 2222:22
+
+  # Create with environment variables
+  tent create agent --from ubuntu:22.04 --env TERM=xterm-256color --env API_KEY='${MY_KEY}'
+
+  # Create with lifecycle hooks
+  tent create mybox --from ubuntu:22.04 --hook pre_start:"echo starting"
+
+  # Create with resource limits
+  tent create mybox --from ubuntu:22.04 --cpu-weight 100 --memory-max 4096 --pids-max 500`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -78,18 +113,24 @@ Examples:
 			} else {
 				// Build config from flags
 				cfg = &models.VMConfig{
-					Name:     name,
-					From:     fromImage,
-					VCPUs:    vcpus,
-					MemoryMB: memoryMB,
-					DiskGB:   diskGB,
-					Kernel:   "default",
+					Name:      name,
+					From:      fromImage,
+					VCPUs:     vcpus,
+					MemoryMB:  memoryMB,
+					DiskGB:    diskGB,
+					Kernel:    "default",
+					EnableSSH: enableSSH,
 					Network: models.NetworkConfig{
 						Mode:   "bridge",
 						Bridge: "tent0",
 						Allow:  allowList,
 					},
 				}
+			}
+
+			// Apply --ssh flag if set (overrides config file)
+			if cmd.Flags().Changed("ssh") {
+				cfg.EnableSSH = enableSSH
 			}
 
 			// Parse --env KEY=VALUE pairs
@@ -209,16 +250,18 @@ Examples:
 					return fmt.Errorf("failed to create image manager: %w", err)
 				}
 
-				rootfsPath, err := imgMgr.ResolveImage(cfg.From)
-				if err != nil {
-					return fmt.Errorf("failed to resolve image %q: %w", cfg.From, err)
+				// Parse pull policy
+				pp := image.PullMissing
+				if pullPolicy != "" {
+					pp, err = image.ValidatePullPolicy(pullPolicy)
+					if err != nil {
+						return err
+					}
 				}
 
-				// Format the raw disk image as ext4 so the guest kernel can mount it
-				if err := storage.FormatExt4(rootfsPath, &storage.Ext4FormatConfig{
-					Label: "rootfs",
-				}); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to format rootfs as ext4: %v\n", err)
+				rootfsPath, err := imgMgr.ResolveImage(cfg.From, pp)
+				if err != nil {
+					return fmt.Errorf("failed to resolve image %q: %w", cfg.From, err)
 				}
 
 				cfg.RootFS = rootfsPath
@@ -259,6 +302,7 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&fromImage, "from", "", "Image reference (e.g., ubuntu:22.04, python:3.12-slim, /path/to/image.iso)")
+	cmd.Flags().StringVar(&pullPolicy, "pull", "", "Image pull policy: missing, always, never (default \"missing\")")
 	cmd.Flags().StringVar(&configPath, "config", "", "Path to YAML configuration file")
 	cmd.Flags().IntVar(&vcpus, "vcpus", 2, "Number of virtual CPUs")
 	cmd.Flags().IntVar(&memoryMB, "memory", 1024, "Memory in MB")
@@ -274,6 +318,7 @@ Examples:
 	cmd.Flags().IntVar(&cpuMax, "cpu-max", 0, "Maximum CPU usage as percentage")
 	cmd.Flags().IntVar(&memMax, "memory-max", 0, "Hard memory limit in MB")
 	cmd.Flags().IntVar(&pidsMax, "pids-max", 0, "Maximum number of processes")
+	cmd.Flags().BoolVar(&enableSSH, "ssh", false, "Enable SSH server in guest (default: use vsock agent instead)")
 
 	return cmd
 }

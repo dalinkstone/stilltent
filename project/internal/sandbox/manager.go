@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/dalinkstone/tent/internal/network"
 	"github.com/dalinkstone/tent/internal/state"
 	"github.com/dalinkstone/tent/internal/storage"
+	"github.com/dalinkstone/tent/internal/virtio"
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
@@ -247,10 +249,36 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		}
 	}
 
-	// Generate SSH keypair for this sandbox
-	keyPair, err := GenerateSSHKeys(m.baseDir, name)
-	if err != nil {
-		return fmt.Errorf("failed to generate SSH keys: %w", err)
+	// Generate SSH keypair only if SSH is explicitly enabled via config.
+	// The default exec path now uses the vsock-based guest agent.
+	var sshKeyPath string
+	if config.EnableSSH {
+		keyPair, err := GenerateSSHKeys(m.baseDir, name)
+		if err != nil {
+			return fmt.Errorf("failed to generate SSH keys: %w", err)
+		}
+		sshKeyPath = keyPair.PrivateKeyPath
+
+		// Provision the rootfs for VM boot — inject init script, SSH keys, networking.
+		// Container images (OCI) lack /sbin/init, sshd, and DHCP config.
+		if config.RootFS != "" {
+			rootfsDir := strings.TrimSuffix(config.RootFS, ".img") + "_rootfs"
+			if _, err := os.Stat(rootfsDir); err == nil {
+				if err := provisionRootfs(rootfsDir, keyPair.PublicKeyPath); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to provision rootfs for %s: %v\n", name, err)
+				}
+			}
+		}
+	} else {
+		// Provision rootfs without SSH — agent-only mode
+		if config.RootFS != "" {
+			rootfsDir := strings.TrimSuffix(config.RootFS, ".img") + "_rootfs"
+			if _, err := os.Stat(rootfsDir); err == nil {
+				if err := provisionRootfs(rootfsDir, ""); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to provision rootfs for %s: %v\n", name, err)
+				}
+			}
+		}
 	}
 
 	// Validate and persist mount shares if configured
@@ -275,7 +303,7 @@ func (m *VMManager) Create(name string, config *models.VMConfig) error {
 		Status:      models.VMStatusCreated,
 		RootFSPath:  rootfsPath,
 		TAPDevice:   tapDevice,
-		SSHKeyPath:  keyPair.PrivateKeyPath,
+		SSHKeyPath:  sshKeyPath,
 		ImageRef:    config.From,
 		VCPUs:       config.VCPUs,
 		MemoryMB:    config.MemoryMB,
@@ -363,12 +391,16 @@ func (m *VMManager) Clone(srcName, dstName string) error {
 		}
 	}
 
-	// Generate fresh SSH keys for the clone
-	keyPair, err := GenerateSSHKeys(m.baseDir, dstName)
-	if err != nil {
-		m.networkMgr.CleanupVMNetwork(dstName)
-		m.storageMgr.DestroyVMStorage(dstName)
-		return fmt.Errorf("failed to generate SSH keys: %w", err)
+	// Generate fresh SSH keys only if SSH is enabled in the source config
+	var cloneSSHKeyPath string
+	if dstConfig.EnableSSH {
+		keyPair, err := GenerateSSHKeys(m.baseDir, dstName)
+		if err != nil {
+			m.networkMgr.CleanupVMNetwork(dstName)
+			m.storageMgr.DestroyVMStorage(dstName)
+			return fmt.Errorf("failed to generate SSH keys: %w", err)
+		}
+		cloneSSHKeyPath = keyPair.PrivateKeyPath
 	}
 
 	// Clone mounts if configured
@@ -390,7 +422,7 @@ func (m *VMManager) Clone(srcName, dstName string) error {
 		Status:     models.VMStatusCreated,
 		RootFSPath: rootfsPath,
 		TAPDevice:  tapDevice,
-		SSHKeyPath: keyPair.PrivateKeyPath,
+		SSHKeyPath: cloneSSHKeyPath,
 		ImageRef:   srcState.ImageRef,
 		VCPUs:      dstConfig.VCPUs,
 		MemoryMB:   dstConfig.MemoryMB,
@@ -536,6 +568,18 @@ func (m *VMManager) Start(name string) error {
 	// Update state
 	vmState.Status = models.VMStatusRunning
 	vmState.IP = vm.GetIP()
+
+	// IP discovery is now lazy — only performed when a network operation
+	// (port forwarding, egress firewall) actually needs it.
+	// The vsock-based agent does not require an IP address for exec/shell.
+	// Attempt a quick, non-blocking check for an IP if the backend reported one.
+	if vmState.IP == "" {
+		if discovered := discoverGuestIP(name, 2*time.Second); discovered != "" {
+			vmState.IP = discovered
+			vm.SetIP(discovered)
+		}
+	}
+
 	vmState.UpdatedAt = time.Now().Unix()
 
 	// Apply egress firewall rules now that VM has an IP
@@ -847,9 +891,21 @@ func (m *VMManager) Destroy(name string) error {
 	wasStopped := false
 	if vmState.Status == models.VMStatusRunning {
 		if err := m.Stop(name); err != nil {
-			return fmt.Errorf("failed to stop VM before destroy: %w", err)
+			// If the VM process is gone (e.g. tent was restarted) but state
+			// still says "running", the in-memory handle won't exist.
+			// Treat this as an orphaned state and continue with cleanup.
+			m.mu.Lock()
+			_, stillTracked := m.runningVMs[name]
+			m.mu.Unlock()
+			if stillTracked {
+				// Stop failed for a real reason — the VM handle exists
+				return fmt.Errorf("failed to stop VM before destroy: %w", err)
+			}
+			// Orphaned state — VM process is gone, proceed with destroy
+			fmt.Fprintf(os.Stderr, "warning: VM %s was marked running but process not found, cleaning up state\n", name)
+		} else {
+			wasStopped = true
 		}
-		wasStopped = true
 	}
 
 	// Remove port forwarding rules (for created/never-started VMs;
@@ -1252,7 +1308,9 @@ func (m *VMManager) DeleteAllCheckpoints(name string) (int, error) {
 	return cpMgr.DeleteAllCheckpoints(name)
 }
 
-// Exec executes a command inside a running microVM
+// Exec executes a command inside a running microVM.
+// It first attempts to use the vsock-based guest agent. If the agent is
+// unavailable, it falls back to the deprecated SSH path.
 func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 	// Check if VM exists
 	vmState, err := m.stateManager.GetVM(name)
@@ -1264,7 +1322,16 @@ func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 		return "", 1, fmt.Errorf("VM %s is not running", name)
 	}
 
-	// Resolve the guest IP
+	// Try vsock agent first
+	output, exitCode, err := m.ExecViaAgent(name, command)
+	if err == nil {
+		return output, exitCode, nil
+	}
+
+	// Vsock agent unavailable — fall back to SSH
+	fmt.Fprintf(os.Stderr, "warning: vsock agent unavailable for %s, falling back to SSH: %v\n", name, err)
+
+	// Resolve the guest IP for SSH fallback
 	vmIP := vmState.IP
 	m.mu.Lock()
 	vm, ok := m.runningVMs[name]
@@ -1276,15 +1343,99 @@ func (m *VMManager) Exec(name string, command []string) (string, int, error) {
 	}
 
 	if vmIP == "" {
-		return "", 1, fmt.Errorf("VM %s has no IP address", name)
+		return "", 1, fmt.Errorf("VM %s has no IP address — vsock agent failed and no IP for SSH fallback", name)
 	}
 
-	return m.execSSH(name, vmIP, command)
+	return m.execSSHFallback(name, vmIP, command)
 }
 
-// execSSH runs a command inside the guest VM over SSH and returns
+// ExecViaAgent executes a command inside the guest via the vsock-based guest agent.
+// This is the preferred execution path — no SSH, no IP discovery required.
+func (m *VMManager) ExecViaAgent(name string, command []string) (string, int, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", 1, fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning {
+		return "", 1, fmt.Errorf("VM %s is not running", name)
+	}
+
+	// Build the agent connection via vsock
+	agent, err := m.connectAgent(name)
+	if err != nil {
+		return "", 1, fmt.Errorf("agent connect failed: %w", err)
+	}
+
+	// Build exec request: first element is the command, rest are args
+	cmd := command[0]
+	var args []string
+	if len(command) > 1 {
+		args = command[1:]
+	}
+
+	req := virtio.ExecRequest{
+		Command: cmd,
+		Args:    args,
+	}
+
+	resp, err := agent.Exec(req)
+	if err != nil {
+		return "", 1, fmt.Errorf("agent exec failed: %w", err)
+	}
+
+	if resp.Error != "" {
+		return "", 1, fmt.Errorf("guest agent error: %s", resp.Error)
+	}
+
+	// Combine stdout and stderr (stdout first, then stderr)
+	var combined string
+	if len(resp.Stdout) > 0 {
+		combined += string(resp.Stdout)
+	}
+	if len(resp.Stderr) > 0 {
+		combined += string(resp.Stderr)
+	}
+
+	return combined, resp.ExitCode, nil
+}
+
+// connectAgent creates a GuestAgent and connects to the guest via vsock.
+// The agent uses virtio-vsock port 1024 (VsockPortGuestAgent).
+func (m *VMManager) connectAgent(name string) (*virtio.GuestAgent, error) {
+	m.mu.Lock()
+	_, ok := m.runningVMs[name]
+	m.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("VM %s not found in running VMs", name)
+	}
+
+	// Create a lightweight vsock device stub for the agent connection.
+	// The actual vsock transport is managed by the hypervisor backend;
+	// here we create an agent that communicates over the vsock protocol.
+	vsockDev, err := virtio.NewVirtioVsock(virtio.VirtioVsockOpts{
+		DeviceID: fmt.Sprintf("agent-%s", name),
+		GuestCID: 3, // Standard guest CID
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create vsock device: %w", err)
+	}
+	if err := vsockDev.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start vsock device: %w", err)
+	}
+
+	agent := virtio.NewGuestAgent(vsockDev)
+	if err := agent.Connect(); err != nil {
+		return nil, fmt.Errorf("failed to connect to guest agent: %w", err)
+	}
+
+	return agent, nil
+}
+
+// execSSHFallback runs a command inside the guest VM over SSH and returns
 // the combined output and exit code.
-func (m *VMManager) execSSH(vmName, ip string, command []string) (string, int, error) {
+// Deprecated: Use ExecViaAgent instead. SSH fallback will be removed in a future release.
+func (m *VMManager) execSSHFallback(vmName, ip string, command []string) (string, int, error) {
 	sshArgs := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
@@ -1345,6 +1496,87 @@ func (m *VMManager) GetSSHArgs(name string) ([]string, error) {
 
 	args = append(args, "root@"+vmState.IP)
 	return args, nil
+}
+
+// DiscoverIP lazily discovers the guest IP address for a running sandbox.
+// This is only needed for network-facing operations (port forwarding, egress
+// firewall, SSH fallback) — the vsock agent does not require an IP.
+func (m *VMManager) DiscoverIP(name string) (string, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return "", fmt.Errorf("VM not found: %w", err)
+	}
+
+	// Return cached IP if already known
+	if vmState.IP != "" {
+		return vmState.IP, nil
+	}
+
+	m.mu.Lock()
+	vm, ok := m.runningVMs[name]
+	m.mu.Unlock()
+	if ok {
+		if ip := vm.GetIP(); ip != "" {
+			return ip, nil
+		}
+	}
+
+	// Poll for IP with a 30-second timeout
+	discovered := discoverGuestIP(name, 30*time.Second)
+	if discovered == "" {
+		return "", fmt.Errorf("could not discover IP for VM %s", name)
+	}
+
+	// Cache the discovered IP
+	if ok {
+		vm.SetIP(discovered)
+	}
+	_ = m.stateManager.UpdateVM(name, func(s *models.VMState) error {
+		s.IP = discovered
+		return nil
+	})
+
+	return discovered, nil
+}
+
+// ExecShell opens an interactive shell inside a running sandbox via the vsock
+// guest agent. It sends an exec_request for the given shell command with
+// TTY=true. Returns the exit code.
+func (m *VMManager) ExecShell(name string, shell string) (int, error) {
+	vmState, err := m.stateManager.GetVM(name)
+	if err != nil {
+		return 1, fmt.Errorf("VM not found: %w", err)
+	}
+
+	if vmState.Status != models.VMStatusRunning {
+		return 1, fmt.Errorf("VM %s is not running", name)
+	}
+
+	agent, err := m.connectAgent(name)
+	if err != nil {
+		return 1, fmt.Errorf("agent connect failed: %w", err)
+	}
+
+	req := virtio.ExecRequest{
+		Command: shell,
+		TTY:     true,
+	}
+
+	resp, err := agent.Exec(req)
+	if err != nil {
+		return 1, fmt.Errorf("agent exec failed: %w", err)
+	}
+
+	if resp.Error != "" {
+		return 1, fmt.Errorf("guest agent error: %s", resp.Error)
+	}
+
+	// Print any output from the shell session
+	if len(resp.Stdout) > 0 {
+		fmt.Print(string(resp.Stdout))
+	}
+
+	return resp.ExitCode, nil
 }
 
 // ListPortForwards returns port forwarding status for a specific VM

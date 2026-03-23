@@ -7,12 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/dalinkstone/tent/pkg/models"
 )
 
-// CreateRootFS creates a root filesystem for a VM on Linux
-// On Linux, we mount the image and initialize the filesystem structure
+// CreateRootFS creates a root filesystem for a VM on Linux.
+// If config.RootFS is set (from a resolved OCI image), the extracted layer
+// contents are copied into the disk image. Otherwise a blank ext4 image is
+// created with a basic directory skeleton.
 func (m *Manager) CreateRootFS(vmName string, config *models.VMConfig) (string, error) {
 	// Create directories
 	rootfsDir := filepath.Join(m.baseDir, "rootfs")
@@ -43,10 +46,28 @@ func (m *Manager) CreateRootFS(vmName string, config *models.VMConfig) (string, 
 		return "", fmt.Errorf("failed to mount rootfs: %w", err)
 	}
 
-	// Initialize basic filesystem structure
-	if err := m.initializeFilesystem(mountPoint); err != nil {
-		m.umountRootfs(mountPoint)
-		return "", fmt.Errorf("failed to initialize filesystem: %w", err)
+	// If a resolved image is available, copy its content into the mounted filesystem
+	if config.RootFS != "" {
+		srcRootfsDir := strings.TrimSuffix(config.RootFS, ".img") + "_rootfs"
+		if info, err := os.Stat(srcRootfsDir); err == nil && info.IsDir() {
+			// Copy the extracted OCI layers into the mounted disk image
+			if err := copyDirContents(srcRootfsDir, mountPoint); err != nil {
+				m.umountRootfs(mountPoint)
+				return "", fmt.Errorf("failed to copy image contents to rootfs: %w", err)
+			}
+		} else {
+			// No rootfs directory — initialize with basic structure
+			if err := m.initializeFilesystem(mountPoint); err != nil {
+				m.umountRootfs(mountPoint)
+				return "", fmt.Errorf("failed to initialize filesystem: %w", err)
+			}
+		}
+	} else {
+		// No resolved image — initialize basic filesystem structure
+		if err := m.initializeFilesystem(mountPoint); err != nil {
+			m.umountRootfs(mountPoint)
+			return "", fmt.Errorf("failed to initialize filesystem: %w", err)
+		}
 	}
 
 	// Unmount
@@ -55,6 +76,62 @@ func (m *Manager) CreateRootFS(vmName string, config *models.VMConfig) (string, 
 	}
 
 	return rootfsPath, nil
+}
+
+// copyDirContents recursively copies all entries from src into dst.
+func copyDirContents(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, linkErr := os.Readlink(srcPath)
+			if linkErr != nil {
+				return linkErr
+			}
+			os.Remove(dstPath)
+			if err := os.Symlink(linkTarget, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if entry.IsDir() {
+			if err := os.MkdirAll(dstPath, info.Mode()); err != nil {
+				return err
+			}
+			if err := copyDirContents(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			srcFile, err := os.Open(srcPath)
+			if err != nil {
+				return err
+			}
+			dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+			if err != nil {
+				srcFile.Close()
+				return err
+			}
+			_, cpErr := dstFile.ReadFrom(srcFile)
+			srcFile.Close()
+			dstFile.Close()
+			if cpErr != nil {
+				return cpErr
+			}
+		}
+	}
+	return nil
 }
 
 // CloneRootFS copies the rootfs from one VM to a new VM directory on Linux

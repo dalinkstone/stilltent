@@ -19,10 +19,25 @@ func ConfigureDestroyCmd(options ...CommonCmdOption) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:   "destroy <name>",
-		Short: "Remove a microVM and all its resources",
-		Long:  `Remove a microVM and all its associated resources (rootfs, network, state).`,
-		Args:  cobra.ExactArgs(1),
+		Use:     "destroy <name>",
+		Aliases: []string{"rm"},
+		Short:   "Remove a microVM and all its resources",
+		Long: `Permanently remove a microVM sandbox and all its associated resources.
+
+This deletes the sandbox's rootfs disk image, configuration, state file,
+SSH keys, log files, and TAP network device. The sandbox must be stopped
+before it can be destroyed.
+
+This operation is irreversible. To preserve the sandbox's disk state
+before destroying, use "tent snapshot create" or "tent backup create".
+
+See also: tent stop, tent create, tent snapshot, tent prune`,
+		Example: `  # Destroy a stopped sandbox
+  tent destroy mybox
+
+  # Stop and destroy in one step
+  tent stop mybox && tent destroy mybox`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 

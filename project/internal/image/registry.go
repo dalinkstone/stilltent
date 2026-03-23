@@ -3,11 +3,13 @@ package image
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -138,6 +140,154 @@ func (c *RegistryClient) FetchManifest(registry, repo, tag string) (*OCIManifest
 	}
 
 	return &manifest, nil
+}
+
+// FetchManifestRaw retrieves the image manifest and returns both the parsed
+// manifest and the raw JSON bytes (for digest computation). It handles manifest
+// lists by selecting the best platform match.
+func (c *RegistryClient) FetchManifestRaw(registry, repo, tag string) (*OCIManifest, []byte, error) {
+	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, repo, tag)
+
+	acceptTypes := strings.Join([]string{
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+	}, ", ")
+
+	body, mediaType, err := c.registryGet(registry, repo, url, acceptTypes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to fetch manifest: %w", err)
+	}
+	defer body.Close()
+
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	// If this is a manifest list / index, resolve to a single manifest
+	if isManifestList(mediaType) {
+		var list OCIManifestList
+		if err := json.Unmarshal(data, &list); err != nil {
+			return nil, nil, fmt.Errorf("failed to parse manifest list: %w", err)
+		}
+
+		digest, err := selectPlatform(list.Manifests)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Re-fetch the resolved manifest by digest
+		return c.FetchManifestRaw(registry, repo, digest)
+	}
+
+	var manifest OCIManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	return &manifest, data, nil
+}
+
+// HeadManifest performs an HTTP HEAD request to get the manifest digest without
+// downloading the full manifest body. The digest is read from the
+// Docker-Content-Digest response header. If HEAD is not supported by the
+// registry, it falls back to a full GET and computes the digest locally.
+func (c *RegistryClient) HeadManifest(registry, repo, tag string) (string, error) {
+	url := fmt.Sprintf("https://%s/v2/%s/manifests/%s", registry, repo, tag)
+
+	acceptTypes := strings.Join([]string{
+		"application/vnd.oci.image.manifest.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+	}, ", ")
+
+	// Try HEAD first
+	resp, err := c.registryHead(registry, repo, url, acceptTypes)
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			digest := resp.Header.Get("Docker-Content-Digest")
+			if digest != "" {
+				return digest, nil
+			}
+		}
+	}
+
+	// Fall back to GET and compute digest
+	body, _, err := c.registryGet(registry, repo, url, acceptTypes)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch manifest for digest: %w", err)
+	}
+	defer body.Close()
+
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	return computeSHA256Bytes(data), nil
+}
+
+// registryHead performs an authenticated HEAD request to a registry endpoint.
+// It handles the WWW-Authenticate challenge flow for bearer token auth.
+func (c *RegistryClient) registryHead(registry, repo, reqURL, accept string) (*http.Response, error) {
+	req, err := http.NewRequest("HEAD", reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", accept)
+
+	// Use cached token if available
+	tokenKey := registry + "/" + repo
+	if te, ok := c.tokens[tokenKey]; ok && time.Now().Before(te.expires) {
+		req.Header.Set("Authorization", "Bearer "+te.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HEAD request failed: %w", err)
+	}
+
+	// Handle auth challenge
+	if resp.StatusCode == http.StatusUnauthorized {
+		resp.Body.Close()
+
+		challenge := resp.Header.Get("Www-Authenticate")
+		if challenge == "" {
+			return nil, fmt.Errorf("registry returned 401 with no WWW-Authenticate header")
+		}
+
+		token, expiresIn, err := c.fetchToken(challenge, registry, repo)
+		if err != nil {
+			return nil, fmt.Errorf("failed to authenticate: %w", err)
+		}
+
+		c.tokens[tokenKey] = tokenEntry{
+			token:   token,
+			expires: time.Now().Add(time.Duration(expiresIn) * time.Second),
+		}
+
+		req2, _ := http.NewRequest("HEAD", reqURL, nil)
+		req2.Header.Set("Accept", accept)
+		req2.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err = c.httpClient.Do(req2)
+		if err != nil {
+			return nil, fmt.Errorf("authenticated HEAD request failed: %w", err)
+		}
+	}
+
+	return resp, nil
+}
+
+// computeSHA256Bytes computes sha256 digest of raw bytes in OCI format "sha256:<hex>".
+func computeSHA256Bytes(data []byte) string {
+	h := sha256.New()
+	h.Write(data)
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
 // FetchLayers converts manifest layers into LayerInfo structs with download URLs
@@ -434,10 +584,19 @@ func selectPlatform(entries []OCIManifestEntry) (string, error) {
 		return "", fmt.Errorf("empty manifest list")
 	}
 
-	// Preference order
-	preferences := []struct{ arch, variant string }{
-		{"amd64", ""},
-		{"arm64", ""},
+	// Prefer the host architecture so the guest kernel can run the binaries
+	hostArch := runtime.GOARCH // "arm64" on Apple Silicon, "amd64" on Intel
+	var preferences []struct{ arch, variant string }
+	if hostArch == "arm64" {
+		preferences = []struct{ arch, variant string }{
+			{"arm64", ""},
+			{"amd64", ""},
+		}
+	} else {
+		preferences = []struct{ arch, variant string }{
+			{"amd64", ""},
+			{"arm64", ""},
+		}
 	}
 
 	for _, pref := range preferences {

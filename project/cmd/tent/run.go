@@ -17,6 +17,7 @@ import (
 func runCmd() *cobra.Command {
 	var (
 		fromImage  string
+		pullPolicy string
 		vcpus      int
 		memoryMB   int
 		diskGB     int
@@ -28,20 +29,43 @@ func runCmd() *cobra.Command {
 		rmAfter    bool
 		detach     bool
 		name       string
+		enableSSH  bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "run [flags] -- <command> [args...]",
 		Short: "Create, start, and execute a command in a single step",
-		Long: `Create a new sandbox, start it, execute a command, and optionally destroy it afterward.
-This is a convenience command combining create + start + exec in one step.
+		Long: `Create a new sandbox, start it, and execute a command in one step.
 
-Examples:
-  tent run --from ubuntu:22.04 -- echo hello
+This is the fastest way to run an isolated command. It combines the
+"create", "start", and "exec" lifecycle steps into a single invocation.
+
+Use --rm to automatically destroy the sandbox after the command exits.
+Without --rm the sandbox remains and can be reused with "tent start".
+
+Use -d (--detach) to start the sandbox in the background and return
+immediately without executing a command. The sandbox name is printed
+to stdout for scripting.
+
+A sandbox name is auto-generated if --name is not provided.
+
+See also: tent create, tent start, tent exec, tent destroy`,
+		Example: `  # Run a command and remove the sandbox afterward
+  tent run --from ubuntu:22.04 --rm -- echo hello
+
+  # Run Python in a slim container
   tent run --from python:3.12-slim --rm -- python -c "print('hello')"
+
+  # Run with network allow-list
   tent run --name mybox --from ubuntu:22.04 --allow api.anthropic.com -- curl https://api.anthropic.com
+
+  # Run with environment variables and mounts
   tent run --from ubuntu:22.04 --env KEY=value --mount ./data:/data -- ls /data
+
+  # Start a detached sandbox for later use
   tent run --from ubuntu:22.04 -d --name worker -- /usr/bin/long-running-task
+
+  # Run from a config file
   tent run --config sandbox.yaml -- my-script.sh`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -67,18 +91,24 @@ Examples:
 					return fmt.Errorf("--from is required (or use --config)")
 				}
 				cfg = &models.VMConfig{
-					Name:     name,
-					From:     fromImage,
-					VCPUs:    vcpus,
-					MemoryMB: memoryMB,
-					DiskGB:   diskGB,
-					Kernel:   "default",
+					Name:      name,
+					From:      fromImage,
+					VCPUs:     vcpus,
+					MemoryMB:  memoryMB,
+					DiskGB:    diskGB,
+					Kernel:    "default",
+					EnableSSH: enableSSH,
 					Network: models.NetworkConfig{
 						Mode:   "bridge",
 						Bridge: "tent0",
 						Allow:  allowList,
 					},
 				}
+			}
+
+			// Apply --ssh flag if set (overrides config file)
+			if cmd.Flags().Changed("ssh") {
+				cfg.EnableSSH = enableSSH
 			}
 
 			// Parse --env KEY=VALUE pairs
@@ -132,7 +162,17 @@ Examples:
 				if err != nil {
 					return fmt.Errorf("failed to create image manager: %w", err)
 				}
-				rootfsPath, err := imgMgr.ResolveImage(cfg.From)
+
+				// Parse pull policy
+				pp := image.PullMissing
+				if pullPolicy != "" {
+					pp, err = image.ValidatePullPolicy(pullPolicy)
+					if err != nil {
+						return err
+					}
+				}
+
+				rootfsPath, err := imgMgr.ResolveImage(cfg.From, pp)
 				if err != nil {
 					return fmt.Errorf("failed to resolve image %q: %w", cfg.From, err)
 				}
@@ -202,6 +242,7 @@ Examples:
 	}
 
 	cmd.Flags().StringVar(&fromImage, "from", "", "Image reference (e.g., ubuntu:22.04)")
+	cmd.Flags().StringVar(&pullPolicy, "pull", "", "Image pull policy: missing, always, never (default \"missing\")")
 	cmd.Flags().StringVar(&name, "name", "", "Sandbox name (default: auto-generated)")
 	cmd.Flags().StringVar(&cfgPath, "config", "", "Path to YAML configuration file")
 	cmd.Flags().IntVar(&vcpus, "vcpus", 2, "Number of virtual CPUs")
@@ -213,6 +254,7 @@ Examples:
 	cmd.Flags().StringSliceVar(&portSpecs, "port", nil, "Port forwarding (hostPort:guestPort)")
 	cmd.Flags().BoolVar(&rmAfter, "rm", false, "Remove sandbox after command exits")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start sandbox and return without executing command")
+	cmd.Flags().BoolVar(&enableSSH, "ssh", false, "Enable SSH server in guest (default: use vsock agent)")
 
 	return cmd
 }

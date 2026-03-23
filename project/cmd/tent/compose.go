@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"sync"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -23,8 +23,21 @@ import (
 func composeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "compose",
-		Short: "Multi-sandbox orchestration",
-		Long:  "Manage groups of sandboxes defined in a YAML compose file.",
+		Short: "Multi-sandbox orchestration from a compose file",
+		Long: `Manage groups of sandboxes defined in a YAML compose file.
+
+Compose files describe multiple sandboxes, their images, resource limits,
+network connections, mounts, and dependency ordering. A single "tent compose up"
+command creates and starts all sandboxes in the correct order.
+
+Profiles allow selective startup of subsets of sandboxes. Sandboxes with no
+profiles are always started; sandboxes with profiles are started only when
+at least one of their profiles is active.
+
+The compose file format is similar to Docker Compose but tailored for
+microVM sandboxes.
+
+See also: tent create, tent pool, tent template`,
 	}
 
 	cmd.AddCommand(composeUpCmd())
@@ -1529,11 +1542,11 @@ Examples:
 
 			// Collect hooks info
 			type hookInfo struct {
-				Service     string              `json:"service"`
-				PostCreate  []string            `json:"post_create,omitempty"`
-				PostStart   []string            `json:"post_start,omitempty"`
-				PreStop     []string            `json:"pre_stop,omitempty"`
-				PreDestroy  []string            `json:"pre_destroy,omitempty"`
+				Service    string   `json:"service"`
+				PostCreate []string `json:"post_create,omitempty"`
+				PostStart  []string `json:"post_start,omitempty"`
+				PreStop    []string `json:"pre_stop,omitempty"`
+				PreDestroy []string `json:"pre_destroy,omitempty"`
 			}
 
 			var hooks []hookInfo

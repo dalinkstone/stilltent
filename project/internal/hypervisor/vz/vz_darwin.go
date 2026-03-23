@@ -358,6 +358,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -474,9 +475,15 @@ func (v *VM) Start() error {
 	var rootfsDir string
 	if v.config.RootFS != "" {
 		candidate := v.config.RootFS + "_rootfs"
-		// Also check without .img extension
 		if _, err := os.Stat(candidate); err == nil {
 			rootfsDir = candidate
+		}
+		// Also check without .img extension: ubuntu_22.04.img -> ubuntu_22.04_rootfs
+		if rootfsDir == "" {
+			candidate = strings.TrimSuffix(v.config.RootFS, ".img") + "_rootfs"
+			if _, err := os.Stat(candidate); err == nil {
+				rootfsDir = candidate
+			}
 		}
 	}
 
@@ -484,8 +491,8 @@ func (v *VM) Start() error {
 	cmdline := v.config.KernelCmdline
 	if cmdline == "" {
 		if rootfsDir != "" {
-			// Boot from virtiofs shared directory
-			cmdline = "console=hvc0 root=rootfs rootfstype=virtiofs rw"
+			// Boot from virtiofs shared directory with tent-init
+			cmdline = "console=hvc0 root=rootfs rootfstype=virtiofs rw init=/sbin/tent-init"
 		} else {
 			// Fall back to block device
 			cmdline = "console=hvc0 root=/dev/vda rw"

@@ -22,7 +22,17 @@ import (
 func systemCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "system",
-		Short: "System-level commands",
+		Short: "System information, diagnostics, and cleanup",
+		Long: `System-level commands for inspecting the tent installation, checking disk
+usage, running diagnostics, and cleaning up unused resources.
+
+Subcommands:
+  info    Show platform, version, hypervisor, sandbox counts, and disk usage
+  df      Show disk usage breakdown by category
+  prune   Remove stopped sandboxes, unused images, and dangling resources
+  doctor  Run diagnostic checks and report issues
+
+See also: tent version, tent config`,
 	}
 
 	cmd.AddCommand(systemInfoCmd())
@@ -35,18 +45,18 @@ func systemCmd() *cobra.Command {
 
 // SystemInfo holds comprehensive system information
 type SystemInfo struct {
-	Version      string            `json:"version"`
-	Commit       string            `json:"commit"`
-	BuildDate    string            `json:"build_date"`
-	GoVersion    string            `json:"go_version"`
-	Platform     string            `json:"platform"`
-	Arch         string            `json:"arch"`
-	NumCPU       int               `json:"num_cpu"`
-	Hypervisor   string            `json:"hypervisor"`
-	BaseDir      string            `json:"base_dir"`
-	Sandboxes    SandboxSummary    `json:"sandboxes"`
-	Images       ImageSummary      `json:"images"`
-	DiskUsage    DiskUsageSummary  `json:"disk_usage"`
+	Version    string           `json:"version"`
+	Commit     string           `json:"commit"`
+	BuildDate  string           `json:"build_date"`
+	GoVersion  string           `json:"go_version"`
+	Platform   string           `json:"platform"`
+	Arch       string           `json:"arch"`
+	NumCPU     int              `json:"num_cpu"`
+	Hypervisor string           `json:"hypervisor"`
+	BaseDir    string           `json:"base_dir"`
+	Sandboxes  SandboxSummary   `json:"sandboxes"`
+	Images     ImageSummary     `json:"images"`
+	DiskUsage  DiskUsageSummary `json:"disk_usage"`
 }
 
 // SandboxSummary summarizes sandbox counts by status
@@ -137,11 +147,11 @@ Examples:
 
 // DfEntry represents a disk usage entry for the df command
 type DfEntry struct {
-	Type       string `json:"type"`
-	Name       string `json:"name"`
-	SizeBytes  int64  `json:"size_bytes"`
-	SizeHuman  string `json:"size_human"`
-	Created    string `json:"created,omitempty"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes"`
+	SizeHuman string `json:"size_human"`
+	Created   string `json:"created,omitempty"`
 }
 
 func systemDfCmd() *cobra.Command {

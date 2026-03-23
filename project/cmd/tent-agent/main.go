@@ -142,10 +142,11 @@ func main() {
 	log.SetPrefix("tent-agent: ")
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
-	log.Println("starting guest agent on vsock port", vsockPort)
+	port := portFromEnv()
+	log.Println("starting guest agent on vsock port", port)
 
 	// Listen on AF_VSOCK
-	listener, err := listenVsock(vsockPort)
+	listener, err := listenVsock(port)
 	if err != nil {
 		log.Fatalf("failed to listen on vsock port %d: %v", vsockPort, err)
 	}
@@ -324,6 +325,11 @@ func handleExec(msg *agentMessage) (*agentMessage, error) {
 		return makeExecError(msg.ID, fmt.Sprintf("invalid exec request: %v", err)), nil
 	}
 
+	// If TTY mode is requested, allocate a PTY for the command
+	if req.TTY {
+		return handleExecPTY(msg, &req)
+	}
+
 	cmd := exec.Command(req.Command, req.Args...)
 
 	// Set working directory
@@ -403,6 +409,159 @@ func handleExec(msg *agentMessage) (*agentMessage, error) {
 		Timestamp: time.Now().UnixMilli(),
 		Payload:   payload,
 	}, nil
+}
+
+// handleExecPTY handles exec requests that require a PTY (tty=true).
+// It allocates a pseudo-terminal using the openpty syscall, runs the command
+// attached to the PTY, and returns the combined output.
+func handleExecPTY(msg *agentMessage, req *execRequest) (*agentMessage, error) {
+	cmd := exec.Command(req.Command, req.Args...)
+
+	// Set working directory
+	if req.WorkDir != "" {
+		cmd.Dir = req.WorkDir
+	}
+
+	// Set environment with TERM
+	env := os.Environ()
+	if len(req.Env) > 0 {
+		for k, v := range req.Env {
+			env = append(env, k+"="+v)
+		}
+	}
+	// Ensure TERM is set for PTY sessions
+	hasTerm := false
+	for _, e := range env {
+		if len(e) >= 5 && e[:5] == "TERM=" {
+			hasTerm = true
+			break
+		}
+	}
+	if !hasTerm {
+		env = append(env, "TERM=xterm-256color")
+	}
+	cmd.Env = env
+
+	// Allocate a PTY using openpty syscall
+	ptmx, pts, err := openPTY()
+	if err != nil {
+		return makeExecError(msg.ID, fmt.Sprintf("failed to allocate pty: %v", err)), nil
+	}
+	defer ptmx.Close()
+
+	cmd.Stdin = pts
+	cmd.Stdout = pts
+	cmd.Stderr = pts
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:  true,
+		Setctty: true,
+		Ctty:    int(pts.Fd()),
+	}
+
+	// Set stdin from request if provided
+	if len(req.Stdin) > 0 {
+		go func() {
+			ptmx.Write(req.Stdin)
+		}()
+	}
+
+	// Track the process
+	tracker.add(msg.ID, nil)
+
+	// Apply timeout
+	var timer *time.Timer
+	if req.Timeout > 0 {
+		timer = time.AfterFunc(time.Duration(req.Timeout)*time.Second, func() {
+			if cmd.Process != nil {
+				cmd.Process.Kill()
+			}
+		})
+	}
+
+	err = cmd.Start()
+	if err != nil {
+		pts.Close()
+		tracker.remove(msg.ID)
+		if timer != nil {
+			timer.Stop()
+		}
+		return makeExecError(msg.ID, fmt.Sprintf("failed to start pty command: %v", err)), nil
+	}
+
+	// Close slave side in the parent process now that the child has it
+	pts.Close()
+
+	// Update tracker
+	tracker.add(msg.ID, cmd.Process)
+
+	// Read all PTY output
+	var output bytes.Buffer
+	io.Copy(&output, ptmx)
+
+	err = cmd.Wait()
+	tracker.remove(msg.ID)
+	if timer != nil {
+		timer.Stop()
+	}
+
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return makeExecError(msg.ID, fmt.Sprintf("pty exec error: %v", err)), nil
+		}
+	}
+
+	resp := execResponse{
+		ExitCode: exitCode,
+		Stdout:   output.Bytes(),
+	}
+
+	payload, _ := json.Marshal(resp)
+	return &agentMessage{
+		Type:      msgExecResponse,
+		ID:        msg.ID,
+		Timestamp: time.Now().UnixMilli(),
+		Payload:   payload,
+	}, nil
+}
+
+// openPTY allocates a pseudo-terminal pair using the POSIX openpty approach.
+// Returns the master (ptmx) and slave (pts) file descriptors.
+func openPTY() (ptmx *os.File, pts *os.File, err error) {
+	// Open /dev/ptmx to get a master fd
+	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open /dev/ptmx: %w", err)
+	}
+
+	// Grant and unlock the slave
+	fd := int(master.Fd())
+
+	// TIOCSPTLCK — unlock the slave side
+	var unlock int
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), 0x40045431, uintptr(unsafe.Pointer(&unlock))); errno != 0 {
+		master.Close()
+		return nil, nil, fmt.Errorf("ioctl TIOCSPTLCK: %v", errno)
+	}
+
+	// TIOCGPTN — get the slave pty number
+	var ptyNum uint32
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), 0x80045430, uintptr(unsafe.Pointer(&ptyNum))); errno != 0 {
+		master.Close()
+		return nil, nil, fmt.Errorf("ioctl TIOCGPTN: %v", errno)
+	}
+
+	slavePath := fmt.Sprintf("/dev/pts/%d", ptyNum)
+	slave, err := os.OpenFile(slavePath, os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		master.Close()
+		return nil, nil, fmt.Errorf("open slave %s: %w", slavePath, err)
+	}
+
+	return master, slave, nil
 }
 
 func makeExecError(id string, errMsg string) *agentMessage {

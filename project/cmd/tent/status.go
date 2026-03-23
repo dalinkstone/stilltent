@@ -20,9 +20,26 @@ func ConfigureStatusCmd(options ...CommonCmdOption) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "status <name>",
-		Short: "Detailed status of a specific microVM",
-		Long:  `Detailed status of a specific microVM.`,
-		Args:  cobra.ExactArgs(1),
+		Short: "Show detailed status of a specific microVM",
+		Long: `Show detailed status information for a specific microVM sandbox.
+
+Displays the sandbox's current state, resource allocation, network
+configuration, mount points, health check results, and timestamps.
+
+Fields shown include:
+  - Status, PID, and IP address
+  - Image reference, VCPUs, memory, and disk
+  - RootFS path, TAP device, socket, and SSH key paths
+  - Configured mounts with read/write mode
+  - Restart policy and health check state
+
+For a tabular overview of all sandboxes, use "tent list".
+For raw JSON inspection, use "tent inspect".
+
+See also: tent list, tent inspect, tent logs, tent top`,
+		Example: `  # Show status of a sandbox
+  tent status mybox`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 

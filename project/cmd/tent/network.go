@@ -16,8 +16,34 @@ import (
 
 func networkCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "network",
-		Short: "Network management commands",
+		Use:     "network",
+		Aliases: []string{"net"},
+		Short:   "Manage sandbox networking, firewall rules, and port forwarding",
+		Long: `Manage network configuration for microVM sandboxes.
+
+Each sandbox gets an isolated network with a TAP device bridged to a host
+bridge (tent0 by default). Network egress is denied by default and must be
+explicitly allowed using "tent network allow" or the --allow flag at create time.
+
+Subcommands:
+  list         List bridges and TAP devices
+  allow        Allow a sandbox to reach an external endpoint
+  deny         Revoke access to an external endpoint
+  status       Show network status for a sandbox
+  ports        List port forwarding rules
+  port-add     Add a port forwarding rule
+  port-remove  Remove a port forwarding rule
+  create       Create a named network
+  delete       Delete a named network
+  inspect      Inspect network details
+  connect      Connect a sandbox to a network
+  disconnect   Disconnect a sandbox from a network
+  bandwidth    Configure bandwidth limits
+  latency      Simulate network latency
+  proxy        Configure HTTP/SOCKS proxy settings
+  trace        Trace network connections
+
+See also: tent tunnel, tent port, tent create --allow`,
 	}
 
 	cmd.AddCommand(networkListCmd())
@@ -1214,7 +1240,7 @@ func networkLatencyListCmd() *cobra.Command {
 
 			type condEntry struct {
 				Sandbox   string                    `json:"sandbox"`
-				Condition *network.NetworkCondition  `json:"condition"`
+				Condition *network.NetworkCondition `json:"condition"`
 			}
 
 			var entries []condEntry

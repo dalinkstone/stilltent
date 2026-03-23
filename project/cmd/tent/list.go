@@ -23,14 +23,29 @@ func ConfigureListCmd(options ...CommonCmdOption) *cobra.Command {
 	var filterLabels []string
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all microVMs",
-		Long: `List all microVMs with status, IP, resource usage.
+		Use:     "list",
+		Aliases: []string{"ls", "ps"},
+		Short:   "List all microVM sandboxes",
+		Long: `List all microVM sandboxes with their status, IP address, resource
+allocation, and source image.
 
-Use --filter to show only sandboxes with matching labels:
+Output columns: NAME, STATUS, IP, VCPUS, MEM, DISK, IMAGE.
+Status values: running, stopped, paused, creating, error.
+
+Use --filter to show only sandboxes with matching labels. Multiple
+filters are ANDed together (all must match).
+
+See also: tent status, tent inspect, tent top`,
+		Example: `  # List all sandboxes
+  tent list
+
+  # Filter by label
   tent list --filter project=api
-  tent list --filter env=staging --filter team=ml`,
-		Args:  cobra.NoArgs,
+  tent list --filter env=staging --filter team=ml
+
+  # Filter by label key only (any value matches)
+  tent list --filter project`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Create VM manager
 			baseDir := os.Getenv("TENT_BASE_DIR")

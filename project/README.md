@@ -23,8 +23,9 @@ The agent building this project should **write as much code as possible**. Do no
 - `tent destroy <name>` — Remove a sandbox and all its resources (rootfs, network, state)
 - `tent list` — List all sandboxes with status, IP, resource usage
 - `tent status <name>` — Detailed status of a specific sandbox
-- `tent exec <name> <command>` — Execute a command inside a running sandbox
-- `tent ssh <name>` — SSH into a running sandbox
+- `tent exec <name> -- <command>` — Execute a command inside a running sandbox (via vsock agent)
+- `tent shell <name>` — Open an interactive shell (via vsock — no SSH needed)
+- `tent ssh <name>` — SSH into a sandbox (requires `--ssh` flag at create time)
 - `tent logs <name>` — View sandbox console/boot logs
 
 ### Images
@@ -60,7 +61,7 @@ The agent building this project should **write as much code as possible**. Do no
 - Drive the host hypervisor directly — Firecracker is one optional backend, not the only path
 - Platform-native networking (vmnet on macOS, TAP/bridge on Linux) with egress firewall
 - Configuration via YAML (vCPUs, memory, disk, network policy, kernel, mounts, env)
-- Fast boot times (sub-second target)
+- Fast boot times (~3-5 seconds from `tent start` to interactive shell)
 - State tracking: persistent local state for all managed sandboxes
 - Clean teardown: destroying a sandbox cleans up all resources
 - Write as much code as possible — maximize original code, don't just port existing tools
@@ -148,7 +149,7 @@ project/
 - **Sandbox Manager** (`internal/sandbox/`) — Orchestrates the full sandbox lifecycle by coordinating hypervisor backend, image pipeline, network, and storage. Platform-agnostic — talks only to interfaces.
 - **Hypervisor Backend** (`internal/hypervisor/`) — Platform interface + implementations. **macOS (primary):** Hypervisor.framework or Virtualization.framework via cgo — implement this first. **Linux:** KVM via ioctl (thin Go bindings) or Firecracker as an optional VMM. Each backend handles: vCPU creation, memory mapping, device attachment, VM start/stop.
 - **Image Pipeline** (`internal/image/`) — Converts any image source into a bootable rootfs. Pulls Docker/OCI images from registries (Docker Hub, GCR, ECR), extracts layers, handles ISOs, passes through raw disk images. Auto-detects format.
-- **Virtio Devices** (`internal/virtio/`) — Virtio device emulation in pure Go: virtio-blk (block devices), virtio-net (networking), virtio-console (serial console).
+- **Virtio Devices** (`internal/virtio/`) — Virtio device emulation in pure Go: virtio-fs (filesystem sharing), virtio-net (networking), virtio-console (serial console), virtio-vsock (host-guest IPC for the guest agent protocol).
 - **Boot** (`internal/boot/`) — Linux boot protocol: loads vmlinuz, sets up boot parameters, initial ramdisk.
 - **Network Manager** (`internal/network/`) — Platform-specific networking behind a common interface + **egress firewall**. Default policy: block all outbound traffic. Per-sandbox allowlists. Inter-sandbox communication via private bridge subnet. Embedded DHCP.
 - **Compose Engine** (`internal/compose/`) — Multi-sandbox orchestration. Parses YAML compose files, starts/stops sandbox groups, manages shared networks, coordinates lifecycle.
@@ -216,16 +217,18 @@ All sandboxes in a compose group share a private network and can reach each othe
 ### How a Sandbox Boots
 
 1. Parse config, resolve `--from` image reference (Docker image, registry ref, ISO, raw disk)
-2. Pull/convert image to rootfs via image pipeline (if not already cached)
-3. Set up network device (TAP+bridge on Linux, vmnet on macOS)
-4. Apply egress firewall rules (block all, then allow listed endpoints)
+2. Check image cache — compare manifest digest with remote; skip download if unchanged
+3. Extract OCI layers into rootfs directory (used directly via virtiofs on macOS)
+4. Provision rootfs: inject `tent-init` (PID 1) and `tent-agent` binary
 5. Initialize hypervisor backend: allocate VM, map guest memory, create vCPUs
-6. Attach virtio devices: virtio-blk (rootfs), virtio-net (network), virtio-console (serial)
-7. Load kernel + initrd into guest memory using Linux boot protocol
-8. Start vCPU threads — guest begins executing
-9. Track state: PID, socket paths, network info, image source
-10. Stop via guest shutdown signal or host-side vCPU halt
-11. Destroy cleans up: stop sandbox, remove network devices + firewall rules, optionally remove rootfs, remove state
+6. Attach virtio devices: virtio-fs (rootfs), virtio-net (network), virtio-console (serial), virtio-vsock (host-guest IPC)
+7. Load kernel into guest memory using Linux boot protocol
+8. Start vCPU threads — guest begins executing `tent-init`
+9. `tent-init` mounts filesystems, starts `tent-agent` (vsock listener on port 1024), brings up network
+10. Guest is ready — `tent exec` / `tent shell` connect via vsock immediately (no IP discovery needed)
+11. Network egress firewall applied lazily when IP is discovered (only needed for outbound access)
+12. Stop via guest shutdown signal or host-side vCPU halt
+13. Destroy cleans up: stop sandbox, remove network devices + firewall rules, remove rootfs, remove state
 
 ### Networking Model
 
@@ -275,7 +278,7 @@ cd project
 make install        # builds, signs with entitlements, installs to /usr/local/bin
 ```
 
-This builds the `tent` binary, signs it with the Hypervisor/Virtualization entitlements (required on macOS), and copies it to `/usr/local/bin` so you can use `tent` from anywhere.
+This builds the `tent` and `tent-agent` binaries, signs them with the Hypervisor/Virtualization entitlements (required on macOS), and copies them to `/usr/local/bin`.
 
 If you prefer a custom install location:
 
@@ -292,22 +295,46 @@ tent image pull ubuntu:22.04
 # Create a sandbox from the image
 tent create my-sandbox --from ubuntu:22.04
 
-# Start it
+# Start it — boots in ~3-5 seconds
 tent start my-sandbox
 ```
 
+Images are cached locally with manifest digest tracking. Subsequent pulls of the same tag skip the download unless the remote image has changed. Control this with `--pull`:
+
+```bash
+tent create my-sandbox --from ubuntu:22.04 --pull missing   # default: only pull if not cached
+tent create my-sandbox --from ubuntu:22.04 --pull always    # check remote, re-pull if changed
+tent create my-sandbox --from ubuntu:22.04 --pull never     # error if not cached
+```
+
 ### Run commands and interact
+
+tent communicates with sandboxes over a **virtio-vsock** channel — a direct host-guest connection that requires no networking, no SSH, and no IP discovery. This is why boot is fast: no SSH server installation, no DHCP wait, no key generation.
 
 ```bash
 # Execute a command inside the running sandbox
 tent exec my-sandbox -- ls /
 tent exec my-sandbox -- apt-get update
 
-# SSH into the sandbox for interactive use
-tent ssh my-sandbox
+# Open an interactive shell (via vsock — no SSH needed)
+tent shell my-sandbox
 
 # View console/boot logs
 tent logs my-sandbox
+```
+
+If you need traditional SSH access (for port forwarding, SCP, etc.), create the sandbox with `--ssh`:
+
+```bash
+tent create my-sandbox --from ubuntu:22.04 --ssh
+tent ssh my-sandbox     # works, but tent shell is faster
+```
+
+### One-liner: create, boot, run, destroy
+
+```bash
+# Run a command in a throwaway sandbox
+tent run --from ubuntu:22.04 --rm -- echo "hello from a microVM"
 ```
 
 ### Control network access
@@ -391,7 +418,7 @@ tent compose down tent-compose.yaml
 
 ```bash
 tent stop my-sandbox
-tent destroy my-sandbox
+tent destroy my-sandbox       # also: tent rm my-sandbox
 ```
 
 ## Development

@@ -16,8 +16,14 @@ func cloneCmd() *cobra.Command {
 configuration. The source sandbox must be stopped. The clone gets its own
 network setup, SSH keys, and independent rootfs copy.
 
-Examples:
+This is useful for creating test variants from a known-good base, or for
+forking an agent sandbox to try different approaches in parallel.
+
+See also: tent create, tent snapshot, tent checkpoint`,
+		Example: `  # Clone a sandbox
   tent clone mybox mybox-copy
+
+  # Clone and rename for a new version
   tent clone agent agent-v2`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -42,6 +42,7 @@ type VMConfig struct {
 	Devices        []DeviceConfig     `yaml:"devices,omitempty" json:"devices,omitempty"`
 	TTL            string             `yaml:"ttl,omitempty" json:"ttl,omitempty"`
 	DependsOn      []string           `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+	EnableSSH      bool               `yaml:"enable_ssh,omitempty" json:"enable_ssh,omitempty"` // Enable SSH server in guest (default: false, use vsock agent instead)
 }
 
 // DeviceType represents the type of device passthrough

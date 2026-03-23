@@ -15,7 +15,24 @@ import (
 func kernelCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "kernel",
-		Short: "Manage locally stored kernels for microVM boot",
+		Short: "Manage Linux kernels used for microVM boot",
+		Long: `Manage the locally stored Linux kernels used to boot microVM sandboxes.
+
+Each sandbox boots a Linux kernel from the local kernel store. Kernels can
+be added from local files, scanned from the host system, or downloaded.
+One kernel is marked as the default and is used unless overridden in the
+sandbox configuration.
+
+Subcommands:
+  list         List stored kernels with version, arch, and size
+  add          Import a kernel from a local file
+  remove       Remove a stored kernel
+  inspect      Show detailed kernel metadata
+  set-default  Mark a kernel as the default
+  scan         Discover kernels installed on the host system
+  get          Download a kernel from a known source
+
+See also: tent create, tent system info`,
 	}
 
 	cmd.AddCommand(kernelListCmd())

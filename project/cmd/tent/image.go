@@ -18,7 +18,28 @@ import (
 func imageCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "image",
-		Short: "Image management commands",
+		Short: "Manage base images for microVM sandboxes",
+		Long: `Manage base images used as rootfs for microVM sandboxes.
+
+Images can be pulled from Docker Hub, OCI-compatible registries, or loaded
+from local files (tarballs, ISOs, raw disk images). Pulled images are cached
+locally under ~/.tent/images/ and reused across sandbox creates.
+
+Subcommands:
+  pull      Download an image from a registry
+  list      List locally cached images
+  rm        Remove a cached image
+  build     Build a custom image from a Dockerfile or script
+  inspect   Show image metadata and layers
+  tag       Add or change an image tag
+  prune     Remove unused images to free disk space
+  push      Push a local image to a registry
+  save      Export an image to a tarball
+  load      Import an image from a tarball
+  search    Search for images in a registry
+  verify    Verify image integrity and signatures
+
+See also: tent create --from, tent registry`,
 	}
 
 	cmd.AddCommand(imageListCmd())
@@ -44,10 +65,18 @@ func imageCmd() *cobra.Command {
 
 func imageListCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "list",
-		Short: "List available base rootfs images",
-		Long:  `List available base rootfs images.`,
-		Args:  cobra.NoArgs,
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List locally cached base images",
+		Long: `List all base rootfs images cached on the local system.
+
+Shows image name and size. Images are stored under ~/.tent/images/
+and are used as the rootfs when creating sandboxes.
+
+See also: tent image pull, tent image rm, tent image prune`,
+		Example: `  # List all cached images
+  tent image list`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Create image manager
 			baseDir := os.Getenv("TENT_BASE_DIR")
@@ -88,8 +117,23 @@ func imagePullCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pull <image-ref>",
 		Short: "Download an image from a registry or URL",
-		Long:  `Download an image from a Docker/OCI registry (Docker Hub, GCR, ECR, etc.) or URL.`,
-		Args:  cobra.ExactArgs(1),
+		Long: `Download an image from a Docker/OCI registry or direct URL and cache it locally.
+
+Supports Docker Hub (default), GCR, ECR, GHCR, and any OCI-compatible
+registry. Images are extracted and converted to a raw rootfs suitable for
+booting as a microVM.
+
+The image reference follows Docker conventions: [registry/]name[:tag].
+If no tag is specified, "latest" is assumed.
+
+See also: tent image list, tent create --from`,
+		Example: `  # Pull from Docker Hub
+  tent image pull ubuntu:22.04
+  tent image pull python:3.12-slim
+
+  # Pull from a custom registry
+  tent image pull ghcr.io/myorg/myimage:v1`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			imageRef := args[0]
 
@@ -105,7 +149,7 @@ func imagePullCmd() *cobra.Command {
 			manager, err := image.NewManager(baseDir, image.WithProgressCallback(func(bytes, total int64) {
 				if total > 0 {
 					percent := float64(bytes) / float64(total) * 100
-					fmt.Printf("\rDownloading: %.1f%% (%.1f MB / %.1f MB)", 
+					fmt.Printf("\rDownloading: %.1f%% (%.1f MB / %.1f MB)",
 						percent, float64(bytes)/(1024*1024), float64(total)/(1024*1024))
 				} else {
 					fmt.Printf("\rDownloading: %.1f MB", float64(bytes)/(1024*1024))

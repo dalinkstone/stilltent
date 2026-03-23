@@ -18,8 +18,21 @@ import (
 func configCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
-		Short: "Configuration management commands",
-		Long:  "View, validate, and generate sandbox configuration files.",
+		Short: "View, validate, and generate sandbox configuration",
+		Long: `View, validate, and generate sandbox configuration files.
+
+Configuration files are YAML documents that describe sandbox resources,
+networking, mounts, environment variables, and lifecycle hooks. Use
+"tent config init" to generate a starter template.
+
+Subcommands:
+  init       Generate a configuration template with sensible defaults
+  validate   Check a configuration file for errors
+  show       Display the effective configuration for a sandbox
+  get        Get a specific configuration value
+  set        Update a specific configuration value
+
+See also: tent create --config, tent inspect`,
 	}
 
 	cmd.AddCommand(configInitCmd())

@@ -21,8 +21,20 @@ func ConfigureStopCmd(options ...CommonCmdOption) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stop <name>",
 		Short: "Gracefully shut down a running microVM",
-		Long:  `Gracefully shut down a running microVM.`,
-		Args:  cobra.ExactArgs(1),
+		Long: `Gracefully shut down a running microVM sandbox.
+
+Sends a shutdown signal to the guest OS, waits for the VM process to exit,
+and releases associated resources (TAP device, network bridge port). The
+sandbox's rootfs, configuration, and state are preserved so it can be
+restarted later with "tent start".
+
+To remove the sandbox entirely (including its rootfs and state), use
+"tent destroy" instead.
+
+See also: tent start, tent restart, tent destroy, tent pause`,
+		Example: `  # Gracefully stop a running sandbox
+  tent stop mybox`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 

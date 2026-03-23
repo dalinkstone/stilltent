@@ -83,13 +83,66 @@ func (m *Manager) Pull(name string, url string) (string, error) {
 	return imagePath, nil
 }
 
+// manifestDigestInfo is the sidecar metadata stored alongside a cached image
+// to track which remote manifest digest was used to produce the local cache.
+type manifestDigestInfo struct {
+	Digest   string `json:"digest"`
+	Ref      string `json:"ref"`
+	PulledAt string `json:"pulled_at"`
+}
+
+// digestFilePath returns the path to the manifest-digest sidecar file for a
+// given safe image name.
+func (m *Manager) digestFilePath(safeName string) string {
+	return filepath.Join(m.baseDir, safeName+".manifest-digest")
+}
+
+// writeDigestFile writes manifest digest metadata to a sidecar JSON file.
+func (m *Manager) writeDigestFile(safeName, digest, ref string) error {
+	info := manifestDigestInfo{
+		Digest:   digest,
+		Ref:      ref,
+		PulledAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.MarshalIndent(info, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal digest info: %w", err)
+	}
+	return os.WriteFile(m.digestFilePath(safeName), data, 0644)
+}
+
+// readDigestFile reads manifest digest metadata from the sidecar file.
+// Returns nil if the file does not exist.
+func (m *Manager) readDigestFile(safeName string) (*manifestDigestInfo, error) {
+	data, err := os.ReadFile(m.digestFilePath(safeName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var info manifestDigestInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 // ResolveImage resolves an image reference to a local rootfs path.
 // It handles:
 //   - Local file paths (ISO, raw disk, qcow2) — used directly
 //   - Registry references (ubuntu:22.04, gcr.io/proj/img:tag) — pulled via OCI
 //
-// If the image is already cached locally, it returns the cached path.
-func (m *Manager) ResolveImage(ref string) (string, error) {
+// The pull policy controls cache behaviour:
+//   - PullMissing (default): only pull if not cached
+//   - PullAlways: check remote digest, re-pull only if changed
+//   - PullNever: error if not cached
+func (m *Manager) ResolveImage(ref string, policies ...PullPolicy) (string, error) {
+	policy := PullMissing
+	if len(policies) > 0 && policies[0] != "" {
+		policy = policies[0]
+	}
+
 	// Check if it's a local file path
 	if strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "~/") {
 		expandedPath := ref
@@ -103,16 +156,66 @@ func (m *Manager) ResolveImage(ref string) (string, error) {
 		return expandedPath, nil
 	}
 
-	// It's a registry reference — check local cache first
+	// It's a registry reference
 	safeName := strings.NewReplacer("/", "_", ":", "_").Replace(ref)
 	cachedPath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", safeName))
+	cachedExists := false
 	if _, err := os.Stat(cachedPath); err == nil {
+		cachedExists = true
+	}
+
+	// Also check for the associated rootfs directory (virtiofs)
+	rootfsDir := filepath.Join(m.baseDir, safeName+"_rootfs")
+	rootfsDirExists := false
+	if info, err := os.Stat(rootfsDir); err == nil && info.IsDir() {
+		rootfsDirExists = true
+	}
+
+	digestInfo, _ := m.readDigestFile(safeName)
+	hasDigest := digestInfo != nil
+
+	switch policy {
+	case PullNever:
+		if !cachedExists {
+			return "", fmt.Errorf("image %q not found locally and pull policy is \"never\"", ref)
+		}
 		return cachedPath, nil
+
+	case PullMissing:
+		if cachedExists && hasDigest {
+			// Cached with digest — trust it
+			return cachedPath, nil
+		}
+		if cachedExists && !hasDigest {
+			// Old cached image without digest — re-pull to establish baseline
+			// so future runs can do digest validation
+		}
+		// Fall through to pull
+
+	case PullAlways:
+		if cachedExists && hasDigest {
+			// Check remote digest — only re-pull if changed
+			registry, repo, tag, err := parseImageRef(ref)
+			if err == nil {
+				client := NewRegistryClient()
+				remoteDigest, err := client.HeadManifest(registry, repo, tag)
+				if err == nil && remoteDigest == digestInfo.Digest {
+					// Remote matches local — no re-pull needed
+					return cachedPath, nil
+				}
+				// Digest differs or HEAD failed — fall through to re-pull
+			}
+		}
+		// Fall through to pull
 	}
 
 	// Pull from registry
 	rootfsPath, err := m.PullOCI(safeName, ref)
 	if err != nil {
+		// If we already have a cached version, fall back to it on network errors
+		if cachedExists && rootfsDirExists {
+			return cachedPath, nil
+		}
 		return "", fmt.Errorf("failed to pull image %q: %w", ref, err)
 	}
 
@@ -120,7 +223,8 @@ func (m *Manager) ResolveImage(ref string) (string, error) {
 }
 
 // PullOCI pulls an OCI/Docker image from a registry (Docker Hub, GCR, ECR, etc.)
-// It parses the image reference, authenticates if needed, pulls layers, and extracts to rootfs
+// It parses the image reference, authenticates if needed, pulls layers, and extracts to rootfs.
+// It also stores the manifest digest in a sidecar file for cache validation.
 func (m *Manager) PullOCI(name string, ref string) (string, error) {
 	// Parse the image reference (registry/repo:tag or repo:tag)
 	registry, repo, tag, err := parseImageRef(ref)
@@ -141,9 +245,8 @@ func (m *Manager) PullOCI(name string, ref string) (string, error) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// Download and extract each layer
-	// For Docker Hub images, we'll download from the registry API
-	layers, err := m.getLayers(registry, repo, tag)
+	// Download manifest (with raw bytes for digest) and layers
+	layers, manifestDigest, err := m.getLayersWithDigest(registry, repo, tag)
 	if err != nil {
 		return "", fmt.Errorf("failed to get layers: %w", err)
 	}
@@ -163,6 +266,14 @@ func (m *Manager) PullOCI(name string, ref string) (string, error) {
 	rootfsPath := filepath.Join(m.baseDir, fmt.Sprintf("%s.img", name))
 	if err := m.extractLayers(layers, tmpDir, rootfsPath, progress); err != nil {
 		return "", fmt.Errorf("failed to extract layers: %w", err)
+	}
+
+	// Store manifest digest sidecar file for future cache validation
+	if manifestDigest != "" {
+		if wErr := m.writeDigestFile(name, manifestDigest, ref); wErr != nil {
+			// Non-fatal: the image is usable, just won't have digest tracking
+			_ = wErr
+		}
 	}
 
 	return rootfsPath, nil
@@ -378,6 +489,21 @@ func (m *Manager) getLayers(registry, repo, tag string) ([]LayerInfo, error) {
 	}
 
 	return client.FetchLayers(registry, repo, manifest), nil
+}
+
+// getLayersWithDigest is like getLayers but also returns the sha256 digest of
+// the raw manifest JSON. This digest is stored as a sidecar file for cache
+// validation on subsequent pulls.
+func (m *Manager) getLayersWithDigest(registry, repo, tag string) ([]LayerInfo, string, error) {
+	client := NewRegistryClient()
+
+	manifest, rawManifest, err := client.FetchManifestRaw(registry, repo, tag)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch manifest from %s/%s:%s: %w", registry, repo, tag, err)
+	}
+
+	digest := computeSHA256(rawManifest)
+	return client.FetchLayers(registry, repo, manifest), digest, nil
 }
 
 // LayerInfo represents a layer in an OCI image
@@ -627,6 +753,8 @@ func packRootfsImage(rootfsDir, imagePath string) error {
 	// This is the extracted OCI layer contents that the guest needs.
 	// Convention: for <name>.img, the rootfs directory is <name>_rootfs.
 	rootfsDstDir := strings.TrimSuffix(imagePath, ".img") + "_rootfs"
+	// Remove stale rootfs from a previous pull so Rename/copy doesn't collide
+	os.RemoveAll(rootfsDstDir)
 	if err := os.Rename(rootfsDir, rootfsDstDir); err != nil {
 		// Rename may fail across filesystems; fall back to keeping in place
 		// The caller's defer will clean tmpDir, so copy instead
@@ -929,6 +1057,9 @@ func (m *Manager) RemoveImage(name string) error {
 		}
 	}
 
+	// Remove the manifest-digest sidecar file if it exists
+	os.Remove(m.digestFilePath(name))
+
 	return nil
 }
 
@@ -1022,6 +1153,13 @@ func (m *Manager) InspectImage(name string) (*ImageDetail, error) {
 		detail.RootfsPath = rootfsDir
 	}
 
+	// Include digest info if available
+	if di, err := m.readDigestFile(name); err == nil && di != nil {
+		detail.Digest = di.Digest
+		detail.Ref = di.Ref
+		detail.PulledAt = di.PulledAt
+	}
+
 	return detail, nil
 }
 
@@ -1036,6 +1174,43 @@ type ImageDetail struct {
 	ModTime    string `json:"modified_at"`
 	HasRootfs  bool   `json:"has_rootfs"`
 	RootfsPath string `json:"rootfs_path,omitempty"`
+	Digest     string `json:"digest,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	PulledAt   string `json:"pulled_at,omitempty"`
+}
+
+// CachedImageInfo holds information about a cached image including its digest.
+type CachedImageInfo struct {
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	SizeMB   int    `json:"size_mb"`
+	Digest   string `json:"digest,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	PulledAt string `json:"pulled_at,omitempty"`
+}
+
+// ListCachedImages returns all cached images along with their digest information.
+func (m *Manager) ListCachedImages() ([]CachedImageInfo, error) {
+	images, err := m.ListImages()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]CachedImageInfo, 0, len(images))
+	for _, img := range images {
+		info := CachedImageInfo{
+			Name:   img.Name,
+			Path:   img.Path,
+			SizeMB: img.SizeMB,
+		}
+		if di, err := m.readDigestFile(img.Name); err == nil && di != nil {
+			info.Digest = di.Digest
+			info.Ref = di.Ref
+			info.PulledAt = di.PulledAt
+		}
+		result = append(result, info)
+	}
+	return result, nil
 }
 
 // TagImage creates an alias for an existing image by linking it under a new name.
