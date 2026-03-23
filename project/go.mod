@@ -1,6 +1,6 @@
 module github.com/dalinkstone/tent
 
-go 1.25.0
+go 1.25.4
 
 require (
 	github.com/c35s/hype v0.0.0-20240219193225-9c233c6170bc
@@ -10,9 +10,10 @@ require (
 )
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/daytonaio/daytona/libs/sdk-go v0.154.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect

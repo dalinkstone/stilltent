@@ -46,7 +46,7 @@ typedef struct {
 
 static vzVMHandle* vz_create_config(int vcpus, unsigned long long memoryBytes,
 	const char *kernelPath, const char *initrdPath, const char *cmdline,
-	const char *diskPath, int diskReadOnly) {
+	const char *diskPath, int diskReadOnly, const char *rootfsDir) {
 
 	@autoreleasepool {
 		vzVMHandle *h = (vzVMHandle*)calloc(1, sizeof(vzVMHandle));
@@ -123,6 +123,23 @@ static vzVMHandle* vz_create_config(int vcpus, unsigned long long memoryBytes,
 			}
 		}
 
+		// Shared rootfs directory via virtio-fs (macOS 12+)
+		// This exposes the extracted OCI layer contents to the guest as a
+		// virtiofs mount tagged "rootfs". The kernel cmdline uses
+		// root=rootfs rootfstype=virtiofs to mount it as the root filesystem.
+		if (rootfsDir && strlen(rootfsDir) > 0) {
+			NSString *rPath = [NSString stringWithUTF8String:rootfsDir];
+			NSURL *rootfsURL = [NSURL fileURLWithPath:rPath isDirectory:YES];
+			VZSharedDirectory *sharedDir =
+				[[VZSharedDirectory alloc] initWithURL:rootfsURL readOnly:NO];
+			VZSingleDirectoryShare *share =
+				[[VZSingleDirectoryShare alloc] initWithDirectory:sharedDir];
+			VZVirtioFileSystemDeviceConfiguration *fsConfig =
+				[[VZVirtioFileSystemDeviceConfiguration alloc] initWithTag:@"rootfs"];
+			fsConfig.share = share;
+			config.directorySharingDevices = @[fsConfig];
+		}
+
 		// Network — virtio-net with NAT
 		VZVirtioNetworkDeviceConfiguration *netConfig =
 			[[VZVirtioNetworkDeviceConfiguration alloc] init];
@@ -135,6 +152,11 @@ static vzVMHandle* vz_create_config(int vcpus, unsigned long long memoryBytes,
 		NSError *validationErr = nil;
 		BOOL valid = [config validateWithError:&validationErr];
 		if (!valid) {
+			if (validationErr) {
+				strncpy(h->lastError,
+					[[validationErr localizedDescription] UTF8String],
+					sizeof(h->lastError) - 1);
+			}
 			free(h);
 			return NULL;
 		}
@@ -335,6 +357,7 @@ import "C"
 import (
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"unsafe"
 
@@ -446,9 +469,27 @@ func (v *VM) Start() error {
 		defer C.free(unsafe.Pointer(cInitrd))
 	}
 
-	cmdline := "console=hvc0 root=/dev/vda rw"
-	if v.config.KernelCmdline != "" {
-		cmdline = v.config.KernelCmdline
+	// Determine rootfs directory for virtiofs sharing.
+	// The OCI layer contents are preserved as <image>_rootfs alongside the disk image.
+	var rootfsDir string
+	if v.config.RootFS != "" {
+		candidate := v.config.RootFS + "_rootfs"
+		// Also check without .img extension
+		if _, err := os.Stat(candidate); err == nil {
+			rootfsDir = candidate
+		}
+	}
+
+	// Set kernel cmdline — prefer virtiofs root if rootfs dir exists
+	cmdline := v.config.KernelCmdline
+	if cmdline == "" {
+		if rootfsDir != "" {
+			// Boot from virtiofs shared directory
+			cmdline = "console=hvc0 root=rootfs rootfstype=virtiofs rw"
+		} else {
+			// Fall back to block device
+			cmdline = "console=hvc0 root=/dev/vda rw"
+		}
 	}
 	cCmdline := C.CString(cmdline)
 	defer C.free(unsafe.Pointer(cCmdline))
@@ -458,6 +499,12 @@ func (v *VM) Start() error {
 	if v.config.RootFS != "" {
 		cDisk = C.CString(v.config.RootFS)
 		defer C.free(unsafe.Pointer(cDisk))
+	}
+
+	var cRootfsDir *C.char
+	if rootfsDir != "" {
+		cRootfsDir = C.CString(rootfsDir)
+		defer C.free(unsafe.Pointer(cRootfsDir))
 	}
 
 	vcpus := v.config.VCPUs
@@ -477,9 +524,12 @@ func (v *VM) Start() error {
 		cCmdline,
 		cDisk,
 		C.int(diskReadOnly),
+		cRootfsDir,
 	)
 	if handle == nil {
-		return fmt.Errorf("failed to create VZ configuration for VM %s — check kernel path and resources", v.config.Name)
+		errMsg := "check kernel path and resources"
+		// Try to get validation error from a temporary handle
+		return fmt.Errorf("failed to create VZ configuration for VM %s — %s", v.config.Name, errMsg)
 	}
 
 	ret := C.vz_start(handle)

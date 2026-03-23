@@ -1925,54 +1925,73 @@ func writeTarFile(tw *tar.Writer, name string, srcPath string, size int64) error
 // autoProvisionKernel downloads a Linux kernel appropriate for the current platform.
 func (m *VMManager) autoProvisionKernel(kernelStore *boot.KernelStore) (*boot.KernelEntry, error) {
 	kernelURL := ""
+	initrdURL := ""
 	arch := ""
 
 	switch runtime.GOARCH {
 	case "arm64":
 		kernelURL = "https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-arm64-vmlinuz-generic"
+		initrdURL = "https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-arm64-initrd-generic"
 		arch = "arm64"
 	case "amd64":
 		kernelURL = "https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-amd64-vmlinuz-generic"
+		initrdURL = "https://cloud-images.ubuntu.com/releases/22.04/release/unpacked/ubuntu-22.04-server-cloudimg-amd64-initrd-generic"
 		arch = "amd64"
 	default:
 		return nil, fmt.Errorf("no pre-built kernel available for architecture %s", runtime.GOARCH)
 	}
 
+	// Download kernel
 	fmt.Printf("Downloading Linux kernel for %s...\n", arch)
+	tmpKernel := filepath.Join(m.baseDir, "kernel-download-tmp")
+	defer os.Remove(tmpKernel)
 
-	tmpFile := filepath.Join(m.baseDir, "kernel-download-tmp")
-	defer os.Remove(tmpFile)
-
-	resp, err := http.Get(kernelURL)
-	if err != nil {
-		return nil, fmt.Errorf("download kernel: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("download kernel: HTTP %d", resp.StatusCode)
-	}
-
-	f, err := os.Create(tmpFile)
-	if err != nil {
-		return nil, fmt.Errorf("create temp file: %w", err)
-	}
-
-	n, err := io.Copy(f, resp.Body)
-	f.Close()
-	if err != nil {
+	if err := downloadURL(kernelURL, tmpKernel); err != nil {
 		return nil, fmt.Errorf("download kernel: %w", err)
 	}
 
-	fmt.Printf("Downloaded %d MB. Adding to kernel store...\n", n/(1024*1024))
+	// Download initrd alongside the kernel so kernel store picks it up
+	fmt.Printf("Downloading initrd for %s...\n", arch)
+	tmpInitrd := filepath.Join(filepath.Dir(tmpKernel), "initrd")
+	defer os.Remove(tmpInitrd)
 
-	entry, err := kernelStore.Add(tmpFile, "ubuntu-22.04-"+arch, nil)
+	if err := downloadURL(initrdURL, tmpInitrd); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to download initrd: %v (VM may not boot without it)\n", err)
+	}
+
+	fmt.Println("Adding to kernel store...")
+	entry, err := kernelStore.Add(tmpKernel, "ubuntu-22.04-"+arch, nil)
 	if err != nil {
 		return nil, fmt.Errorf("add kernel to store: %w", err)
 	}
 
 	fmt.Printf("Kernel ready: %s (%s, %s)\n", entry.Version, entry.Format, entry.Arch)
+	if entry.InitrdPath != "" {
+		fmt.Printf("Initrd ready: %s\n", entry.InitrdPath)
+	}
 	return entry, nil
+}
+
+// downloadURL downloads a URL to a local file path.
+func downloadURL(url, destPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(f, resp.Body)
+	f.Close()
+	return err
 }
 
 func (m *VMManager) loadConfigFromState(vmState *models.VMState) (*models.VMConfig, error) {
