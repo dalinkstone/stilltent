@@ -1,19 +1,66 @@
 # stilltent
 
-An always-on autonomous AI agent that takes a simple project description and builds an entire software project from scratch — making hundreds of commits, opening hundreds of pull requests, and continuously improving the codebase without human intervention.
+A production engineering harness that takes any `README.md` and autonomously builds the described project. Point it at a repo, configure the stack, and walk away — stilltent handles code generation, testing, memory, and iteration in a continuous loop.
 
 ## How It Works
 
-You write a project description in `project/README.md`. The agent reads it, scaffolds the project, writes code, writes tests, opens PRs, merges them, and repeats — forever. It remembers what it learned across iterations using persistent vector-backed memory.
+1. Write a project description in a `README.md` (see `templates/input/README.md.example`)
+2. Set `target.repo` in `stilltent.yml` to point at the repo
+3. Run `make up` — the agent reads the README, scaffolds the project, writes code, runs tests, opens PRs, and repeats
+
+The agent remembers what it learned across iterations using persistent vector-backed memory. Every cycle leaves the project strictly better than before.
 
 ## Quick Start
 
 ```bash
-cp .env.example .env          # fill in your values
+cp .env.example .env          # fill in your API keys
+vim stilltent.yml              # set target.repo and tweak options
 make up                        # start the stack
 make init-db                   # initialize database (first time only)
 make bootstrap                 # clone target repo and start the agent
 ```
+
+## Configuration
+
+All configuration lives in two files:
+
+- **`stilltent.yml`** — Stack configuration: agent runtime, memory backend, sandbox provider, deploy target, orchestrator tuning
+- **`.env`** — Secrets and API keys (see `.env.example`)
+
+### Agent Runtimes
+
+| Runtime | Description |
+|---------|-------------|
+| `openclaw` | Full-featured agent with LLM routing, tools, and memory plugins |
+| `nanoclaw` | Lightweight minimal-footprint variant |
+| `nemoclaw` | GPU-accelerated variant for local inference |
+
+### Memory Backends
+
+| Backend | Description |
+|---------|-------------|
+| `mem9` | Self-hosted: embed-service (C, 256-dim) + mnemo-server (Go) + TiDB |
+| `supermemory` | Supermemory SaaS or self-hosted |
+| `asmr` | Parallel observer/searcher/ensemble agents (Supermemory ASMR-style) |
+
+### Sandbox Providers
+
+| Provider | Description |
+|----------|-------------|
+| `daytona` | Isolated cloud sandboxes via Daytona SDK |
+| `local` | Run directly on host (no isolation) |
+| `none` | Disable sandboxing |
+
+### Deploy Targets
+
+| Target | Description |
+|--------|-------------|
+| `digitalocean` | DigitalOcean droplet |
+| `vultr` | Vultr VPS |
+| `railway` | Railway PaaS |
+| `render` | Render PaaS |
+| `heroku` | Heroku PaaS |
+| `local` | Local Docker Compose |
 
 ## Commands
 
@@ -29,21 +76,21 @@ make bootstrap                 # clone target repo and start the agent
 | `make stats` | Show iteration statistics |
 | `make clean` | Full teardown (destructive) |
 
-## Stack
+## Project Structure
 
-Five Docker Compose services on an internal bridge network:
-
-- **TiDB** — MySQL-compatible database for persistent memory storage
-- **embed-service** — C-based local embedding server (256-dim vectors, zero API cost)
-- **mnemo-server** — Go REST API for storing and searching agent memories
-- **OpenClaw** — Agent runtime with LLM routing, tool execution, and memory plugins
-- **Orchestrator** — Python loop driver that triggers the agent on a schedule
-
-LLM inference via [OpenRouter](https://openrouter.ai) (Qwen3 Coder Next). No GPU required. Embeddings are fully local via embed-service.
-
-## Configuration
-
-All configuration is in `.env`. See `.env.example` for all variables and recommended values.
+```
+stilltent/
+├── config/          # Agent, memory, deploy, and prompt configs
+├── core/            # Orchestrator loop and harness entry point
+├── memory/          # Memory backends (mem9, ASMR)
+├── sandbox/         # Sandbox integration (Daytona)
+├── deploy/          # Deploy scripts and docker-compose overlays
+├── templates/       # Example project descriptions
+├── archive/         # Reference implementations
+├── scripts/         # Operational scripts
+├── stilltent.yml    # Master configuration
+└── .env             # Secrets
+```
 
 ## Documentation
 

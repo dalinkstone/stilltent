@@ -1,0 +1,18 @@
+# base.yml — Shared service definitions for stilltent stack
+version: "3.8"
+
+services:
+  tidb:
+    image: pingcap/tidb:latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - tidb-data:/var/lib/tidb
+    restart: unless-stopped
+
+volumes:
+  tidb-data:
+
+networks:
+  stilltent:
+    driver: bridge

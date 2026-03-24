@@ -57,7 +57,7 @@
     },
     "auth": {
       "mode": "token",
-      "token": "c5855048f69f2f24f35fd40b0e10c9b3540168c7587f31bc"
+      "token": "__OPENCLAW_GATEWAY_TOKEN__"
     },
     "http": {
       "endpoints": {

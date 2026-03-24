@@ -1,0 +1,28 @@
+# My Project
+
+A CLI tool that converts Markdown files to styled PDF documents.
+
+## Features
+
+- Parse Markdown with full GFM support
+- Syntax-highlighted code blocks
+- Table of contents generation
+- Custom CSS themes
+- Watch mode for live preview
+
+## Tech Stack
+
+- Language: Go
+- PDF rendering: chromedp (headless Chrome)
+- CLI framework: cobra
+
+## Architecture
+
+Single binary with three subcommands:
+- `convert` — one-shot Markdown to PDF
+- `watch` — file watcher with live reload
+- `theme` — manage CSS themes
+
+## Testing
+
+Unit tests for parser, integration tests for PDF output comparison.

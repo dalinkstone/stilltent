@@ -1,0 +1,18 @@
+# Learning Prompt Template
+# Used when the agent reflects on completed iterations.
+# Variables: {{.IterationNumber}}, {{.PRTitle}}, {{.TestResults}}, {{.Errors}}
+
+## Iteration {{.IterationNumber}} Reflection
+
+### What was accomplished
+PR: {{.PRTitle}}
+
+### Test Results
+{{.TestResults}}
+
+### Errors Encountered
+{{.Errors}}
+
+### Lessons Learned
+Summarize what went well, what failed, and what to do differently next time.
+Store these insights in memory for future iterations.

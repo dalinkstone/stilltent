@@ -1,0 +1,22 @@
+# agent-nemoclaw.yml — NemoClaw GPU-backed agent overlay
+version: "3.8"
+
+services:
+  nemoclaw:
+    build:
+      context: ../../config/agents/nemoclaw
+      dockerfile: Dockerfile
+    env_file:
+      - ../../.env
+    depends_on:
+      - mnemo-server
+    networks:
+      - stilltent
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

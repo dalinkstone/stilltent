@@ -1,0 +1,28 @@
+# memory-mem9.yml — Self-hosted mem9 memory stack overlay
+version: "3.8"
+
+services:
+  embed-service:
+    build:
+      context: ../../memory/mem9/embed-service
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    networks:
+      - stilltent
+    restart: unless-stopped
+
+  mnemo-server:
+    build:
+      context: ../../memory/mem9/mnemo-server
+      dockerfile: server/Dockerfile
+    ports:
+      - "8080:8080"
+    depends_on:
+      - tidb
+      - embed-service
+    env_file:
+      - ../../.env
+    networks:
+      - stilltent
+    restart: unless-stopped

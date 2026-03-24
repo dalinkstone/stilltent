@@ -1,0 +1,12 @@
+{
+  "name": "openclaw",
+  "description": "OpenClaw agent runtime configuration",
+  "model": "${AGENT_MODEL}",
+  "provider": "${AGENT_PROVIDER}",
+  "memory_plugin": "mnemo",
+  "tools": ["shell", "git", "browser", "memory"],
+  "settings": {
+    "max_tokens": 8192,
+    "temperature": 0.2
+  }
+}

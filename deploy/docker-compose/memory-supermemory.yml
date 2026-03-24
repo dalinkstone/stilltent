@@ -1,0 +1,15 @@
+# memory-supermemory.yml — Supermemory SaaS or self-hosted overlay
+version: "3.8"
+
+services:
+  supermemory:
+    image: supermemory/supermemory:latest
+    ports:
+      - "8080:8080"
+    env_file:
+      - ../../.env
+    environment:
+      - SUPERMEMORY_API_KEY=${SUPERMEMORY_API_KEY:-}
+    networks:
+      - stilltent
+    restart: unless-stopped

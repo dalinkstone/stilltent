@@ -1,0 +1,55 @@
+# stilltent.yml — Master configuration
+# Point this at any git repo with a README.md and walk away.
+
+target:
+  repo: ""                    # owner/repo — the repo to build
+  branch: "main"
+
+agent:
+  runtime: "openclaw"         # openclaw | nanoclaw | nemoclaw
+  model: "qwen/qwen3-coder-next"
+  provider: "openrouter"      # openrouter | anthropic | openai | ollama
+
+memory:
+  backend: "mem9"             # mem9 | supermemory | asmr
+  # mem9-specific
+  embedding_dim: 256
+  embedding_provider: "local" # local | openai
+  # supermemory-specific
+  supermemory_api_key: ""
+  # asmr-specific (supermemory ASMR-style parallel agents)
+  asmr_observer_count: 3
+  asmr_searcher_count: 3
+  asmr_ensemble_variants: 8
+
+sandbox:
+  provider: "daytona"         # daytona | local | none
+  daytona_api_key: ""
+  daytona_base_url: "https://app.daytona.io"
+  # Sandbox resources
+  cpu: 2
+  memory: "4096"              # MB
+  disk: "10240"               # MB
+  # Computer use (browser, desktop interaction)
+  computer_use: false
+  # Auto-cleanup
+  ephemeral: true
+
+orchestrator:
+  loop_interval: 60
+  cooldown_seconds: 30
+  iteration_timeout: 600
+  max_consecutive_failures: 25
+  total_runtime_hours: 120
+  budget_limit: 50
+  daily_budget_limit: 15
+
+deploy:
+  target: "digitalocean"      # digitalocean | vultr | railway | render | heroku | local
+  # VPS-specific
+  droplet_size: "s-2vcpu-8gb"
+  region: "sfo3"
+
+claude_code:
+  enabled: false              # Enable Claude Code as an agent backend
+  api_key: ""

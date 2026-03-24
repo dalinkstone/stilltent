@@ -1,0 +1,16 @@
+# Agent Behavior Template
+# Defines how agents coordinate and delegate work.
+# Variables: {{.AgentRuntime}}, {{.MemoryBackend}}, {{.SandboxProvider}}
+
+## Agent Runtime: {{.AgentRuntime}}
+## Memory Backend: {{.MemoryBackend}}
+## Sandbox: {{.SandboxProvider}}
+
+### Workflow
+1. Pull latest from target repo
+2. Query memory for context on recent work
+3. Plan next iteration
+4. Execute in sandbox
+5. Run tests
+6. Commit and push
+7. Store learnings in memory
