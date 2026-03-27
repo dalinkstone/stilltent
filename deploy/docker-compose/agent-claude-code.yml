@@ -1,0 +1,55 @@
+# agent-claude-code.yml — Claude Code agent runtime
+#
+# Anthropic API adapter that exposes the same HTTP interface contract as
+# OpenClaw/NanoClaw/NemoClaw on port 18789. Uses the Anthropic Messages API
+# with tool_use to drive an autonomous coding agent with shell, file I/O,
+# git, and memory tools.
+
+services:
+
+  claude-code-agent:
+    build:
+      context: ./config/agents/claude-code
+      dockerfile: Dockerfile
+    container_name: stilltent-claude-code
+    depends_on:
+      mnemo-server:
+        condition: service_healthy
+    ports:
+      - "18789:18789"
+    volumes:
+      - ./workspace:/workspace:rw
+      - ./config/agents/claude-code:/app/config:ro
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      TARGET_REPO: ${TARGET_REPO}
+      AGENT_MEMORY_URL: ${AGENT_MEMORY_URL:-http://mnemo-server:8082}
+      MEM9_API_KEY: ${MEM9_API_KEY:-stilltent-local-dev-key}
+      MAX_TOOL_ROUNDS: ${MAX_TOOL_ROUNDS:-50}
+      WORKSPACE_DIR: /workspace
+      LISTEN_PORT: "18789"
+    networks:
+      - stilltent-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:18789/healthz || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: "1.5"
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

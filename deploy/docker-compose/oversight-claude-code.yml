@@ -1,0 +1,46 @@
+# oversight-claude-code.yml — Claude Code as oversight reviewer
+#
+# Sidecar service that periodically reviews the primary agent's work using
+# the Anthropic API. Stores observations and feedback in memory (mem9) so
+# the primary agent can recall them in subsequent iterations.
+#
+# Only included when claude_code.enabled=true AND agent.runtime != claude-code.
+
+services:
+
+  claude-code-oversight:
+    build:
+      context: ./config/agents/claude-code
+      dockerfile: Dockerfile
+    container_name: stilltent-oversight
+    volumes:
+      - ./workspace:/workspace:ro
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      TARGET_REPO: ${TARGET_REPO}
+      AGENT_MEMORY_URL: ${AGENT_MEMORY_URL:-http://mnemo-server:8082}
+      MEM9_API_KEY: ${MEM9_API_KEY:-stilltent-local-dev-key}
+      REVIEW_EVERY_N: "5"
+      OVERSIGHT_BUDGET: "5.0"
+      POLL_INTERVAL: "30"
+      WORKSPACE_DIR: /workspace
+    networks:
+      - stilltent-net
+    # Override the default adapter entrypoint to run oversight instead
+    command: ["python", "-u", "oversight.py"]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+      restart_policy:
+        condition: on-failure
+        delay: 30s
+        max_attempts: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    restart: unless-stopped

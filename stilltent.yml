@@ -6,7 +6,7 @@ target:
   branch: "main"
 
 agent:
-  runtime: "openclaw"         # openclaw | nanoclaw | nemoclaw
+  runtime: "openclaw"         # openclaw | nanoclaw | nemoclaw | claude-code
   model: "qwen/qwen3-coder-next"
   provider: "openrouter"      # openrouter | anthropic | openai | ollama
 
@@ -61,3 +61,9 @@ deploy:
 claude_code:
   enabled: false              # Enable Claude Code as an agent backend
   api_key: ""
+  model: "claude-sonnet-4-20250514"
+  # Oversight mode: when enabled=true and agent.runtime is NOT claude-code,
+  # Claude Code runs as a reviewer sidecar. It reviews the primary agent's
+  # work every N iterations and stores observations in memory.
+  oversight_interval: 5       # Review every N orchestrator iterations
+  oversight_budget: 5.0       # Max USD per oversight review session

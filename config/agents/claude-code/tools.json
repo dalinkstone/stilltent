@@ -1,0 +1,112 @@
+[
+  {
+    "name": "shell",
+    "description": "Execute a shell command in the workspace repository. Use this for running builds, tests, installing dependencies, searching files, and any other command-line operations. Commands run in /workspace/repo with sh -c.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The shell command to execute"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Timeout in seconds (default: 120, max: 300)",
+          "default": 120
+        }
+      },
+      "required": ["command"]
+    }
+  },
+  {
+    "name": "file_read",
+    "description": "Read the contents of a file or list a directory. Paths are relative to the workspace repository root (/workspace/repo).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative path to the file or directory"
+        }
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "file_write",
+    "description": "Write content to a file in the workspace repository. Creates parent directories if needed. Paths are relative to the workspace repository root (/workspace/repo).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative path to the file"
+        },
+        "content": {
+          "type": "string",
+          "description": "The content to write to the file"
+        }
+      },
+      "required": ["path", "content"]
+    }
+  },
+  {
+    "name": "git",
+    "description": "Execute a git command in the workspace repository. Use for status, diff, log, add, commit, push, branch operations, etc.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "subcommand": {
+          "type": "string",
+          "description": "The git subcommand (e.g., 'status', 'diff', 'log', 'add', 'commit', 'push')"
+        },
+        "args": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Additional arguments for the git subcommand",
+          "default": []
+        }
+      },
+      "required": ["subcommand"]
+    }
+  },
+  {
+    "name": "memory_store",
+    "description": "Store a piece of knowledge in persistent memory (mem9). Use this to remember important decisions, patterns, bugs found, architecture notes, or anything that should persist across iterations.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The content to store in memory"
+        },
+        "tags": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Tags to categorize the memory (e.g., ['architecture', 'decision'])",
+          "default": []
+        }
+      },
+      "required": ["content"]
+    }
+  },
+  {
+    "name": "memory_search",
+    "description": "Search persistent memory (mem9) for relevant past knowledge. Use this at the start of work to recall context, decisions, and patterns from previous iterations.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Natural language search query"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Maximum number of results to return (default: 5)",
+          "default": 5
+        }
+      },
+      "required": ["query"]
+    }
+  }
+]

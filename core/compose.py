@@ -33,6 +33,7 @@ AGENT_FRAGMENTS = {
     "openclaw": "agent-openclaw.yml",
     "nanoclaw": "agent-nanoclaw.yml",
     "nemoclaw": "agent-nemoclaw.yml",
+    "claude-code": "agent-claude-code.yml",
 }
 
 # Maps agent runtime to the service name used for depends_on and AGENT_URL
@@ -40,6 +41,7 @@ AGENT_SERVICE_NAMES = {
     "openclaw": "openclaw-gateway",
     "nanoclaw": "nanoclaw",
     "nemoclaw": "nemoclaw",
+    "claude-code": "claude-code-agent",
 }
 
 
@@ -111,24 +113,47 @@ def select_fragments(config: dict) -> list[str]:
     # Orchestrator is always included
     fragments.append("orchestrator.yml")
 
+    # Claude Code oversight: when claude_code.enabled is true and the primary
+    # runtime is NOT claude-code, include the oversight sidecar
+    claude_cfg = config.get("claude_code", {})
+    if claude_cfg.get("enabled") and agent_runtime != "claude-code":
+        fragments.append("oversight-claude-code.yml")
+
     return fragments
 
 
-def assemble(fragments: list[str], agent_runtime: str) -> dict:
+def assemble(fragments: list[str], agent_runtime: str, config: dict | None = None) -> dict:
     """Load and merge all selected fragments into a single compose dict."""
     result = {}
     for name in fragments:
         fragment = load_fragment(name)
         result = deep_merge(result, fragment)
 
-    # Wire orchestrator depends_on and AGENT_URL to the selected agent service
+    # Wire orchestrator depends_on and AGENT_URL to the selected agent service.
+    # Also set OPENCLAW_URL which is what loop.py actually reads for the
+    # gateway endpoint.
     agent_svc = AGENT_SERVICE_NAMES[agent_runtime]
     orch = result.get("services", {}).get("orchestrator")
     if orch is not None:
         orch["depends_on"] = {agent_svc: {"condition": "service_healthy"}}
-        orch["environment"]["AGENT_URL"] = (
-            f"${{AGENT_URL:-http://{agent_svc}:18789}}"
+        agent_url = f"${{AGENT_URL:-http://{agent_svc}:18789}}"
+        orch["environment"]["AGENT_URL"] = agent_url
+        orch["environment"]["OPENCLAW_URL"] = (
+            f"${{OPENCLAW_URL:-http://{agent_svc}:18789}}"
         )
+
+    # Wire oversight sidecar: set the review interval from config
+    config = config or {}
+    claude_cfg = config.get("claude_code", {})
+    oversight = result.get("services", {}).get("claude-code-oversight")
+    if oversight is not None:
+        review_interval = claude_cfg.get("oversight_interval", 5)
+        oversight["environment"]["REVIEW_EVERY_N"] = str(review_interval)
+        # Oversight depends on both the primary agent and memory
+        oversight["depends_on"] = {
+            agent_svc: {"condition": "service_healthy"},
+            "mnemo-server": {"condition": "service_healthy"},
+        }
 
     return result
 
@@ -179,7 +204,7 @@ def main():
     print(f"compose: memory={memory_backend}, agent={agent_runtime}")
     print(f"compose: merging {len(fragments)} fragments: {', '.join(fragments)}")
 
-    composed = assemble(fragments, agent_runtime)
+    composed = assemble(fragments, agent_runtime, config)
 
     header = generate_header(fragments, args.config)
     output_yaml = yaml.dump(composed, default_flow_style=False, sort_keys=False)
