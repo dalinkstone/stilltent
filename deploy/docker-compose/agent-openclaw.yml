@@ -1,15 +1,92 @@
-# agent-openclaw.yml — OpenClaw agent runtime overlay
-version: "3.8"
+# agent-openclaw.yml — OpenClaw agent runtime
+#
+# Agent session manager & message router using OpenRouter as LLM provider.
+# Executes tools (shell, file I/O, mem9) in the workspace directory.
 
 services:
-  openclaw:
+
+  openclaw-gateway:
     build:
-      context: ../../config/agents/openclaw
-      dockerfile: Dockerfile
-    env_file:
-      - ../../.env
+      context: .
+      dockerfile: dockerfiles/openclaw.Dockerfile
+    image: stilltent/openclaw:latest
+    container_name: stilltent-openclaw
     depends_on:
-      - mnemo-server
+      mnemo-server:
+        condition: service_healthy
+      tidb:
+        condition: service_healthy
+    ports:
+      - "${OPENCLAW_PORT:-18789}:18789"
+    volumes:
+      - ./config/openclaw:/home/node/.openclaw:rw
+      - ./config/openclaw/.gitconfig:/root/.gitconfig:ro
+      - ./workspace:/workspace:rw
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3-coder-next}
+      MEM9_API_URL: ${AGENT_MEMORY_URL:-http://mnemo-server:8082}
+      MEM9_API_KEY: ${MEM9_API_KEY:-stilltent-local-dev-key}
+      TARGET_REPO: ${TARGET_REPO}
+      HOME: /home/node
+      TERM: xterm-256color
     networks:
-      - stilltent
+      - stilltent-net
+    init: true
+    command:
+      - /bin/sh
+      - -c
+      - |
+        # --- Phase 1: Permission setup (runs as root from Dockerfile) ---
+        chmod 777 /workspace 2>/dev/null || true
+        mkdir -p /workspace/repo
+        chown -R 1000:1000 /workspace/repo 2>/dev/null || chmod -R a+rwX /workspace/repo 2>/dev/null || true
+
+        # --- Phase 2: Build runtime config ---
+        mkdir -p /tmp/openclaw-home/.openclaw
+        sed "s|__OPENROUTER_API_KEY__|$${OPENROUTER_API_KEY}|g" \
+          /home/node/.openclaw/openclaw.json > /tmp/openclaw-home/.openclaw/openclaw.json
+        if [ ! -s /tmp/openclaw-home/.openclaw/openclaw.json ]; then
+          echo "WARNING: config substitution failed, copying config as-is"
+          cp /home/node/.openclaw/openclaw.json /tmp/openclaw-home/.openclaw/openclaw.json
+        fi
+        ln -sfn /home/node/.openclaw/extensions /tmp/openclaw-home/.openclaw/extensions
+        cp /home/node/.gitconfig /tmp/openclaw-home/.gitconfig 2>/dev/null || true
+        chown -R 1000:1000 /tmp/openclaw-home
+
+        # --- Phase 3: Drop to node user and start gateway ---
+        exec gosu node sh -c '
+          export HOME=/tmp/openclaw-home
+          git config --global url."https://x-access-token:'"$${GITHUB_TOKEN}"'@github.com/".insteadOf "https://github.com/"
+          echo "Starting gateway..."
+          exec node /app/openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
+        '
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 60s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: "1.5"
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped

@@ -1,0 +1,48 @@
+# orchestrator.yml — Autonomous loop driver
+#
+# Lightweight loop that triggers the agent on a configurable interval.
+# Does NOT make decisions — the agent makes all decisions. The orchestrator
+# sends prompts, monitors for hangs, collects metrics, and enforces budgets.
+#
+# Uses AGENT_URL (not OPENCLAW_URL) so it works with any agent runtime.
+
+services:
+
+  orchestrator:
+    build:
+      context: ./core/orchestrator
+      dockerfile: Dockerfile
+    container_name: stilltent-orchestrator
+    environment:
+      AGENT_URL: ${AGENT_URL:-http://openclaw-gateway:18789}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      TARGET_REPO: ${TARGET_REPO}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-qwen/qwen3-coder-next}
+      LOOP_INTERVAL: ${LOOP_INTERVAL:-60}
+      COOLDOWN_SECONDS: ${COOLDOWN_SECONDS:-30}
+      ITERATION_TIMEOUT: ${ITERATION_TIMEOUT:-600}
+      MAX_CONSECUTIVE_FAILURES: ${MAX_CONSECUTIVE_FAILURES:-25}
+      TOTAL_RUNTIME_HOURS: ${TOTAL_RUNTIME_HOURS:-120}
+      BUDGET_LIMIT: ${BUDGET_LIMIT:-50}
+      DAILY_BUDGET_LIMIT: ${DAILY_BUDGET_LIMIT:-15}
+      MAX_ITERATIONS: ${MAX_ITERATIONS:-0}
+      WORKSPACE_DIR: /workspace
+    volumes:
+      - ./workspace:/workspace:rw
+    networks:
+      - stilltent-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped

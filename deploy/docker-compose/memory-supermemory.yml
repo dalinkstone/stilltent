@@ -1,15 +1,43 @@
-# memory-supermemory.yml — Supermemory SaaS or self-hosted overlay
-version: "3.8"
+# memory-supermemory.yml — Supermemory SaaS proxy
+#
+# A lightweight proxy container that exposes the same REST interface as
+# mnemo-server (POST /memories, GET /search) but forwards requests to
+# the Supermemory SaaS API. This lets agent code use either memory
+# backend without modification.
 
 services:
-  supermemory:
-    image: supermemory/supermemory:latest
-    ports:
-      - "8080:8080"
-    env_file:
-      - ../../.env
+
+  supermemory-proxy:
+    build:
+      context: ./config/memory/supermemory-proxy
+      dockerfile: Dockerfile
+    container_name: stilltent-supermemory-proxy
     environment:
-      - SUPERMEMORY_API_KEY=${SUPERMEMORY_API_KEY:-}
+      SUPERMEMORY_API_KEY: ${SUPERMEMORY_API_KEY}
+      SUPERMEMORY_BASE_URL: ${SUPERMEMORY_BASE_URL:-https://api.supermemory.ai}
+      LISTEN_PORT: "8082"
+    ports:
+      - "8082:8082"
     networks:
-      - stilltent
+      - stilltent-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+          cpus: "0.25"
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
