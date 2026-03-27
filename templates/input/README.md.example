@@ -1,28 +1,28 @@
-# My Project
+# <project-name>
 
-A CLI tool that converts Markdown files to styled PDF documents.
+<One paragraph describing what this project does. This becomes the agent's
+primary understanding of the project. Be specific about the problem being
+solved, the target users, and the key value proposition.>
 
-## Features
+## Goals
+- <What the project should do — each goal becomes an item the agent works toward>
+- <Key features the project must have>
+- <Behaviors or capabilities that define "done">
 
-- Parse Markdown with full GFM support
-- Syntax-highlighted code blocks
-- Table of contents generation
-- Custom CSS themes
-- Watch mode for live preview
+## Non-Goals
+- <What the project should NOT do — scope boundaries>
+- <Features that are explicitly out of scope>
+- <Things the agent should not spend time on>
 
-## Tech Stack
+## Tech Stack (optional)
+- <Language/framework preferences — if omitted, the agent detects from repo files>
+- <Key dependencies or libraries to use>
 
-- Language: Go
-- PDF rendering: chromedp (headless Chrome)
-- CLI framework: cobra
+## Architecture (optional)
+- <Any architectural constraints or preferences>
+- <How the project should be structured>
+- <Deployment model or runtime requirements>
 
-## Architecture
-
-Single binary with three subcommands:
-- `convert` — one-shot Markdown to PDF
-- `watch` — file watcher with live reload
-- `theme` — manage CSS themes
-
-## Testing
-
-Unit tests for parser, integration tests for PDF output comparison.
+## Testing (optional)
+- <How to run tests — if omitted, the agent auto-detects from project files>
+- <Any testing conventions or requirements>

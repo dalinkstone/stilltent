@@ -2,10 +2,14 @@
 -include .env
 export
 
-.PHONY: generate up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once dev-loop-opus dev-loop-sonnet dev-logs dev-stats dev-clean-branches
+.PHONY: generate generate-prompts up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once dev-loop-opus dev-loop-sonnet dev-logs dev-stats dev-clean-branches
+
+# Generate agent prompts from target repo's README.md + stilltent.yml
+generate-prompts:
+	@python3 core/prompt_builder.py
 
 # Generate docker-compose.yml from stilltent.yml + composable fragments
-generate:
+generate: generate-prompts
 	@python3 core/compose.py
 
 # Start all services (initializes DB on first run if needed)

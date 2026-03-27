@@ -15,15 +15,32 @@ set -a
 source .env
 set +a
 
-# Step 1: Verify services
-echo "[1/6] Checking service health..."
+# Step 1: Generate prompts from target README
+echo "[1/8] Generating agent prompts from target README..."
+if [ -d "workspace/repo" ] && [ -f "workspace/repo/README.md" ]; then
+    python3 core/prompt_builder.py
+elif [ -n "${TARGET_REPO:-}" ]; then
+    echo "  Target repo not yet cloned — prompts will be generated after clone."
+else
+    echo "  WARNING: No TARGET_REPO set and no local repo found."
+    echo "  Prompts will use defaults. Set TARGET_REPO in .env and re-run."
+fi
+echo ""
+
+# Step 2: Generate docker-compose.yml from config
+echo "[2/8] Generating docker-compose.yml..."
+python3 core/compose.py
+echo ""
+
+# Step 3: Verify services
+echo "[3/8] Checking service health..."
 bash scripts/health-check.sh
 echo ""
 read -p "All services healthy? Press Enter to continue, Ctrl+C to abort."
 
-# Step 2: Clone target repo
+# Step 4: Clone target repo
 echo ""
-echo "[2/6] Cloning target repository..."
+echo "[4/8] Cloning target repository..."
 # Run as root (-u 0) so we can write to the /workspace volume mount.
 # After cloning, fix ownership so the node user (1000) can work with it.
 docker compose exec -T -u 0 openclaw-gateway bash -c '
@@ -58,9 +75,15 @@ docker compose exec -T -u 0 openclaw-gateway bash -c '
 '
 echo "Repository ready."
 
-# Step 3: Initialize mem9 tenant and store seed memory
+# Step 5: Generate prompts now that repo is cloned
 echo ""
-echo "[3/6] Initializing memory system..."
+echo "[5/8] Generating agent prompts from cloned README..."
+python3 core/prompt_builder.py
+echo ""
+
+# Step 6: Initialize mem9 tenant and store seed memory
+echo ""
+echo "[6/8] Initializing memory system..."
 SEED_MEMORY="stilltent initialized. Target repository: ${TARGET_REPO}. This is the first iteration. No prior history exists. Start by reading the repository README and following SKILL.md Phase 2 (Assess)."
 
 curl -sf -X POST "http://localhost:${MEM9_API_PORT:-8082}/v1alpha2/mem9s/memories" \
@@ -73,9 +96,9 @@ curl -sf -X POST "http://localhost:${MEM9_API_PORT:-8082}/v1alpha2/mem9s/memorie
         \"metadata\": {\"source\": \"bootstrap\", \"target_repo\": \"${TARGET_REPO}\"}
     }" && echo " Seed memory created." || echo "WARNING: Could not create seed memory. Check mem9 API. Continuing anyway."
 
-# Step 4: Verify workspace files are accessible inside the container
+# Step 7: Verify workspace files are accessible inside the container
 echo ""
-echo "[4/6] Verifying workspace..."
+echo "[7/8] Verifying workspace..."
 docker compose exec -T openclaw-gateway sh -c '
     echo "SKILL.md:    $([ -f /workspace/SKILL.md ] && echo OK || echo MISSING)"
     echo "AGENTS.md:   $([ -f /workspace/AGENTS.md ] && echo OK || echo MISSING)"
@@ -83,9 +106,9 @@ docker compose exec -T openclaw-gateway sh -c '
     echo "Target repo: $([ -d /workspace/repo/.git ] && echo OK || echo MISSING)"
 '
 
-# Step 5: Run a single test iteration
+# Step 8: Run a single test iteration
 echo ""
-echo "[5/6] Running first iteration (this may take several minutes)..."
+echo "[8/8] Running first iteration (this may take several minutes)..."
 echo "Sending trigger prompt to OpenClaw gateway..."
 
 PROMPT='Read and follow /workspace/SKILL.md. This is iteration 1 (bootstrap). Execute the complete iteration protocol (Phase 1 through Phase 7). When finished, respond with a JSON summary: {"iteration": 1, "action_type": "bootstrap", "summary": "<description>", "result": "<success|failure>", "pr_number": null, "merged": null, "confidence": 0.0, "error": null}'
@@ -109,9 +132,9 @@ echo "========================================="
 echo "$RESPONSE" | python3 -m json.tool 2>/dev/null || echo "$RESPONSE"
 echo "========================================="
 
-# Step 6: Prompt operator review
+# Post-bootstrap review
 echo ""
-echo "[6/6] Review"
+echo "Review"
 echo ""
 echo "Check the following before enabling autonomous mode:"
 echo "  1. Review the response above — did the agent understand SKILL.md?"

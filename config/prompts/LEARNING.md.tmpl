@@ -1,18 +1,151 @@
-# Learning Prompt Template
-# Used when the agent reflects on completed iterations.
-# Variables: {{.IterationNumber}}, {{.PRTitle}}, {{.TestResults}}, {{.Errors}}
+{# LEARNING.md.tmpl — Jinja2 template for the self-learning methodology.
+   Rendered by core/prompt_builder.py. This template is entirely project-agnostic.
+   The hypothesis-driven development loop, quality ratchet, improvement queue,
+   creative escalation, and knowledge consolidation transfer unchanged. #}
+# Self-Learning Methodology
 
-## Iteration {{.IterationNumber}} Reflection
+You improve not just the project, but your own process. Every iteration is an
+experiment that generates data about what works and what doesn't.
 
-### What was accomplished
-PR: {{.PRTitle}}
+---
 
-### Test Results
-{{.TestResults}}
+## Hypothesis-Driven Development Loop
 
-### Errors Encountered
-{{.Errors}}
+Every change begins as a hypothesis. Follow this cycle:
 
-### Lessons Learned
-Summarize what went well, what failed, and what to do differently next time.
-Store these insights in memory for future iterations.
+### 1. HYPOTHESIZE
+
+Before writing any code, state your hypothesis explicitly:
+
+> "If I [specific change], then [expected outcome], because [reasoning]."
+
+Examples:
+- "If I add input validation to the parser, then malformed input will produce
+  clear error messages instead of panics, because the current code assumes
+  well-formed input."
+- "If I extract the retry logic into a shared module, then the three callers
+  can share it, because they all implement the same pattern independently."
+
+A hypothesis without a measurable expected outcome is not a hypothesis — it is
+a guess. Be specific about what you expect to see.
+
+### 2. IMPLEMENT
+
+Execute the change described in your hypothesis. Follow the iteration protocol
+in SKILL.md. Keep the change minimal — test one hypothesis at a time.
+
+### 3. MEASURE
+
+Collect evidence about whether your hypothesis was correct:
+- Did the tests pass? Which ones?
+- Did the expected behavior change occur?
+- Were there unexpected side effects?
+- How did metrics change (test count, coverage, build time, binary size)?
+
+Record the measurements. Do not rely on your impression — look at the data.
+
+### 4. EVALUATE
+
+Compare measurements against your hypothesis:
+- **Confirmed**: The expected outcome occurred. Record why it worked.
+- **Refuted**: The expected outcome did not occur. Record why it failed.
+- **Partial**: Some aspects confirmed, others refuted. Identify which and why.
+- **Inconclusive**: Not enough evidence. Identify what additional measurement
+  would resolve the ambiguity.
+
+Be honest. A refuted hypothesis teaches more than a confirmed one.
+
+### 5. LEARN
+
+Extract the transferable lesson:
+- What generalizable principle did this iteration reveal?
+- Would this approach work in other parts of the codebase?
+- What should future iterations do differently based on this evidence?
+
+Store the lesson in memory with the hypothesis, measurements, and evaluation.
+
+### 6. REPEAT
+
+Feed the lesson back into the next iteration. Your next hypothesis should be
+informed by everything you have learned so far.
+
+---
+
+## Quality Ratchet
+
+Quality only moves in one direction: up. Each iteration must satisfy all
+previous quality guarantees plus any new ones it introduces.
+
+Rules:
+- **Test count never decreases.** If you remove a test, you must add at least
+  one replacement that covers the same behavior.
+- **Passing tests stay passing.** A change that breaks an existing test is not
+  complete until the test is fixed.
+- **Coverage does not regress.** If the project tracks coverage, your change
+  must not lower it.
+- **Build stays green.** The default branch must always be in a buildable,
+  testable, runnable state.
+
+If you discover that meeting the ratchet is impossible without a larger refactor,
+document the situation and propose the refactor as a future iteration — do not
+lower the bar.
+
+---
+
+## Improvement Queue
+
+Maintain a mental queue of improvements discovered during each iteration.
+Not every good idea should be implemented immediately.
+
+When you notice something that could be improved but is outside your current
+iteration's scope:
+1. Record it in memory as a potential future improvement
+2. Include: what the improvement is, why it matters, estimated complexity
+3. Do NOT implement it now — stay focused on your current hypothesis
+
+When planning a new iteration, consult the improvement queue in memory before
+deciding what to work on. The best next iteration might already be waiting.
+
+---
+
+## Creative Escalation
+
+When you are stuck, escalate your creativity systematically:
+
+**Level 1 — Read more context.** Re-read related files, tests, documentation,
+and git history. The answer is often already in the codebase.
+
+**Level 2 — Simplify the problem.** Remove constraints one at a time. What is
+the simplest version of this change that would still be useful?
+
+**Level 3 — Try the opposite.** If your approach is not working, consider
+whether the opposite approach would. Sometimes the right answer is to remove
+code instead of adding it.
+
+**Level 4 — Step back.** Re-read the project specification. Are you solving the
+right problem? Is the current approach aligned with the project's goals?
+
+**Level 5 — Record and move on.** If you cannot solve this problem in the
+current iteration, record everything you have learned about it in memory and
+move on to a different improvement. A future iteration (possibly with fresh
+context from other changes) may find the solution obvious.
+
+Never spend more than 40% of your iteration time budget on a single blocker.
+
+---
+
+## Knowledge Consolidation
+
+Every 5 iterations, perform a brief consolidation:
+
+1. **Review recent memories.** Read back the last 5 iterations of stored
+   knowledge.
+2. **Identify patterns.** Are there recurring themes, repeated mistakes, or
+   emerging best practices?
+3. **Synthesize.** Write a consolidated summary that captures the patterns.
+   This is higher-level knowledge than individual iteration notes.
+4. **Prune.** If earlier memories are now superseded by the consolidated
+   summary, note that they are outdated.
+
+Consolidation prevents memory from becoming a pile of disconnected facts and
+keeps it useful as a coherent knowledge base.
