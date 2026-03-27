@@ -2,7 +2,7 @@
 -include .env
 export
 
-.PHONY: generate generate-prompts up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once dev-loop-opus dev-loop-sonnet dev-logs dev-stats dev-clean-branches
+.PHONY: generate generate-prompts up down logs logs-follow restart status health bootstrap clean pause resume stats test-mem9 test-openclaw init-db install-hooks scan-secrets validate-workspace preflight preflight-stack monitor deploy deploy-do deploy-vultr deploy-railway deploy-render deploy-heroku teardown cost ssh-tunnel rebuild reset-metrics build-all start test-run setup-claude dev-loop dev-loop-once dev-loop-opus dev-loop-sonnet dev-logs dev-stats dev-clean-branches
 
 # Generate agent prompts from target repo's README.md + stilltent.yml
 generate-prompts:
@@ -222,27 +222,59 @@ preflight:
 monitor:
 	@bash scripts/monitor.sh
 
-# Print DigitalOcean deployment instructions
+# ── Deployment ─────────────────────────────────────────────────────
+
+# Smart deploy: reads deploy.target from stilltent.yml and dispatches
 deploy:
-	@echo "=== DigitalOcean Deployment ==="
-	@echo ""
-	@echo "1. Create a Droplet (Ubuntu 24.04, 8GB RAM / 2 vCPU / 160GB disk):"
-	@echo "   doctl compute droplet create stilltent \\"
-	@echo "     --image ubuntu-24-04-x64 --size s-2vcpu-8gb-intel \\"
-	@echo "     --region nyc1 --ssh-keys \$$SSH_KEY_ID"
-	@echo ""
-	@echo "2. SSH into the Droplet:"
-	@echo "   ssh root@\$$DROPLET_IP"
-	@echo ""
-	@echo "3. Install Docker:"
-	@echo "   curl -fsSL https://get.docker.com | sh"
-	@echo ""
-	@echo "4. Clone and configure:"
-	@echo "   git clone <repo-url> ~/stilltent && cd ~/stilltent"
-	@echo "   cp .env.example .env && nano .env"
-	@echo ""
-	@echo "5. Start the stack:"
-	@echo "   make bootstrap"
+	@TARGET=$$(python3 -c "import yaml; print(yaml.safe_load(open('stilltent.yml'))['deploy']['target'])" 2>/dev/null || echo "local"); \
+	echo "Deploy target: $$TARGET"; \
+	case "$$TARGET" in \
+		digitalocean) $(MAKE) deploy-do ;; \
+		vultr)        $(MAKE) deploy-vultr ;; \
+		railway)      $(MAKE) deploy-railway ;; \
+		render)       $(MAKE) deploy-render ;; \
+		heroku)       $(MAKE) deploy-heroku ;; \
+		local)        echo "Target is 'local' — use 'make up' to start locally." ;; \
+		*)            echo "Unknown deploy target: $$TARGET"; exit 1 ;; \
+	esac
+
+# Deploy to DigitalOcean (scp script + .env to droplet, then run remotely)
+deploy-do:
+	@if [ -z "$${DROPLET_IP:-}" ]; then \
+		echo "ERROR: DROPLET_IP not set. Add it to .env or export it."; \
+		exit 1; \
+	fi
+	@echo "Deploying to DigitalOcean droplet at $$DROPLET_IP..."
+	@scp .env "root@$$DROPLET_IP:/root/.env.stilltent"
+	@scp deploy/scripts/harden-vps.sh deploy/scripts/deploy-digitalocean.sh "root@$$DROPLET_IP:/tmp/"
+	@ssh "root@$$DROPLET_IP" "bash /tmp/deploy-digitalocean.sh"
+
+# Deploy to Vultr
+deploy-vultr:
+	@if [ -z "$${VULTR_IP:-}" ]; then \
+		echo "ERROR: VULTR_IP not set. Add it to .env or export it."; \
+		exit 1; \
+	fi
+	@echo "Deploying to Vultr VPS at $$VULTR_IP..."
+	@scp .env "root@$$VULTR_IP:/root/.env.stilltent"
+	@scp deploy/scripts/harden-vps.sh deploy/scripts/deploy-vultr.sh "root@$$VULTR_IP:/tmp/"
+	@ssh "root@$$VULTR_IP" "bash /tmp/deploy-vultr.sh"
+
+# Deploy to Railway
+deploy-railway:
+	@bash deploy/scripts/deploy-paas.sh --provider railway
+
+# Deploy to Render
+deploy-render:
+	@bash deploy/scripts/deploy-paas.sh --provider render
+
+# Deploy to Heroku
+deploy-heroku:
+	@bash deploy/scripts/deploy-paas.sh --provider heroku
+
+# Universal teardown
+teardown:
+	@bash deploy/scripts/teardown.sh
 
 # Real-time cost report from workspace/metrics.json
 cost:
