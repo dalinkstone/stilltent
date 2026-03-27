@@ -20,7 +20,15 @@ memory:
   # asmr-specific (supermemory ASMR-style parallel agents)
   asmr_observer_count: 3
   asmr_searcher_count: 3
-  asmr_ensemble_variants: 8
+  asmr_ensemble_variants: 4       # max 8 (conservative, progressive, precision, refactor, ...)
+  # Optional: override the model used by ASMR agents (defaults to agent.model)
+  # Use a fast/cheap model for observers and searchers to keep costs low.
+  # asmr_observer_model: "google/gemini-2.0-flash"
+  # asmr_searcher_model: "google/gemini-2.0-flash"
+  # asmr_ensemble_model: "qwen/qwen3-coder-next"
+  asmr_observer_timeout: 120
+  asmr_searcher_timeout: 60
+  asmr_ensemble_timeout: 90
 
 sandbox:
   provider: "daytona"         # daytona | local | none
