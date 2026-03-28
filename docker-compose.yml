@@ -238,6 +238,7 @@ services:
       DAILY_BUDGET_LIMIT: ${DAILY_BUDGET_LIMIT:-15}
       MAX_ITERATIONS: ${MAX_ITERATIONS:-0}
       WORKSPACE_DIR: /workspace
+      OPENCLAW_URL: ${OPENCLAW_URL:-http://openclaw-gateway:18789}
     volumes:
     - ./workspace:/workspace:rw
     networks:

@@ -31,7 +31,7 @@ memory:
   asmr_ensemble_timeout: 90
 
 sandbox:
-  provider: "daytona"         # daytona | local | none
+  provider: "local"           # daytona | local | none
   daytona_api_key: ""
   daytona_base_url: "https://app.daytona.io"
   # Sandbox resources

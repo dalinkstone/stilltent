@@ -44,6 +44,13 @@ AGENT_SERVICE_NAMES = {
     "claude-code": "claude-code-agent",
 }
 
+# Maps memory backend to the service name that provides the memory API
+MEMORY_SERVICE_NAMES = {
+    "mem9": "mnemo-server",
+    "supermemory": "supermemory-proxy",
+    "asmr": "mnemo-server",  # ASMR uses mem9 as storage
+}
+
 
 def load_config(path: Path) -> dict:
     """Load stilltent.yml configuration."""
@@ -124,15 +131,32 @@ def select_fragments(config: dict) -> list[str]:
 
 def assemble(fragments: list[str], agent_runtime: str, config: dict | None = None) -> dict:
     """Load and merge all selected fragments into a single compose dict."""
+    config = config or {}
     result = {}
     for name in fragments:
         fragment = load_fragment(name)
         result = deep_merge(result, fragment)
 
+    agent_svc = AGENT_SERVICE_NAMES[agent_runtime]
+    memory_backend = config.get("memory", {}).get("backend", "mem9")
+    memory_svc = MEMORY_SERVICE_NAMES.get(memory_backend, "mnemo-server")
+
+    # Rewire agent service depends_on to the correct memory service.
+    # Fragments hardcode mnemo-server; when using supermemory, swap it.
+    agent = result.get("services", {}).get(agent_svc)
+    if agent is not None:
+        deps = agent.get("depends_on", {})
+        if "mnemo-server" in deps and memory_svc != "mnemo-server":
+            deps[memory_svc] = deps.pop("mnemo-server")
+        # Also update AGENT_MEMORY_URL env var
+        env = agent.get("environment", {})
+        for key in ("AGENT_MEMORY_URL", "MEM9_API_URL"):
+            if key in env:
+                env[key] = f"${{AGENT_MEMORY_URL:-http://{memory_svc}:8082}}"
+
     # Wire orchestrator depends_on and AGENT_URL to the selected agent service.
     # Also set OPENCLAW_URL which is what loop.py actually reads for the
     # gateway endpoint.
-    agent_svc = AGENT_SERVICE_NAMES[agent_runtime]
     orch = result.get("services", {}).get("orchestrator")
     if orch is not None:
         orch["depends_on"] = {agent_svc: {"condition": "service_healthy"}}
@@ -143,7 +167,6 @@ def assemble(fragments: list[str], agent_runtime: str, config: dict | None = Non
         )
 
     # Wire oversight sidecar: set the review interval from config
-    config = config or {}
     claude_cfg = config.get("claude_code", {})
     oversight = result.get("services", {}).get("claude-code-oversight")
     if oversight is not None:
@@ -152,7 +175,7 @@ def assemble(fragments: list[str], agent_runtime: str, config: dict | None = Non
         # Oversight depends on both the primary agent and memory
         oversight["depends_on"] = {
             agent_svc: {"condition": "service_healthy"},
-            "mnemo-server": {"condition": "service_healthy"},
+            memory_svc: {"condition": "service_healthy"},
         }
 
     return result

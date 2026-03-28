@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-stilltent is an **autonomous AI agent system** that builds entire software projects from scratch, without human involvement. You give it a project description — a simple markdown file in the `project/` directory — and it does everything else. It scaffolds the codebase, writes the code, writes the tests, sets up CI, opens pull requests, reviews them, merges them, and then keeps going. It doesn't stop. It runs for days, making hundreds of commits and hundreds of pull requests, continuously thinking about how to make the project better.
+stilltent is an **autonomous AI agent system** that builds entire software projects from scratch, without human involvement. You give it a project description — a `README.md` in any git repository — and it does everything else. It scaffolds the codebase, writes the code, writes the tests, sets up CI, opens pull requests, reviews them, merges them, and then keeps going. It doesn't stop. It runs for days, making hundreds of commits and hundreds of pull requests, continuously thinking about how to make the project better.
 
 The system is not a one-shot code generator. It is an always-on developer. It wakes up every 60 seconds, looks at the state of the repository, decides what to do next, does it, records what it learned, and goes back to sleep. Then it wakes up again and does it again. It remembers what it tried before, what worked, what failed, and what it learned. It uses that memory to make better decisions in the next iteration.
 
@@ -22,95 +22,103 @@ The goal is that after five days of autonomous operation, the repository should 
 
 ## The Project Description: Where It All Starts
 
-Everything begins with a file: `project/README.md`. This is the project specification. It tells the agent what to build.
+Everything begins with a `README.md` in the target repository. You set `target.repo` in `stilltent.yml` to point at a GitHub repo (e.g., `your-username/your-project`), and stilltent clones it, reads the README, and starts building.
 
-The project description is intentionally simple. Here's what the current one looks like:
+The project description is intentionally simple. Here's an example:
 
 ```markdown
-# mytool
+# myapi
 
-A command-line tool for managing local development environments. Written in Go.
+A REST API for managing team task boards. Written in Python with FastAPI.
 
 ## Goals
-- Create, start, stop, and destroy local dev environments
-- Support Docker-based environments with custom configurations
-- Provide a simple YAML-based configuration format
-- Include comprehensive test coverage
+- CRUD operations for boards, columns, and tasks
+- User authentication with JWT tokens
+- WebSocket support for real-time updates
+- PostgreSQL storage with async queries
 
 ## Non-Goals
-- This is not a cloud deployment tool
-- No GUI — CLI only
-- No support for Kubernetes (just Docker)
+- This is not a frontend application
+- No mobile app support
+- No AI/ML features
 ```
 
-That's it. From this description, the agent will:
+From this description, the agent will:
 
-1. Initialize a Go module
-2. Create a project structure with `cmd/`, `internal/`, `pkg/` directories
-3. Set up a Makefile for building and testing
-4. Create a CLI entry point
-5. Implement the YAML configuration parser
-6. Build Docker integration for environment management
-7. Write unit tests for every component
-8. Set up GitHub Actions CI
-9. Add linting, formatting, and build verification
-10. Write documentation
-11. And then keep improving it — adding error handling, edge case tests, refactoring, adding features
+1. Scaffold a FastAPI project structure
+2. Set up models, routes, and database schemas
+3. Implement authentication and JWT handling
+4. Build CRUD endpoints for each resource
+5. Add WebSocket support
+6. Write tests for every endpoint
+7. Set up CI and linting
+8. And then keep improving it — adding error handling, edge case tests, refactoring, adding features
 
-The agent reads this file during its first iteration bootstrap phase. Every subsequent iteration, it refers back to the project's direction when deciding what to work on next.
+The prompt builder (`core/prompt_builder.py`) parses the README into structured metadata — title, goals, non-goals, tech stack, architecture — and renders three agent prompt files: `SKILL.md` (iteration protocol), `AGENTS.md` (identity and constraints), and `LEARNING.md` (self-improvement methodology). These are generated from Jinja2 templates in `config/prompts/`, injected with project-specific context.
 
 ---
 
 ## High-Level Architecture
 
-The system is composed of five services running inside Docker Compose, with LLM inference routed to OpenRouter:
+The system is fully modular. Every axis — agent runtime, memory backend, sandbox provider, deploy target — is a pluggable component configured in `stilltent.yml`. The Makefile is the single entry point; `make bootstrap` takes you from zero to a running agent.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        Host Machine                          │
-│                                                              │
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │              Docker Compose (stilltent-net)             │ │
-│  │                                                         │ │
-│  │  ┌───────────┐    triggers     ┌───────────────────┐   │ │
-│  │  │Orchestrator├───────────────►│   OpenClaw Gateway │   │ │
-│  │  │ (loop.py)  │    every 60s   │  (Agent Runtime)   │   │ │
-│  │  └───────────┘                 └─────┬──────┬──────┘   │ │
-│  │                                      │      │          │ │
-│  │                          memory ops  │      │ LLM API  │ │
-│  │                                      │      │          │ │
-│  │  ┌───────────┐                 ┌─────▼──┐   │          │ │
-│  │  │   TiDB    │◄────────────────┤ mnemo  │   │          │ │
-│  │  │ (v8.4.0)  │   SQL queries   │ server │   │          │ │
-│  │  └───────────┘                 └───┬────┘   │          │ │
-│  │                                    │        │          │ │
-│  │                        embeddings  │        │          │ │
-│  │                                    │        │          │ │
-│  │                              ┌─────▼─────┐  │          │ │
-│  │                              │  embed-   │  │          │ │
-│  │                              │  service  │  │          │ │
-│  │                              │  (C, 256d)│  │          │ │
-│  │                              └───────────┘  │          │ │
-│  │                                              │          │ │
-│  └──────────────────────────────────────────────┼──────────┘ │
-│                                                  │            │
-│                                    HTTPS to OpenRouter.ai     │
-│                                    (Qwen3 Coder Next)         │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+                    stilltent.yml + .env
+                           │
+                    ┌──────▼──────┐
+                    │  harness.py │  (bootstrap orchestration)
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+        ┌──────────┐ ┌──────────┐ ┌──────────┐
+        │validate.py│ │compose.py│ │ prompt   │
+        │(schema)   │ │(fragments│ │ builder  │
+        └──────────┘ │  merge)  │ └──────────┘
+                     └────┬─────┘
+                          ▼
+                 docker-compose.yml
+                          │
+         ┌────────────────┼────────────────┐
+         ▼                ▼                ▼
+   ┌───────────┐   ┌───────────┐   ┌───────────┐
+   │Orchestrator│──►│   Agent   │──►│  Memory   │
+   │ (loop.py)  │   │ Runtime   │   │ Backend   │
+   └───────────┘   └───────────┘   └───────────┘
+         │
+         ▼
+   ┌───────────┐
+   │  Sandbox  │
+   │ Provider  │
+   └───────────┘
 ```
 
-Every component has a specific, minimal responsibility:
+### Pluggable Components
 
-- **TiDB** stores data (memories, tenant metadata, upload tasks)
-- **embed-service** generates embedding vectors from text (local, zero API cost)
-- **mnemo-server** provides a REST API for memory operations
-- **OpenClaw** runs the agent (LLM calls, tool execution, memory plugin)
-- **Orchestrator** triggers the agent on a schedule, tracks cost, enforces budget
+| Axis | Options | Configured In |
+|------|---------|---------------|
+| Agent Runtime | `openclaw`, `nanoclaw`, `nemoclaw`, `claude-code` | `agent.runtime` |
+| Memory Backend | `mem9` (self-hosted), `supermemory` (SaaS), `asmr` (parallel agents) | `memory.backend` |
+| Sandbox Provider | `daytona` (cloud), `local`, `none` | `sandbox.provider` |
+| Deploy Target | `digitalocean`, `vultr`, `railway`, `render`, `heroku`, `local` | `deploy.target` |
+
+The compose generator (`core/compose.py`) reads `stilltent.yml` and merges the appropriate Docker Compose fragments from `deploy/docker-compose/`:
+
+```
+base.yml                    (always: network, TiDB, volumes)
++ memory-mem9.yml           (or memory-supermemory.yml)
++ agent-openclaw.yml        (or agent-nanoclaw/nemoclaw/claude-code.yml)
++ orchestrator.yml          (always)
++ oversight-claude-code.yml (optional: when claude_code.enabled + non-claude runtime)
+```
+
+After merging, compose.py rewires `depends_on` and environment variables so the orchestrator points at the correct agent service and agents point at the correct memory service. This means each fragment can be written independently — the wiring is automated.
 
 ---
 
-## The Five Services — Deep Technical Detail
+## The Core Services — Deep Technical Detail
+
+The default configuration (openclaw + mem9) produces a five-service stack. Other configurations vary in which agent and memory services are present, but the orchestrator and base infrastructure are always the same.
 
 ### 1. TiDB (Database)
 
@@ -125,7 +133,7 @@ Every component has a specific, minimal responsibility:
 1. **`mnemos`** (control plane): `tenants` table (multi-tenant metadata) and `upload_tasks` (file ingestion)
 2. **`mnemos_tenant`** (data plane): `memories` table with columns: `id` (UUID), `content` (MEDIUMTEXT), `source`, `tags` (JSON), `metadata` (JSON), `embedding` (VECTOR(256)), `memory_type` (pinned|insight|digest), `agent_id`, `session_id`, `state` (active|paused|archived|deleted), `version`, `updated_by`, `superseded_by`
 
-The init script includes a migration step: `ALTER TABLE memories MODIFY COLUMN embedding VECTOR(256) NULL` followed by clearing old incompatible embeddings. The Makefile's `init-db` target includes a readiness loop (30 retries × 2s) before running the SQL.
+The init script includes a migration step: `ALTER TABLE memories MODIFY COLUMN embedding VECTOR(256) NULL` followed by clearing old incompatible embeddings.
 
 **Health check:** HTTP GET `http://127.0.0.1:10080/status` every 60s, 30s start period.
 
@@ -177,11 +185,15 @@ Channel 3 is what makes this model suited for a coding agent. It recognizes `fun
 
 ---
 
-### 4. OpenClaw Gateway (Agent Runtime)
+### 4. Agent Runtimes (Pluggable)
 
-**What it is:** Open-source agent runtime providing LLM routing, tool execution, and memory plugin integration.
+The agent runtime is the service that executes LLM-driven tool loops. All runtimes expose the same HTTP interface on port 18789, so the orchestrator doesn't need to know which one is running.
 
-**Port:** 18789 | **Memory:** 768 MB | **CPU:** 1.5 cores
+#### OpenClaw (default)
+
+Open-source agent runtime providing LLM routing, tool execution, and memory plugin integration.
+
+**Port:** 18789 | **Memory:** 1.5 GB | **CPU:** 1.5 cores
 
 **Custom Dockerfile adds:** `gh` CLI, `@mem9/openclaw` plugin, git identity (`stilltent-agent <agent@stilltent.local>`)
 
@@ -191,15 +203,66 @@ Channel 3 is what makes this model suited for a coding agent. It recognizes `fun
 
 **How it works:** Orchestrator sends HTTP POST → OpenClaw creates session → sends to LLM → LLM generates tool calls → OpenClaw executes tools (shell, files, memory, GitHub) → sends results back to LLM → loop until final response → returns to orchestrator.
 
-**Key config (`openclaw.json`):** OpenRouter provider, token auth, mem9 plugin (pointing to `http://mnemo-server:8082`), streaming enabled, native commands auto.
+**Key config (`openclaw.json`):** OpenRouter provider, token auth, mem9 plugin (pointing to the memory service), streaming enabled, native commands auto.
 
 **API key injection:** `sed` substitution at startup replaces placeholder with actual key. GitHub token via git `url.insteadOf`. Neither stored in files.
 
-**Depends on:** mnemo-server (healthy) + TiDB (healthy). Health check: HTTP fetch `/healthz` every 60s.
+#### NanoClaw
+
+Lightweight agent runtime that runs Claude agents in isolated Docker containers. Same HTTP interface as OpenClaw. Uses the Anthropic API directly (requires `ANTHROPIC_API_KEY`). Minimal footprint — suitable for simpler projects or when cost control is paramount.
+
+#### NemoClaw
+
+NVIDIA OpenShell-based runtime with GPU-accelerated execution. Wraps OpenClaw with sandboxing policies for secure tool execution. **Requires NVIDIA GPU hardware** — the validator warns about this when selected. Best for projects involving ML training or inference workloads.
+
+#### Claude Code
+
+Anthropic API adapter that exposes the same HTTP interface using the Claude Messages API with `tool_use`. Supports shell, file I/O, git, and memory tools. Can also run as an **oversight sidecar** — when `claude_code.enabled` is true and the primary runtime is something else, Claude Code reviews the primary agent's work every N iterations.
 
 ---
 
-### 5. Orchestrator (Loop Driver)
+### 5. Memory Backends (Pluggable)
+
+#### mem9 (default, self-hosted)
+
+The full mem9 stack: embed-service (C, 256-dim local embeddings) + mnemo-server (Go REST API) + TiDB (MySQL-compatible with native VECTOR columns). Zero external API cost for embeddings. Hybrid keyword + vector search.
+
+```
+Agent → mem9 plugin → mnemo-server → embed-service (256-dim) + TiDB (SQL + vector)
+```
+
+**Types:** `pinned` (long-lived), `insight` (learnings), `digest` (summaries)
+**States:** `active`, `paused`, `archived`, `deleted`
+**Search:** Hybrid keyword + vector. mnemo-server calls embed-service for query vector, runs parallel SQL `LIKE` + `VEC_COSINE_DISTANCE`, merges results.
+**Consolidation:** Every 50 iterations — summarize, dedupe, update state.
+
+#### Supermemory (SaaS)
+
+A lightweight proxy container (`supermemory-proxy`) that exposes the same REST interface as mnemo-server but forwards requests to the Supermemory SaaS API. Agent code works identically — only the backend changes. Requires `SUPERMEMORY_API_KEY`.
+
+#### ASMR (Parallel Agents)
+
+Advanced multi-agent memory system inspired by the Supermemory ASMR architecture. Uses mem9 as its storage layer but adds parallel observer, searcher, and ensemble agents:
+
+- **Observers** extract 6-vector knowledge from each iteration: architectural decisions, test intelligence, code patterns, temporal state, error patterns, project understanding
+- **Searchers** perform multi-perspective queries: direct facts, related context, temporal reconstruction
+- **Ensemble** synthesizes results from multiple agents with confidence scoring
+
+Configurable via `memory.asmr_observer_count`, `memory.asmr_searcher_count`, `memory.asmr_ensemble_variants`.
+
+---
+
+### 6. Sandbox Providers (Pluggable)
+
+| Provider | Description |
+|----------|-------------|
+| `daytona` | Isolated cloud sandboxes via the Daytona SDK. Each iteration runs in a fresh workspace with the project's dependencies pre-installed. Requires `DAYTONA_API_KEY`. |
+| `local` | Run directly on the host in `workspace/repo`. No isolation. Default for development. |
+| `none` | Disable sandboxing entirely. Tests run in the agent container. |
+
+---
+
+### 7. Orchestrator (Loop Driver)
 
 **What it is:** Python script (~800 lines, stdlib only) that triggers the agent and manages the operational envelope.
 
@@ -207,7 +270,7 @@ Channel 3 is what makes this model suited for a coding agent. It recognizes `fun
 
 The orchestrator does NOT make decisions — the agent (via SKILL.md) makes all decisions. The orchestrator only:
 1. Checks if the agent should run (no PAUSE, budget OK, circuit breaker closed)
-2. Sends trigger prompt to OpenClaw
+2. Sends trigger prompt to the agent runtime
 3. Waits for response (600s timeout)
 4. Evaluates success/failure/idle
 5. Tracks cost and writes metrics
@@ -226,7 +289,7 @@ Backoff: 60s base, doubles each idle iteration, caps at 15 minutes. Exits immedi
 
 **Budget guard:** Projects total spend over `TOTAL_RUNTIME_HOURS` based on actual token consumption rate. If projected spend exceeds `BUDGET_LIMIT` ($50), creates PAUSE file. Also checks if current spend already exceeds limit. Needs at least 6 minutes of data before projecting.
 
-**Cost tracking:** Per-iteration cost using Qwen3 Coder Next pricing ($0.12/M input, $0.75/M output). Writes to `metrics.json`: total spend, average cost per iteration, projected total, budget remaining.
+**Cost tracking:** Per-iteration cost using model pricing. Writes to `metrics.json`: total spend, average cost per iteration, projected total, budget remaining.
 
 **Metrics writer:** Background thread flushes metrics to disk every 10 iterations or 60 seconds (whichever comes first). Atomic write (tmp + rename) prevents corruption. Compact JSON (no indentation).
 
@@ -236,9 +299,78 @@ Backoff: 60s base, doubles each idle iteration, caps at 15 minutes. Exits immedi
 
 ---
 
+## The Bootstrap Pipeline
+
+`make bootstrap` calls `core/harness.py`, which orchestrates a 12-step first-time setup:
+
+| Step | What It Does |
+|------|-------------|
+| 1 | **Validate** `stilltent.yml` — required fields, valid enums, cross-validation (Daytona needs API key, NemoClaw needs GPU, etc.) |
+| 2 | **Generate** `docker-compose.yml` from composable fragments |
+| 3 | **Build** all Docker images in parallel |
+| 4 | **Start** the stack (all services except orchestrator) |
+| 5 | **Wait** for health checks on TiDB, embed-service, mnemo-server, and the agent runtime |
+| 6 | **Initialize** the database schema (if using mem9/asmr) |
+| 7 | **Clone** the target repository into `workspace/repo` |
+| 8 | **Generate** SKILL.md, AGENTS.md, LEARNING.md from the target repo's README |
+| 9 | **Set up** Daytona sandbox (if configured) |
+| 10 | **Seed** initial memory with the project description |
+| 11 | **Run** the first iteration — agent reads SKILL.md and executes the full 7-phase protocol |
+| 12 | **Print** summary and monitoring instructions |
+
+After bootstrap, `make start` launches the orchestrator in autonomous mode.
+
+---
+
+## The Compose Fragment System
+
+Docker Compose files are assembled from modular fragments in `deploy/docker-compose/`:
+
+```
+deploy/docker-compose/
+├── base.yml                  # Network, TiDB, volumes (always included)
+├── memory-mem9.yml           # embed-service + mnemo-server
+├── memory-supermemory.yml    # supermemory-proxy
+├── agent-openclaw.yml        # OpenClaw gateway
+├── agent-nanoclaw.yml        # NanoClaw runtime
+├── agent-nemoclaw.yml        # NemoClaw (NVIDIA)
+├── agent-claude-code.yml     # Claude Code adapter
+├── orchestrator.yml          # Loop driver (always included)
+└── oversight-claude-code.yml # Optional oversight sidecar
+```
+
+`core/compose.py` reads `stilltent.yml`, selects the appropriate fragments, deep-merges them (Docker Compose merge semantics: services merge by name, dicts merge recursively, scalars override), then rewires:
+
+1. **Agent `depends_on`**: Points the agent service at the correct memory service (e.g., `mnemo-server` for mem9, `supermemory-proxy` for supermemory)
+2. **Orchestrator `depends_on`**: Points at the correct agent service
+3. **`AGENT_URL` / `OPENCLAW_URL`**: Set to `http://<agent-service>:18789`
+4. **`AGENT_MEMORY_URL`**: Set to `http://<memory-service>:8082`
+
+This means you can write a new agent fragment (e.g., for a custom runtime) by following the same interface contract — expose port 18789, accept `/v1/chat/completions`, provide `/healthz` — and the system will wire it in automatically.
+
+---
+
+## The Config Validator
+
+`core/validate.py` checks `stilltent.yml` before any work begins:
+
+**Required fields:** All top-level sections must be present (`target`, `agent`, `memory`, `sandbox`, `orchestrator`, `deploy`).
+
+**Enum validation:** `agent.runtime` must be one of `openclaw|nanoclaw|nemoclaw|claude-code`. Same for memory backend, sandbox provider, and deploy target.
+
+**Cross-validation:**
+- `sandbox.provider == "daytona"` → `DAYTONA_API_KEY` must be set (in .env or stilltent.yml)
+- `memory.backend == "supermemory"` → `SUPERMEMORY_API_KEY` must be set
+- `agent.runtime == "nemoclaw"` → warning about GPU hardware requirements
+- `claude_code.enabled` or `agent.runtime == "claude-code"` → `ANTHROPIC_API_KEY` must be set
+- `orchestrator.budget_limit <= 0` → error
+- `orchestrator.loop_interval < 10` → warning about rate limiting
+
+---
+
 ## The Agent Protocol — SKILL.md
 
-106 lines. Deliberately compact — every line serves a purpose, fewer tokens consumed per iteration.
+Deliberately compact — every line serves a purpose, fewer tokens consumed per iteration.
 
 ### The 7-Phase Iteration Protocol
 
@@ -339,33 +471,20 @@ Critical principle: **tools are capabilities, not obstacles.** Use them. Fix the
 
 ---
 
-## The Memory System
-
-```
-Agent → mem9 plugin → mnemo-server → embed-service (256-dim) + TiDB (SQL + vector)
-```
-
-**Types:** `pinned` (long-lived), `insight` (learnings), `digest` (summaries)
-**States:** `active`, `paused`, `archived`, `deleted`
-**Search:** Hybrid keyword + vector. mnemo-server calls embed-service for query vector, runs parallel SQL `LIKE` + `VEC_COSINE_DISTANCE`, merges results.
-**Consolidation:** Every 50 iterations — summarize, dedupe, update state.
-
----
-
 ## Docker Compose — Resource Budget
 
-Tuned for **8 GB RAM / 2 Intel vCPU / 160 GB disk droplet ($48/month)**:
+Tuned for **8 GB RAM / 2 Intel vCPU / 160 GB disk droplet ($48/month)** with the default openclaw + mem9 configuration:
 
 | Service | Memory | CPU | Notes |
 |---------|--------|-----|-------|
 | TiDB | 2.5 GB | 1.5 | Internal max-memory 2 GB |
 | embed-service | 128 MB | 0.5 | Read-only filesystem, 2 threads |
 | mnemo-server | 512 MB | 1.0 | Depends on TiDB + embed healthy |
-| OpenClaw | 1.5 GB | 1.5 | Agent runtime |
+| Agent Runtime | 1.5 GB | 1.5 | OpenClaw, NanoClaw, NemoClaw, or Claude Code |
 | Orchestrator | 128 MB | 0.25 | Budget tracking, idle detection |
 | **Total** | **~4.8 GB** | — | ~3.2 GB for OS/Docker/buffers/cache |
 
-Startup order: TiDB → embed-service → mnemo-server → OpenClaw → Orchestrator
+Startup order: TiDB → embed-service → mnemo-server → Agent → Orchestrator
 
 All services: `restart: unless-stopped`, `on-failure` deploy policy with max 5 attempts, 10s delay, json-file logging with 10m/3 file rotation.
 
@@ -375,45 +494,89 @@ Recommended: 4 GB swap on the droplet (good practice with 8 GB RAM).
 
 ## Make Targets
 
+The Makefile is the single entry point for all operations.
+
+### Core Workflow
+
 | Command | Purpose |
 |---------|---------|
-| `make up` / `make down` | Start / stop stack |
-| `make logs` / `make logs-follow` | Follow all logs / with 50-line tail |
-| `make health` | Per-service health + OpenRouter API |
-| `make preflight` | Pre-flight checks (Docker, .env, keys, ports) |
-| `make bootstrap` | First-time setup |
-| `make init-db` | Wait for TiDB + create schema |
-| `make pause` / `make resume` | Agent control |
-| `make stats` | Iteration statistics |
-| `make cost` | Spend, projected, budget remaining |
-| `make rebuild` | Force rebuild all images |
-| `make build-all` | Build all images in parallel |
+| `make generate` | Generate `docker-compose.yml` from `stilltent.yml` |
+| `make build` | Generate compose + build all images |
+| `make up` | Generate compose + start stack |
+| `make down` | Stop stack |
+| `make bootstrap` | Full first-time setup (preflight → validate → build → start → init → clone → prompts → seed → first iteration) |
+| `make clean` | Full teardown including volumes |
+
+### Agent Control
+
+| Command | Purpose |
+|---------|---------|
+| `make pause` / `make resume` | Pause / resume the orchestrator loop |
+| `make test-run` | Single test iteration |
+| `make start` | Start autonomous mode |
+
+### Monitoring
+
+| Command | Purpose |
+|---------|---------|
+| `make logs` | Follow all logs |
+| `make health` | Service health + LLM API + Daytona API |
+| `make stats` | Iteration count, success rate, spend |
+| `make cost` | Current spend vs budget, projected total |
+
+### Deployment
+
+| Command | Purpose |
+|---------|---------|
+| `make deploy` | Deploy based on `deploy.target` in stilltent.yml |
+| `make teardown` | Tear down deployment |
+
+### Utilities
+
+| Command | Purpose |
+|---------|---------|
+| `make preflight` | Check prerequisites (Docker, .env, API keys, ports, conditional Daytona/Supermemory keys) |
+| `make validate-config` | Validate `stilltent.yml` schema and cross-references |
+| `make rebuild` | Force rebuild all images (no cache) |
 | `make reset-metrics` | Clear metrics + unpause |
-| `make clean` | Full teardown |
-| `make deploy` | DigitalOcean instructions |
-| `make scan-secrets` / `make install-hooks` | Security |
+| `make scan-secrets` | Run gitleaks secret scanner |
 
 ---
 
 ## Configuration
 
-### GitHub
-`GITHUB_TOKEN` (PAT with repo+workflow), `TARGET_REPO` (owner/name)
+All configuration lives in two files:
 
-### LLM
-`OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (default: `qwen/qwen3-coder-next`)
+### stilltent.yml (Stack Configuration)
 
-### Embedding
-`EMBEDDING_MODEL` (`local-embed`), `EMBEDDING_PROVIDER` (`ollama`), `EMBEDDING_DIM` (`256`)
+```yaml
+target:
+  repo: "owner/repo"          # GitHub repo with your README.md
+  branch: "main"
 
-### TiDB
-`TIDB_HOST` (`tidb`), `TIDB_PORT` (`4000`), `TIDB_USER` (`root`), `TIDB_PASSWORD` (empty), `TIDB_DATABASE` (`mnemos`)
+agent:
+  runtime: "openclaw"          # openclaw | nanoclaw | nemoclaw | claude-code
+  model: "qwen/qwen3-coder-next"
+  provider: "openrouter"
 
-### mnemo-server
-`MEM9_API_PORT` (`8082`), `MEM9_API_KEY` (`stilltent-local-dev-key`)
+memory:
+  backend: "mem9"              # mem9 | supermemory | asmr
 
-### Orchestrator
-`LOOP_INTERVAL` (`60`), `COOLDOWN_SECONDS` (`30`), `ITERATION_TIMEOUT` (`600`), `MAX_CONSECUTIVE_FAILURES` (`25`), `TOTAL_RUNTIME_HOURS` (`120`), `BUDGET_LIMIT` (`50`), `DAILY_BUDGET_LIMIT` (`15`)
+sandbox:
+  provider: "local"            # daytona | local | none
+
+orchestrator:
+  loop_interval: 60
+  budget_limit: 50
+  total_runtime_hours: 120
+
+deploy:
+  target: "local"              # digitalocean | vultr | railway | render | heroku | local
+```
+
+### .env (Secrets)
+
+`GITHUB_TOKEN` (PAT with repo+workflow), `TARGET_REPO` (owner/name), `OPENROUTER_API_KEY`, and runtime-specific keys. See `.env.example` for the full list.
 
 ---
 
@@ -431,10 +594,11 @@ Budget: $50 for 120 hours. Budget guard projects spend and auto-pauses. Idle det
 
 ## Security
 
-- **Network:** Internal Docker bridge. Only TiDB:4000 exposed to host.
-- **Auth:** OpenClaw token, mnemo-server API key, GitHub PAT via git insteadOf.
+- **Network:** Internal Docker bridge. Only necessary ports exposed to host.
+- **Auth:** Agent runtime token, memory API key, GitHub PAT via git insteadOf.
 - **Agent limits:** No secrets modification, no main push, no test bypass, no destructive commands.
 - **Scanning:** gitleaks + pre-commit hooks.
+- **Validation:** `make preflight` and `make validate-config` catch misconfigurations before any work begins.
 
 ---
 
@@ -501,28 +665,35 @@ Small, focused, tested. Branch names: `agent/YYYYMMDDHHMMSS-slug`. Conventional 
 | Broken tests | Never pushes to main. Abandons failing branches. Fixing broken main is highest priority. |
 | Sensitive files | AGENTS.md hard limits, protected files list, pre-commit hooks |
 | Gateway down | Circuit breaker (5-failure threshold → 5min cooldown → doubles to 1hr cap) |
+| Bad config | `make validate-config` catches issues before bootstrap. `make preflight` checks prerequisites. |
 
 ---
 
 ## Deployment
 
-**Local:**
+**From zero (3 commands):**
 ```bash
-cp .env.example .env && make preflight && make up && make init-db && make bootstrap
+cp .env.example .env          # add your API keys
+vim stilltent.yml              # point at your repo
+make bootstrap                 # walk away
 ```
 
 **DigitalOcean:** Ubuntu 24.04, 8GB RAM / 2 Intel vCPU / 160GB disk ($48/mo). No GPU required.
 ```bash
 curl -fsSL https://get.docker.com | sh && git clone <repo> ~/stilltent && cd ~/stilltent
-cp .env.example .env && nano .env && make bootstrap
+cp .env.example .env && nano .env && vim stilltent.yml && make bootstrap
 ```
+
+**PaaS (Railway, Render, Heroku):** `make deploy` reads `deploy.target` and dispatches to the appropriate deployment script.
 
 ---
 
 ## Summary
 
-stilltent takes a project description and builds it — one PR at a time, hundreds of PRs over days, autonomously. Five services: TiDB (database), embed-service (local C embeddings, 256-dim, zero cost), mnemo-server (memory API), OpenClaw (agent runtime with Qwen3 Coder Next, 262K context, $0.12/$0.75 per M tokens), orchestrator (budget tracking, circuit breaker, idle detection).
+stilltent takes a project description and builds it — one PR at a time, hundreds of PRs over days, autonomously.
 
-The agent protocol is 106 lines of SKILL.md. The identity is 72 lines of AGENTS.md. The stack fits on a $48/month droplet (8 GB RAM, 2 Intel vCPU, 160 GB disk) with a $50 budget for 5 days. The agent uses its tools — memory, testing, GitHub CLI, shell — and fixes them when they're insufficient.
+The system is fully modular: four pluggable axes (agent runtime, memory backend, sandbox provider, deploy target) configured in a single YAML file. The default stack is five services: TiDB (database), embed-service (local C embeddings, 256-dim, zero cost), mnemo-server (memory API), OpenClaw (agent runtime), orchestrator (budget tracking, circuit breaker, idle detection). Swap OpenClaw for NanoClaw, NemoClaw, or Claude Code. Swap mem9 for Supermemory or ASMR. Add Daytona sandboxing. Deploy to DigitalOcean, Vultr, or any PaaS.
+
+The bootstrap pipeline validates configuration, builds containers, starts the stack, clones the target repo, generates agent prompts from the README, seeds memory, and runs the first iteration — all in one command.
 
 Everything is designed for one purpose: take a paragraph of project description and turn it into a working codebase with hundreds of tested, reviewed commits.
